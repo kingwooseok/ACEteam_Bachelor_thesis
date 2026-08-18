@@ -1,7 +1,3 @@
-좋아. 첨부한 제안서의 연구 구조와 지금까지 정리한 **커널 설정 + 부팅 설정 + 런타임 튜닝 + PTP + workqueue + eBPF/TC 구성**을 합쳐서, GitHub `README.md`에 바로 넣을 수 있는 형태로 정리하면 아래 정도가 적당해.
-
-그리고 기존 메모리에서 `CPU_FREQ`/`CPU_IDLE`/THP를 “비활성화하는 Kconfig”처럼 적었던 부분은 수정해서 **커널 기능은 활성화하고 런타임 정책으로 제어**하는 형태로 반영했어. 제안서의 핵심 구조인 `PREEMPT_RT + TC-eBPF + BPF Map + MQPRIO + ETF`와 4가지 비교 실험도 포함했다.  
-
 ````markdown
 # Deadline-Aware Dynamic Packet Classification and Scheduling using TC-eBPF on PREEMPT_RT Linux
 
