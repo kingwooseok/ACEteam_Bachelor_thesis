@@ -419,5 +419,3 @@ High load
 
 Extreme load
 → 각 path가 어느 수준까지 deadline을 유지하는지 비교
-
----
