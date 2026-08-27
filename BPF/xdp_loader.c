@@ -2,14 +2,17 @@
 //
 // xdp_loader.c — XDP userspace 로더 (Generic/SKB 모드)
 //
-// libbpf skeleton으로 BPF object를 로드한 뒤 다음 순서로 동작한다.
+// libbpf skeleton으로 BPF object를 로드하고, map을 bpffs에 pin한 뒤
+// 프로세스가 살아 있는 동안 XDP program을 유지한다.
+// 다음 순서로 동작한다.
 //   1) 인터페이스 확인 및 BPF object 로드
 //   2) CPUMAP[3] 설정
-//   3) Generic XDP attach
+//   3) Generic XDP attach 및 map pin
 //   4) per-CPU 통계 출력
-//   5) 종료 시 XDP detach 및 리소스 정리
+//   5) 종료 시 XDP detach, map unpin 및 리소스 정리
 //
-// xdp_kern.skel.h는 Makefile이 xdp_kern.o에서 자동 생성한다.
+// 다른 userspace consumer(예: afxdp_recv)는 pin된 map을 bpf_obj_get()으로
+// 열어 사용한다. 따라서 consumer는 BPF object를 다시 load/attach하지 않는다.
 
 #include <bpf/bpf.h>            /* map 조작 및 XDP attach/detach API */
 #include <bpf/libbpf.h>         /* skeleton과 libbpf API */
@@ -20,11 +23,13 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <unistd.h>             /* sleep() */
 
 /* bpftool이 생성한 skeleton: object open/load와 map/program 핸들을 제공한다. */
 #include "xdp_kern.skel.h"
+#include "pin_paths.h"
 
 /* ===== 전역 상태 ===== */
 
@@ -37,7 +42,7 @@ static int g_ifindex;
 /* 시그널 핸들러에서는 async-signal-safe한 플래그 변경만 수행한다. */
 static void on_signal(int signo) { (void)signo; stop = 1; }
 
-/* ===== map 설정 ===== */
+/* ===== map 설정 및 pin ===== */
 
 /*
  * CPUMAP의 key(cpu)에 queue size를 등록한다.
@@ -48,6 +53,38 @@ static void on_signal(int signo) { (void)signo; stop = 1; }
 static int configure_cpu_map(int fd, __u32 cpu, __u32 queue_size)
 {
 	return bpf_map_update_elem(fd, &cpu, &queue_size, BPF_ANY);
+}
+
+/* map을 pin할 디렉터리가 bpffs 위에 존재하는지 확인한다. */
+static int ensure_pin_dir(void)
+{
+	struct stat st;
+
+	if (mkdir(ACE_XDP_PIN_DIR, 0755) && errno != EEXIST)
+		return -errno;
+	if (stat(ACE_XDP_PIN_DIR, &st))
+		return -errno;
+	if (!S_ISDIR(st.st_mode))
+		return -ENOTDIR;
+	return 0;
+}
+
+/* skeleton의 모든 map(cpu_map, xsk_map, stats)을 ACE_XDP_PIN_DIR에 노출한다. */
+static int pin_maps(struct xdp_kern *skel)
+{
+	int err = ensure_pin_dir();
+
+	if (err)
+		return err;
+	return bpf_object__pin_maps(skel->obj, ACE_XDP_PIN_DIR);
+}
+
+/* loader가 소유한 map pin을 제거한다. */
+static void unpin_maps(struct xdp_kern *skel)
+{
+	if (skel)
+		bpf_object__unpin_maps(skel->obj, ACE_XDP_PIN_DIR);
+	rmdir(ACE_XDP_PIN_DIR);
 }
 
 /* ===== 통계 출력 ===== */
@@ -88,6 +125,7 @@ int main(int argc, char **argv)
 	int prog_fd = -1;               /* attach할 XDP program FD */
 	int err = 1;
 	bool attached = false;          /* detach 필요 여부 */
+	bool maps_pinned = false;        /* consumer가 열 수 있는 map pin 존재 여부 */
 
 	/* 1. 인터페이스 이름을 XDP API가 사용하는 index로 변환한다. */
 	g_ifindex = if_nametoindex(ifname);
@@ -115,11 +153,6 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	/*
-	 * XSKMAP은 여기서 비워 둔다. AF_XDP를 사용할 때는 userspace가 socket FD를
-	 * RX queue key에 등록해야 하며, 미등록 queue는 XDP program에서 PASS로 fallback한다.
-	 */
-
 	/* 4. XDP program을 Generic(SKB) 모드로 attach한다.
 	 *
 	 * Generic mode는 SKB 생성 이후 실행되므로 native mode보다 느릴 수 있지만,
@@ -139,6 +172,18 @@ int main(int argc, char **argv)
 	}
 	attached = true;
 
+	/*
+	 * XDP가 실제로 attach된 뒤 map을 pin한다. 이 순서로 consumer가 map을
+	 * 발견하는 시점에는 이미 packet path가 준비되어 있다.
+	 */
+	err = pin_maps(skel);
+	if (err) {
+		fprintf(stderr, "BPF map pin failed at %s: %s\n", ACE_XDP_PIN_DIR,
+			strerror(-err));
+		goto out;
+	}
+	maps_pinned = true;
+
 	printf("attached xdp_dispatch to %s (generic/SKB mode); Ctrl-C to stop\n", ifname);
 
 	/* Ctrl-C와 서비스 종료(SIGTERM)를 정상 cleanup으로 연결한다. */
@@ -157,6 +202,8 @@ out:
 	/* attach가 성공한 경우에만 같은 mode로 detach한 뒤 skeleton을 해제한다. */
 	if (attached)
 		bpf_xdp_detach(g_ifindex, XDP_FLAGS_SKB_MODE, NULL);
+	if (maps_pinned)
+		unpin_maps(skel);
 	xdp_kern__destroy(skel);
-	return err;
+	return err < 0 ? 1 : err;
 }

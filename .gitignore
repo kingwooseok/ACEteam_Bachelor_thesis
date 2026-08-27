@@ -125,6 +125,7 @@ BPF/vmlinux.h
 BPF/xdp_kern.o
 BPF/xdp_kern.skel.h
 BPF/xdp_loader
+BPF/afxdp_recv
 *.tlog
 *.vspscc
 *.vssscc

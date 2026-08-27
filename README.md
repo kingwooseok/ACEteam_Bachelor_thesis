@@ -45,14 +45,39 @@ sudo ./BPF/xdp_loader eth0
 ```
 
 Generic XDP(SKB 모드)로 attach하며, `CAP_NET_ADMIN` 권한(일반적으로 root)이 필요하다.
-로더는 1초마다 per-CPU 통계를 합산해 `stat[0]`(PASS), `stat[1]`(CPUMAP),
-`stat[2]`(XSK), `stat[3]`(TOTAL) 순서로 출력한다. 종료 시 XDP link는 자동으로 제거된다.
+`xdp_loader`는 `/sys/fs/bpf/ace_xdp`에 `cpu_map`, `xsk_map`, `stats`를 pin한다.
+따라서 `/sys/fs/bpf`가 bpffs로 마운트되어 있어야 한다.
+1초마다 per-CPU 통계를 합산해 `stat[0]`(PASS), `stat[1]`(CPUMAP),
+`stat[2]`(XSK), `stat[3]`(TOTAL) 순서로 출력한다. 종료 시 XDP를 detach하고 map pin을 제거한다.
 
 `UDP/9002` 경로는 AF_XDP 소켓의 파일 디스크립터를 `xsk_map`의 RX queue key에
-`bpf_map_update_elem()`으로 등록해야 활성화된다. 현재 로더는 의도적으로 XSKMAP을
-비워 두어 소켓이 없는 상태에서도 패킷을 안전하게 `XDP_PASS`로 fallback한다.
+등록해야 활성화된다. socket이 없는 queue에서는 XDP가 안전하게 `XDP_PASS`로 fallback한다.
 
 생성 파일을 정리하려면 `make clean`을 실행한다.
+
+### AF_XDP 수신기
+
+AF_XDP socket과 UMEM/RX ring까지 함께 테스트하려면 `afxdp_recv`를 사용한다.
+AF_XDP socket API는 현재 libbpf에서 분리되어 libxdp로 제공되므로, 타깃에
+`libxdp-dev`를 설치해야 한다.
+
+```bash
+sudo apt install -y libxdp-dev
+make afxdp
+sudo ./BPF/afxdp_recv eth0 0
+```
+
+먼저 loader를 별도 터미널에서 실행해 XDP와 pinned map을 유지한다.
+
+```bash
+sudo ./BPF/xdp_loader eth0
+```
+
+그 다음 receiver를 실행한다. receiver는 BPF object를 load하거나 XDP를 attach하지
+않고, loader가 pin한 `xsk_map`과 `stats`만 열어 사용한다. 두 번째 인자는 AF_XDP를
+연결할 RX queue 번호이며 기본값은 `0`이다. 실행 중에는 UDP/9002 패킷의 길이와
+destination port를 출력하고, 종료 시 `received packets`와 `STAT_XSK`를 포함한
+BPF 통계를 출력한다.
 
 ---
 
@@ -415,6 +440,7 @@ kernel bypass path의 latency 특성을 비교한다.
 ```text
 clang / LLVM
 libbpf
+libxdp (AF_XDP socket/ring API)
 bpftool
 iproute2
 bpftrace
