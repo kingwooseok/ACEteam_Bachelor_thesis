@@ -26,6 +26,34 @@
 
 본 연구에서 XDP는 패킷의 최초 분류 및 경로 선택 역할을 담당한다.
 
+## 구현 코드
+
+메모의 임시 분류 정책을 실행 가능한 libbpf 프로젝트로 구현했다.
+
+```text
+UDP dst 9001  -> CPUMAP[3] (queue size 256)
+UDP dst 9002  -> XSKMAP[RX queue] (AF_XDP socket 등록 시)
+그 외         -> XDP_PASS
+```
+
+필요한 도구가 설치된 타깃에서 다음처럼 빌드한다. `vmlinux.h`는 실행 중인
+커널의 BTF에서 자동 생성되므로 커널 헤더를 별도로 지정할 필요가 없다.
+
+```bash
+make            # 루트에서 실행하면 BPF/ 하위 빌드를 자동 호출
+sudo ./BPF/xdp_loader eth0
+```
+
+Generic XDP(SKB 모드)로 attach하며, `CAP_NET_ADMIN` 권한(일반적으로 root)이 필요하다.
+로더는 1초마다 per-CPU 통계를 합산해 `stat[0]`(PASS), `stat[1]`(CPUMAP),
+`stat[2]`(XSK), `stat[3]`(TOTAL) 순서로 출력한다. 종료 시 XDP link는 자동으로 제거된다.
+
+`UDP/9002` 경로는 AF_XDP 소켓의 파일 디스크립터를 `xsk_map`의 RX queue key에
+`bpf_map_update_elem()`으로 등록해야 활성화된다. 현재 로더는 의도적으로 XSKMAP을
+비워 두어 소켓이 없는 상태에서도 패킷을 안전하게 `XDP_PASS`로 fallback한다.
+
+생성 파일을 정리하려면 `make clean`을 실행한다.
+
 ---
 
 ## 2. 연구 목적

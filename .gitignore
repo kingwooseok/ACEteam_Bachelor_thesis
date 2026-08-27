@@ -119,6 +119,12 @@ StyleCopReport.xml
 *.tmp_proj
 *_wpftmp.csproj
 *.log
+
+# eBPF/XDP build products
+BPF/vmlinux.h
+BPF/xdp_kern.o
+BPF/xdp_kern.skel.h
+BPF/xdp_loader
 *.tlog
 *.vspscc
 *.vssscc
