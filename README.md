@@ -1,4 +1,4 @@
-# Deterministic Multi-Path Packet Processing for Mixed-Criticality Traffic on Embedded Linux with PREEMPT_RT
+# Deterministic Packet Processing Architecture for Mixed-Criticality Traffic on Embedded Linux with PREEMPT_RT
 
 ## 1. 프로젝트 개요
 
