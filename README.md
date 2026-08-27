@@ -400,25 +400,9 @@ bpftrace
 - `iproute2`: 네트워크 인터페이스 및 XDP 설정
 - `bpftrace`: scheduler, IRQ, latency 등의 kernel tracing 및 분석
 
-BCC와 eBPF-Go는 현재 구조의 필수 구성요소가 아니다.
-
 ---
 
-## 13. 권장 구현 순서
-
-1. `XDP_PASS`만 수행하는 최소 XDP 프로그램 구현
-2. Ethernet/IP/UDP 등 기본 packet parsing 구현
-3. `CPUMAP`을 이용한 CPU 3 steering 구현
-4. CPU isolation 및 IRQ/RPS configuration 적용
-5. RT CPU에서 kernel path 동작 확인
-6. `XSKMAP + AF_XDP` userspace path 구현
-7. 세 경로를 하나의 XDP dispatcher로 통합
-8. workload를 0~100%까지 증가시키며 latency 측정
-9. p99/p99.9/worst-case/deadline miss 분석
-
----
-
-## 14. 기대되는 결과 형태
+## 13. 기대되는 결과 형태
 
 이 연구에서 중요한 결과는 하나의 path가 모든 조건에서 우월하다는 것이 아니다.
 
@@ -435,8 +419,5 @@ High load
 
 Extreme load
 → 각 path가 어느 수준까지 deadline을 유지하는지 비교
-```
-
-실제 결과는 실험을 수행하기 전에는 단정하지 않는다.
 
 ---
