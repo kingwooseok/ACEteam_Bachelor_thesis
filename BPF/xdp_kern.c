@@ -12,23 +12,11 @@
 #include "vmlinux.h"            /* 현재 커널 BTF에서 bpftool로 생성한 타입 정의 */
 #include <bpf/bpf_helpers.h>    /* SEC(), map helper 등 BPF 공용 매크로 */
 #include <bpf/bpf_endian.h>     /* bpf_htons() 등 바이트 순서 변환 helper */
+#include "config.h"
 
 /* ===== 분류 정책 ===== */
 
 #define ETH_P_IP   0x0800       /* IPv4 EtherType; 비교할 때 bpf_htons() 사용 */
-
-#define RT_PORT    9001         /* CPUMAP으로 보낼 UDP destination port */
-#define XSK_PORT   9002         /* XSKMAP으로 보낼 UDP destination port */
-#define RT_CPU     3            /* CPUMAP redirect 대상 CPU (RT 전용 CPU) */
-
-/* 통계 map의 key. userspace는 이 순서로 값을 출력한다. */
-
-enum stat_id {
-	STAT_PASS   = 0,            /* XDP_PASS로 처리된 패킷 수 */
-	STAT_CPUMAP = 1,            /* CPUMAP으로 redirect된 패킷 수 */
-	STAT_XSK    = 2,            /* XSKMAP(AF_XDP)으로 redirect된 패킷 수 */
-	STAT_TOTAL  = 3,            /* 전체 수신 패킷 수 */
-};
 
 /* ===== BPF map ===== */
 
@@ -41,7 +29,7 @@ enum stat_id {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_CPUMAP);
-	__uint(max_entries, 128);   /* 지원하는 최대 CPU index 수 */
+	__uint(max_entries, ACE_XDP_MAP_MAX_ENTRIES);
 	__type(key, __u32);         /* CPU 번호 */
 	__type(value, __u32);       /* CPUMAP queue size */
 } cpu_map SEC(".maps");
@@ -55,7 +43,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_XSKMAP);
-	__uint(max_entries, 128);   /* 지원하는 최대 RX queue index 수 */
+	__uint(max_entries, ACE_XDP_MAP_MAX_ENTRIES);
 	__type(key, __u32);         /* RX queue index */
 	__type(value, __u32);       /* userspace가 등록하는 AF_XDP socket FD */
 } xsk_map SEC(".maps");
@@ -68,7 +56,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__uint(max_entries, 4);     /* stat_id 0~3 */
+	__uint(max_entries, ACE_XDP_STAT_COUNT);
 	__type(key, __u32);
 	__type(value, __u64);
 } stats SEC(".maps");
@@ -106,7 +94,7 @@ int xdp_dispatch(struct xdp_md *ctx)
 	__u32 key;
 
 	/* 경로를 선택하기 전에 전체 수신 수를 먼저 기록한다. */
-	count_stat(STAT_TOTAL);
+	count_stat(ACE_XDP_STAT_TOTAL);
 
 	/* Ethernet header가 packet 범위 안에 있는지 확인한다. */
 	if ((void *)(eth + 1) > data_end)
@@ -135,8 +123,8 @@ int xdp_dispatch(struct xdp_md *ctx)
 
 	/* 5. 분류: destination port에 따라 redirect하고, 실패하면 PASS한다. */
 	/* UDP dst 9001: CPUMAP을 통해 RT CPU로 보낸다. */
-	if (udp->dest == bpf_htons(RT_PORT)) {
-		key = RT_CPU;
+	if (udp->dest == bpf_htons(ACE_XDP_RT_PORT)) {
+		key = ACE_XDP_RT_CPU;
 		/*
 		 * 세 번째 인자 XDP_PASS는 map 엔트리가 없을 때의 fallback이다.
 		 *
@@ -145,14 +133,14 @@ int xdp_dispatch(struct xdp_md *ctx)
 		 */
 		int action = bpf_redirect_map(&cpu_map, key, XDP_PASS);
 		if (action == XDP_REDIRECT) {
-			count_stat(STAT_CPUMAP);
+			count_stat(ACE_XDP_STAT_CPUMAP);
 			return action;
 		}
 		goto pass; /* userspace가 CPUMAP[3]을 설정하기 전까지 fallback */
 	}
 
 	/* UDP dst 9002: RX queue에 등록된 AF_XDP socket으로 보낸다. */
-	if (udp->dest == bpf_htons(XSK_PORT)) {
+	if (udp->dest == bpf_htons(ACE_XDP_XSK_PORT)) {
 		key = ctx->rx_queue_index;   /* XSKMAP key = 현재 RX queue index */
 		/*
 		 * 해당 queue에 AF_XDP socket이 등록되어 있으면 redirect한다. 등록되지
@@ -160,14 +148,14 @@ int xdp_dispatch(struct xdp_md *ctx)
 		 */
 		int action = bpf_redirect_map(&xsk_map, key, XDP_PASS);
 		if (action == XDP_REDIRECT) {
-			count_stat(STAT_XSK);
+			count_stat(ACE_XDP_STAT_XSK);
 			return action;
 		}
 	}
 
 pass:
 	/* 분류 대상이 아니거나 redirect map이 준비되지 않은 packet. */
-	count_stat(STAT_PASS);
+	count_stat(ACE_XDP_STAT_PASS);
 	return XDP_PASS;
 }
 

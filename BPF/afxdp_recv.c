@@ -15,18 +15,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
 #include <linux/if_xdp.h>
-
-#if defined(__has_include)
-# if __has_include(<xdp/xsk.h>)
-#  include <xdp/xsk.h>       /* modern libxdp */
-# elif __has_include(<bpf/xsk.h>)
-#  include <bpf/xsk.h>       /* legacy libbpf/xsk header */
-# else
-#  error "AF_XDP header not found; install libxdp-dev (or legacy libbpf xsk.h)"
-# endif
-#else
-# include <xdp/xsk.h>
-#endif
+#include <xdp/xsk.h>            /* AF_XDP socket/ring API (libxdp) */
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -36,24 +25,22 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "pin_paths.h"
+#include "config.h"
 
 /* ===== 기본 설정 ===== */
 
-#define DEFAULT_IFNAME "eth0"
-#define DEFAULT_QUEUE  0
-
-#define NUM_FRAMES     4096
-#define FRAME_SIZE     XSK_UMEM__DEFAULT_FRAME_SIZE
-#define UMEM_SIZE      ((size_t)NUM_FRAMES * FRAME_SIZE)
-#define RING_SIZE      2048
-#define RX_BATCH_SIZE  64
+enum {
+	NUM_FRAMES = 4096,
+	FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE,
+	UMEM_SIZE = NUM_FRAMES * FRAME_SIZE,
+	RING_SIZE = 2048,
+	RX_BATCH_SIZE = 64,
+};
 
 static volatile sig_atomic_t stop;
 static unsigned long long received_packets;
@@ -235,13 +222,13 @@ static void print_stats(int stats_fd)
 	if (!values)
 		return;
 
-	for (__u32 id = 0; id < 4; id++) {
+	for (__u32 id = 0; id < (unsigned int)ACE_XDP_STAT_COUNT; id++) {
 		__u64 total = 0;
 		if (bpf_map_lookup_elem(stats_fd, &id, values) == 0)
 			for (int cpu = 0; cpu < ncpu; cpu++)
 				total += values[cpu];
 		printf("stat[%u]=%llu%s", id, (unsigned long long)total,
-			id == 3 ? "\n" : " ");
+			id == (unsigned int)(ACE_XDP_STAT_COUNT - 1) ? "\n" : " ");
 	}
 	free(values);
 }
@@ -250,8 +237,9 @@ static void print_stats(int stats_fd)
 
 int main(int argc, char **argv)
 {
-	const char *ifname = argc > 1 ? argv[1] : DEFAULT_IFNAME;
-	__u32 queue_id = argc > 2 ? (unsigned int)strtoul(argv[2], NULL, 10) : DEFAULT_QUEUE;
+	const char *ifname = argc > 1 ? argv[1] : ACE_XDP_DEFAULT_IFNAME;
+	__u32 queue_id = argc > 2 ? (unsigned int)strtoul(argv[2], NULL, 10) :
+		ACE_XSK_DEFAULT_QUEUE;
 	struct umem_info umem = {0};
 	struct xsk_info xsk = {0};
 	struct pollfd pollfd;
@@ -261,7 +249,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "interface %s: %s\n", ifname, strerror(errno));
 		return 1;
 	}
-	if (queue_id >= 128) {
+	if (queue_id >= (unsigned int)ACE_XDP_MAP_MAX_ENTRIES) {
 		fprintf(stderr, "RX queue %u is outside xsk_map range\n", queue_id);
 		return 1;
 	}

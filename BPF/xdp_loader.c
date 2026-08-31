@@ -29,7 +29,7 @@
 
 /* bpftool이 생성한 skeleton: object open/load와 map/program 핸들을 제공한다. */
 #include "xdp_kern.skel.h"
-#include "pin_paths.h"
+#include "config.h"
 
 /* ===== 전역 상태 ===== */
 
@@ -93,7 +93,7 @@ static void unpin_maps(struct xdp_kern *skel)
  * Per-CPU stats map의 값을 CPU별로 읽어 합산한다.
  *
  * lookup 결과는 possible CPU 수만큼의 __u64 배열이다. 출력 순서는
- * stat_id 정의(STAT_PASS, STAT_CPUMAP, STAT_XSK, STAT_TOTAL)를 따른다.
+ * ace_xdp_stat_id 정의 순서를 따른다.
  */
 static void print_stats(int fd)
 {
@@ -105,11 +105,12 @@ static void print_stats(int fd)
 	if (!values) return;
 
 	/* 각 stat_id에 대해 모든 CPU의 counter를 합산 */
-	for (__u32 id = 0; id < 4; id++) {
+	for (__u32 id = 0; id < (unsigned int)ACE_XDP_STAT_COUNT; id++) {
 		__u64 total = 0;
 		if (bpf_map_lookup_elem(fd, &id, values) == 0)
 			for (int cpu = 0; cpu < ncpu; cpu++) total += values[cpu];
-		printf("stat[%u]=%llu%s", id, (unsigned long long)total, id == 3 ? "\n" : " ");
+		printf("stat[%u]=%llu%s", id, (unsigned long long)total,
+			id == (unsigned int)(ACE_XDP_STAT_COUNT - 1) ? "\n" : " ");
 	}
 	free(values);
 }
@@ -119,7 +120,7 @@ static void print_stats(int fd)
 int main(int argc, char **argv)
 {
 	/* 첫 번째 인자는 인터페이스 이름이며, 생략하면 eth0을 사용한다. */
-	const char *ifname = argc > 1 ? argv[1] : "eth0";
+	const char *ifname = argc > 1 ? argv[1] : ACE_XDP_DEFAULT_IFNAME;
 
 	struct xdp_kern *skel = NULL;   /* BPF skeleton */
 	int prog_fd = -1;               /* attach할 XDP program FD */
@@ -148,8 +149,10 @@ int main(int argc, char **argv)
 	}
 
 	/* 3. xdp_kern.c의 UDP/9001 경로가 사용할 CPUMAP[3]을 등록한다. */
-	if (configure_cpu_map(bpf_map__fd(skel->maps.cpu_map), 3, 256)) {
-		fprintf(stderr, "CPUMAP[3] setup failed: %s\n", strerror(errno));
+	if (configure_cpu_map(bpf_map__fd(skel->maps.cpu_map), ACE_XDP_RT_CPU,
+		ACE_XDP_CPU_MAP_QUEUE_SIZE)) {
+		fprintf(stderr, "CPUMAP[%d] setup failed: %s\n", ACE_XDP_RT_CPU,
+			strerror(errno));
 		goto out;
 	}
 
