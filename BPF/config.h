@@ -2,7 +2,13 @@
 #ifndef ACE_XDP_CONFIG_H
 #define ACE_XDP_CONFIG_H
 
-/* BPF program, loader, AF_XDP receiver가 공유하는 고정 정책과 경로. */
+/**
+ * @file config.h
+ * @brief XDP program, loader, AF_XDP receiver가 공유하는 정책과 경로.
+ *
+ * packet 분류 port, RT CPU, map 크기, queue 크기, 기본 interface와 bpffs
+ * pin 경로를 한곳에 모아 kernel/userspace 정의가 달라지는 것을 방지함.
+ */
 #define ACE_XDP_DEFAULT_IFNAME   "eth0"
 #define ACE_XDP_PIN_DIR          "/sys/fs/bpf/ace_xdp"
 #define ACE_XDP_XSK_MAP_PIN      ACE_XDP_PIN_DIR "/xsk_map"
@@ -18,6 +24,7 @@ enum {
 	ACE_XSK_DEFAULT_QUEUE = 0,
 };
 
+/** @brief per-CPU stats map에서 사용하는 key와 출력 순서. */
 enum ace_xdp_stat_id {
 	ACE_XDP_STAT_PASS = 0,
 	ACE_XDP_STAT_CPUMAP = 1,
@@ -25,6 +32,7 @@ enum ace_xdp_stat_id {
 	ACE_XDP_STAT_TOTAL = 3,
 };
 
+/* 정책 상수와 map layout의 관계가 깨지면 build 단계에서 실패시킴. */
 _Static_assert(ACE_XDP_RT_CPU < ACE_XDP_MAP_MAX_ENTRIES,
 	"RT CPU must fit in cpu_map");
 _Static_assert(ACE_XDP_STAT_TOTAL + 1 == ACE_XDP_STAT_COUNT,

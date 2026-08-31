@@ -4,7 +4,7 @@
 # make가 수행하는 단계:
 #   vmlinux.h → xdp_kern.o → xdp_kern.skel.h → xdp_loader
 
-# ===== 도구와 compile flags =====
+# ===== 빌드 도구와 컴파일 옵션 =====
 # 필요하면 명령행에서 재정의할 수 있다(예: make CLANG=clang-19).
 CLANG      ?= clang
 CC         ?= cc
@@ -20,7 +20,7 @@ LIBBPF_LIBS   := $(shell $(PKG_CONFIG) --libs libbpf 2>/dev/null)
 LIBXDP_CFLAGS := $(shell $(PKG_CONFIG) --cflags libxdp 2>/dev/null)
 LIBXDP_LIBS   := $(shell $(PKG_CONFIG) --libs libxdp 2>/dev/null)
 
-# ===== BPF target architecture =====
+# ===== BPF 대상 아키텍처 =====
 # CO-RE가 사용할 대상 아키텍처를 빌드 머신에 맞춰 지정한다.
 ARCH ?= $(shell uname -m)
 ifeq ($(ARCH),aarch64)

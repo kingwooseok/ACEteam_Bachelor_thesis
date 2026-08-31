@@ -1,4 +1,4 @@
-# Top-level Makefile — delegates to the independent experiment sub-directories.
+# 최상위 Makefile — 서로 독립적인 UDP와 BPF 하위 빌드를 연결함.
 
 .PHONY: all clean udp afxdp
 
@@ -12,6 +12,6 @@ clean:
 udp:
 	$(MAKE) -C udp_socket
 
-# Build the pinned-map XDP loader and the AF_XDP receiver.
+# pin된 map을 사용하는 XDP loader와 AF_XDP receiver를 함께 빌드함.
 afxdp:
 	$(MAKE) -C BPF afxdp
