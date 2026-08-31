@@ -26,9 +26,22 @@
 
 본 연구에서 XDP는 패킷의 최초 분류 및 경로 선택 역할을 담당한다.
 
+### UDP socket baseline
+
+C0(Vanilla Linux), C1(PREEMPT_RT), C2(PREEMPT_RT + CPU isolation)는
+동일한 일반 Linux UDP socket 프로그램을 사용한다. 빌드 및 실행 방법,
+application timestamp boundary, tmpfs/mmap 저장 형식은
+[`udp_socket/README.md`](udp_socket/README.md)에 분리해 두었다.
+
+```bash
+make udp
+```
+
 ## 구현 코드
 
 메모의 임시 분류 정책을 실행 가능한 libbpf 프로젝트로 구현했다.
+포트, RT CPU, map 크기, queue 크기, 기본 interface와 bpffs pin 경로는
+`BPF/config.h` 한 곳에서 관리한다.
 
 ```text
 UDP dst 9001  -> CPUMAP[3] (queue size 256)
@@ -38,6 +51,13 @@ UDP dst 9002  -> XSKMAP[RX queue] (AF_XDP socket 등록 시)
 
 필요한 도구가 설치된 타깃에서 다음처럼 빌드한다. `vmlinux.h`는 실행 중인
 커널의 BTF에서 자동 생성되므로 커널 헤더를 별도로 지정할 필요가 없다.
+
+```bash
+sudo apt install clang llvm bpftool libbpf-dev pkg-config
+
+# AF_XDP receiver까지 빌드할 때 추가
+sudo apt install libxdp-dev
+```
 
 ```bash
 make            # 루트에서 실행하면 BPF/ 하위 빌드를 자동 호출
