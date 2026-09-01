@@ -19,7 +19,8 @@ enum {
 	ACE_XDP_XSK_PORT = 9002,
 	ACE_XDP_RT_CPU = 3,
 	ACE_XDP_CPU_MAP_QUEUE_SIZE = 256,
-	ACE_XDP_MAP_MAX_ENTRIES = 128,
+	ACE_XDP_CPU_MAP_MAX_ENTRIES = 4,
+	ACE_XDP_XSK_MAP_MAX_ENTRIES = 64,
 	ACE_XDP_STAT_COUNT = 4,
 	ACE_XSK_DEFAULT_QUEUE = 0,
 };
@@ -33,7 +34,7 @@ enum ace_xdp_stat_id {
 };
 
 /* 정책 상수와 map layout의 관계가 깨지면 build 단계에서 실패시킴. */
-_Static_assert(ACE_XDP_RT_CPU < ACE_XDP_MAP_MAX_ENTRIES,
+_Static_assert(ACE_XDP_RT_CPU < ACE_XDP_CPU_MAP_MAX_ENTRIES,
 	"RT CPU must fit in cpu_map");
 _Static_assert(ACE_XDP_STAT_TOTAL + 1 == ACE_XDP_STAT_COUNT,
 	"stat count must match ace_xdp_stat_id");

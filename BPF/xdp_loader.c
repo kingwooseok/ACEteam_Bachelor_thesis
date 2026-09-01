@@ -16,7 +16,7 @@
 
 #include <bpf/bpf.h>            /* map 조작 및 XDP attach/detach API */
 #include <bpf/libbpf.h>         /* skeleton과 libbpf API */
-#include <linux/if_link.h>      /* XDP_FLAGS_SKB_MODE */
+#include <linux/if_link.h>      /* XDP_FLAGS_DRV_MODE */
 #include <errno.h>
 #include <net/if.h>             /* if_nametoindex() */
 #include <signal.h>             /* signal(), SIGINT, SIGTERM */
@@ -167,7 +167,7 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	err = bpf_xdp_attach(g_ifindex, prog_fd, XDP_FLAGS_SKB_MODE, NULL);
+	err = bpf_xdp_attach(g_ifindex, prog_fd, XDP_FLAGS_DRV_MODE, NULL);
 	if (err) {
 		fprintf(stderr, "XDP attach (generic) failed on %s: %s\n",
 			ifname, strerror(errno));
@@ -187,7 +187,7 @@ int main(int argc, char **argv)
 	}
 	maps_pinned = true;
 
-	printf("attached xdp_dispatch to %s (generic/SKB mode); Ctrl-C to stop\n", ifname);
+	printf("attached xdp_dispatch to %s ; Ctrl-C to stop\n", ifname);
 
 	/* Ctrl-C와 서비스 종료(SIGTERM)를 정상 cleanup으로 연결한다. */
 	signal(SIGINT, on_signal);
@@ -204,7 +204,7 @@ int main(int argc, char **argv)
 out:
 	/* attach가 성공한 경우에만 같은 mode로 detach한 뒤 skeleton을 해제한다. */
 	if (attached)
-		bpf_xdp_detach(g_ifindex, XDP_FLAGS_SKB_MODE, NULL);
+		bpf_xdp_detach(g_ifindex, XDP_FLAGS_DRV_MODE, NULL);
 	if (maps_pinned)
 		unpin_maps(skel);
 	xdp_kern__destroy(skel);

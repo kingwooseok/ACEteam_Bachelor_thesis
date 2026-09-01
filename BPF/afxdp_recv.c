@@ -249,7 +249,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "interface %s: %s\n", ifname, strerror(errno));
 		return 1;
 	}
-	if (queue_id >= (unsigned int)ACE_XDP_MAP_MAX_ENTRIES) {
+	if (queue_id >= (unsigned int)ACE_XDP_XSK_MAP_MAX_ENTRIES) {
 		fprintf(stderr, "RX queue %u is outside xsk_map range\n", queue_id);
 		return 1;
 	}

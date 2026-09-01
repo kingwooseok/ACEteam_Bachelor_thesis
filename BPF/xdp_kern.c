@@ -29,7 +29,7 @@
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_CPUMAP);
-	__uint(max_entries, ACE_XDP_MAP_MAX_ENTRIES);
+	__uint(max_entries, ACE_XDP_CPU_MAP_MAX_ENTRIES);
 	__type(key, __u32);         /* CPU 번호 */
 	__type(value, __u32);       /* CPUMAP queue size */
 } cpu_map SEC(".maps");
@@ -43,7 +43,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_XSKMAP);
-	__uint(max_entries, ACE_XDP_MAP_MAX_ENTRIES);
+	__uint(max_entries, ACE_XDP_XSK_MAP_MAX_ENTRIES);
 	__type(key, __u32);         /* RX queue index */
 	__type(value, __u32);       /* userspace가 등록하는 AF_XDP socket FD */
 } xsk_map SEC(".maps");
