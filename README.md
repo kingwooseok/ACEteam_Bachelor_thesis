@@ -1,4 +1,4 @@
-# Deterministic Packet Processing Architecture for Mixed-Criticality Traffic on Embedded Linux with PREEMPT_RT
+# Deterministic Mixed-Criticality Packet Processing on Embedded PREEMPT_RT Linux with Driver-Level Native XDP
 
 ## 1. 프로젝트 개요
 
