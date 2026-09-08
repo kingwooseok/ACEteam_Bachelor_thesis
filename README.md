@@ -1,4 +1,4 @@
-# Deterministic Mixed-Criticality Packet Processing on Embedded PREEMPT_RT Linux with Driver-Level Native XDP
+# Deterministic Mixed-Criticality Packet Processing on Embedded PREEMPT_RT Linux with Driver-Level BPF
 
 ## 1. 프로젝트 개요
 
