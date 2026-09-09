@@ -7,6 +7,12 @@
  * PTP_SYS_OFFSET_EXTENDED의 각 [system-before, PHC, system-after] 표본에서
  * system midpoint와 PHC의 차이를 계산한다. 같은 ioctl batch에서 system span이
  * 가장 짧은 표본을 대표값으로 선택한다.
+ *
+ * NIC의 HW RX timestamp는 PHC 기준이고 BPF/user 수신 시각은 MONOTONIC 기준이다.
+ * 둘 다 ns 단위여도 시작점과 진행 속도가 다르므로 바로 빼서는 안 된다.
+ * 여기서 offset = PHC - MONOTONIC을 구해, 분석기가 HW 시각을 MONOTONIC 기준으로
+ * 환산할 수 있게 한다. 이 프로그램은 시계 자체를 조정하거나 PTP 동기화를 하지 않는다.
+ * run 전후 표본의 offset 변화를 분석기가 보간하며, CSV에는 원시 표본도 함께 남긴다.
  */
 
 #include <errno.h>
@@ -127,6 +133,11 @@ static int parse_arguments(int argc, char **argv, struct config *config)
 	return optind == argc ? 0 : -1;
 }
 
+/*
+ * /dev/ptp0이 항상 실험 NIC의 시계라는 보장은 없으므로 -I 사용 시 드라이버가
+ * 알려주는 phc_index를 조회한다. RX timestamp와 같은 NIC의 PHC를 보정해야
+ * 이후의 HW→XDP/user 지연 계산에 이 offset을 사용할 수 있다.
+ */
 static int phc_device_for_interface(const char *interface, char *path,
 		size_t path_size)
 {
@@ -171,11 +182,18 @@ static bool ptp_time_to_ns(const struct ptp_clock_time *time, int64_t *ns)
 	return true;
 }
 
+/*
+ * 한 표본은 MONO_before → PHC → MONO_after 순서로 읽은 세 시각이다.
+ * PHC를 읽은 정확한 MONOTONIC 시각을 모르므로 before/after의 중간을 대응시킨다.
+ * span이 짧을수록 이 대응 시각의 불확실성이 작다고 보고 batch 안의 최소 span을
+ * 고른다. midpoint는 근사이며, 최소 span 선택이 시계 오차를 완전히 없애지는 않는다.
+ */
 static int collect_batch(int fd, unsigned int count, struct result *results,
 		unsigned int *best_index)
 {
 	struct ptp_sys_offset_extended request = {
 		.n_samples = count,
+		/* 분석할 BPF/user 시계와 맞춘다. 기본 REALTIME을 쓰는 ioctl과 구별한다. */
 		.clockid = CLOCK_MONOTONIC,
 	};
 	int64_t best_span = INT64_MAX;
@@ -193,6 +211,11 @@ static int collect_batch(int fd, unsigned int count, struct result *results,
 		    result->after_ns < result->before_ns)
 			continue;
 
+		/*
+		 * CSV의 offset 부호는 PHC - MONOTONIC으로 통일한다.
+		 * 따라서 분석 시 hw_mono = hw_phc - offset이며, user_mono와의 차이가
+		 * HW→user 지연이 된다. offset 자체는 packet 처리 지연이 아니다.
+		 */
 		result->span_ns = result->after_ns - result->before_ns;
 		result->offset_ns = result->phc_ns -
 			(result->before_ns + result->span_ns / 2);
@@ -275,6 +298,11 @@ int main(int argc, char **argv)
 			perror("PTP_SYS_OFFSET_EXTENDED(CLOCK_MONOTONIC)");
 			goto out;
 		}
+		/*
+		 * 대표값만 저장하지 않고, 모든 유효 표본과 selected 표시를 남긴다.
+		 * 원시 before/after/span을 보면 calibration 당시 읽기 지연도 확인할 수 있다.
+		 * iterations는 연속 batch 횟수이며 run 전후 시점 선택은 실행 script가 맡는다.
+		 */
 		for (unsigned int sample = 0; sample < config.samples; sample++) {
 			const struct result *result = &results[sample];
 

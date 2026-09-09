@@ -3,6 +3,17 @@
 // Native/driver-mode XDP loader.  The loader owns the program and all pinned
 // maps for one run, refuses to replace an existing XDP program, and detaches
 // only when the currently attached program is still its own.
+//
+// 이 파일은 패킷을 직접 처리하는 수신기가 아니라 실험의 준비·종료 담당이다.
+// 패킷 분류는 xdp_kern.c, AF_XDP 수신은 afxdp_recv.c에서 수행한다.
+//
+// 정상 실행 순서:
+//   기존 HW timestamp 설정 저장 → BPF load → CPUMAP 설정·map pin
+//   → native XDP attach → HW RX timestamp 활성화 → 수신기/송신기 실행
+//   → 송신 중단·수신기 종료 → loader 종료 → CPUMAP 잔여 처리 대기
+//   → map 기록을 CSV로 저장 → timestamp 설정 복원·pin 해제
+// pin은 커널 map에 다른 프로세스도 열 수 있는 bpffs 경로를 붙이는 것이다.
+// 디스크 결과 파일은 아니며, 실험 기록의 영구 저장은 종료 시 CSV가 맡는다.
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -355,6 +366,10 @@ static int validate_maps(struct xdp_kern *skel, __u32 record_capacity)
 	return 0;
 }
 
+/* runtime_config는 loader와 AF_XDP 수신기가 공유하는 준비 상태다.
+ * CAPTURED = 기존 설정 저장, APPLYING = 장치 설정 적용 중,
+ * APPLIED = 적용 완료, STOPPING = 종료 중이므로 새 수신기 등록 금지.
+ * 이 상태와 저장된 설정으로 --recover도 중단 지점 이후 정리를 이어간다. */
 static void runtime_set_hwtstamp(struct ace_runtime_config *runtime,
 		const struct ace_hwtstamp_state *state, bool applied)
 {
@@ -379,6 +394,10 @@ static void runtime_set_hwtstamp_applying(
 	runtime->flags |= ACE_RUNTIME_F_HWTSTAMP_APPLYING;
 }
 
+/* CPUMAP의 key는 목적 CPU 번호, value는 그 CPU의 대기열과 실행할 BPF다.
+ * 따라서 UDP/9001은 CPU를 옮긴 뒤 xdp_cpumap_measure에서 도착 시각을
+ * 기록한다. 여기서는 CPU 이동 이후의 일반 사용자 프로세스를 만들지 않는다.
+ * XSKMAP은 비워 두고, 실제 socket FD를 가진 AF_XDP 수신기가 채운다. */
 static int configure_maps(struct xdp_kern *skel,
 		const struct ace_runtime_config *runtime)
 {
@@ -548,6 +567,10 @@ static void print_record_summary(struct xdp_kern *skel)
 	       count_records(bpf_map__fd(skel->maps.cpumap_records)));
 }
 
+/* 패킷마다 파일을 쓰면 측정 경로에 I/O 부하가 들어가므로 수신 중에는
+ * HASH map에만 기록하고, 신규 수신·CPUMAP 처리가 멎은 뒤 CSV로 꺼낸다.
+ * HASH 순회 순서는 패킷 순서가 아니다. 분석기는 flow_id + sequence로
+ * ingress/CPUMAP/사용자 수신 기록을 합친다. run_id는 패킷 key에 없다. */
 static int export_ingress_records(int fd, const char *path)
 {
 	struct ace_packet_key current;
@@ -761,6 +784,10 @@ static int lookup_stat_total(int fd, __u32 id, __u64 *values, int ncpu,
  * drain barrier.  Wait for request/terminal counters to become stable before
  * iterating the record maps.  A stable deficit is reported as an unobserved
  * redirect/enqueue loss instead of making shutdown wait forever. */
+/* XDP detach는 새 유입만 끊는다. 이미 목적 CPU 대기열에 들어간 패킷의
+ * 기록은 조금 늦게 생길 수 있어, 여기서는 카운터가 안정될 때까지 기다린다.
+ * requested는 redirect 요청, terminal은 목적 CPU에서 관측한 처리 결과다.
+ * 둘의 차이는 성공한 패킷으로 채우지 않고 미관측 수로 보고한다. */
 struct cpumap_drain_report {
 	__u64 requested;
 	__u64 terminal;
@@ -872,6 +899,9 @@ static int cleanup_recovery_pins(void)
 	return 0;
 }
 
+/* --recover는 새 실험을 시작하지 않는다. 이전 loader가 종료된 뒤 남은
+ * pin을 열어 XDP 정지·timestamp 복원·CSV 저장을 마무리하는 별도 경로다.
+ * 정상 실험에서는 main()의 시작/종료 흐름만 따라 읽으면 된다. */
 static int recover_pinned_measurement(const struct loader_options *options)
 {
 	struct ace_runtime_config runtime;
@@ -1239,7 +1269,11 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	/* The RX metadata kfunc must be resolved for this exact netdevice. */
+	/* RX timestamp kfunc는 포팅한 macb의 xmo_rx_timestamp 구현에 연결된다.
+	 * verifier가 어느 장치의 구현인지 알도록 반드시 load 전에 ifindex와
+	 * DEV_BOUND_ONLY를 지정한다. attach할 때 장치를 고르는 것만으로는 늦다.
+	 * 이것은 NIC 하드웨어 offload가 아니라 CPU에서 실행하는 native XDP다.
+	 * CPUMAP의 두 번째 BPF는 전달받은 metadata를 읽으므로 여기에 묶지 않는다. */
 	bpf_program__set_ifindex(skel->progs.xdp_dispatch, ifindex);
 	err = bpf_program__set_flags(skel->progs.xdp_dispatch,
 		bpf_program__flags(skel->progs.xdp_dispatch) |
@@ -1285,8 +1319,9 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	/* Pin ownership/recovery state before attach so SIGKILL cannot leave an
-	 * attached program with no way to prove that it belongs to this loader. */
+	/* map 내용과 실행 주체를 먼저 pin한 다음 패킷 유입을 시작한다.
+	 * AF_XDP 수신기는 이 map들을 열어 같은 실험에 연결하고, loader가
+	 * 비정상 종료되어도 남은 기록과 프로그램 ID로 --recover가 가능하다. */
 	err = bpf_object__pin_maps(skel->obj, ACE_XDP_PIN_DIR);
 	if (err) {
 		fprintf(stderr, "BPF map pin failed at %s: %s\n",
@@ -1308,10 +1343,11 @@ int main(int argc, char **argv)
 	}
 	attached = true;
 
-	/* gem_xdp_setup() closes/reopens this netdevice while attaching, which
-	 * resets the MAC timestamp mode.  First verify that nobody changed the
-	 * logical configuration since capture; if they did, adopt it as the
-	 * baseline and abort without overwriting it. */
+	/* macb의 gem_xdp_setup()은 attach 과정에서 장치를 닫았다 다시 열어
+	 * MAC timestamp mode를 초기화한다. 그래서 RX timestamp 활성화는
+	 * 반드시 attach 뒤에 한다. attach 전에 켜 두기만 하면 충분하지 않다.
+	 * 먼저 저장한 논리 설정과 현재 설정이 같은지도 확인한다. 달라졌다면
+	 * 그 사이 들어온 설정을 복원 기준으로 삼고 이번 시작을 중단한다. */
 	{
 		struct hwtstamp_config current = {};
 
@@ -1367,6 +1403,8 @@ int main(int argc, char **argv)
 	       "RX HWTSTAMP filter=%d; Ctrl-C to stop\n",
 	       owned_id, options.ifname, options.record_capacity,
 	       hwtstamp.effective.rx_filter);
+	/* 이 준비 완료 메시지 뒤에 수신기와 송신기를 시작한다. loader의 대기
+	 * 루프는 패킷당 작업을 하지 않으며 기본 quiet 모드로 출력 부하를 줄인다. */
 	while (!stop) {
 		sleep(1);
 		if (!options.quiet)
@@ -1377,6 +1415,9 @@ int main(int argc, char **argv)
 	result = 0;
 
 out:
+	/* 정상 종료는 송신기를 멈추고 수신기를 먼저 끝낸 뒤 loader를 끝낸다.
+	 * STOPPING 공개 → 자신이 붙인 XDP detach → CPUMAP drain → CSV 순서다.
+	 * 아직 AF_XDP 수신기가 살아 있거나 저장에 실패하면 pin을 남겨 놓는다. */
 	if (attached) {
 		runtime.flags |= ACE_RUNTIME_F_STOPPING;
 		err = update_runtime_config(skel, &runtime);

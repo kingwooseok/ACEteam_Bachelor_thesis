@@ -343,6 +343,10 @@ def parse_csv_integer(raw: str | None, path: Path, row: int, field: str) -> int:
         ) from error
 
 
+# 이 단계의 입력은 raw 수신 기록이 아니라 join_results.py가 완성한 run들이다.
+# run 내부의 패킷 연결/시계 보정은 이미 끝났고, 여기서는 동일 조건의 반복 결과를
+# 모아 패킷 전체 분포와 run 사이 변동을 각각 계산한다.
+# 각 run이 독립적인 반복이라는 해석은 실제 실험 설계에서 충족해야 한다.
 def load_joined_metrics(path: Path) -> tuple[int, dict[str, tuple[int, ...]]]:
     values: dict[str, list[int]] = {name: [] for name in METRIC_FIELDS}
     keys: set[tuple[int, int]] = set()
@@ -393,6 +397,9 @@ def load_joined_metrics(path: Path) -> tuple[int, dict[str, tuple[int, ...]]]:
                 raw = row.get(field)
                 if raw is None:
                     raise InputError(f"{path}: row {row_number}: missing {field}")
+                # 빈 metric은 관측 또는 보정이 부족해 계산하지 못한 값이다.
+                # 이를 0ns나 deadline miss로 바꾸지 않고 해당 metric 표본에서 뺀다.
+                # 따라서 집계된 miss rate의 분모도 전체 송신 수가 아닌 유효 관측 수다.
                 if raw == "":
                     continue
                 values[metric].append(
@@ -410,6 +417,9 @@ def percentile_nearest_rank(sorted_values: Sequence[int], percentile: int) -> in
 
 
 def metric_statistics(values: Sequence[int], deadline_ns: int) -> dict[str, object]:
+    # deadline을 엄밀히 초과한 값만 miss다. deadline과 같은 값은 성공으로 센다.
+    # p99는 정렬된 표본에서 nearest-rank 위치를 고르는 관측 분위수이며,
+    # 아직 관측하지 않은 최악 지연에 대한 보장은 아니다.
     ordered = sorted(values)
     misses = sum(value > deadline_ns for value in ordered)
     return {
@@ -455,6 +465,11 @@ def mean_confidence_interval_95(
 ) -> dict[str, int | float | None]:
     """Calculate an equal-run-weighted Student-t interval for a mean."""
 
+    # 여기서 values 하나는 패킷 하나가 아니라 run 하나의 요약값이다.
+    # 예를 들어 run별 p99 세 개를 받으면 '세 p99의 평균'과 그 평균의 CI를 구한다.
+    # 이것은 모든 패킷을 합친 p99의 CI와 다르며, 각 run의 가중치는 동일하다.
+    # 표준오차 = run 간 표준편차 / sqrt(run 수), 여기에 t 임계값을 곱한다.
+    # 유효한 run이 하나뿐이면 평균만 있고 분산을 추정할 CI는 None으로 남긴다.
     sample = [float(value) for value in values]
     count = len(sample)
     mean = statistics.fmean(sample) if sample else None
@@ -530,6 +545,9 @@ def validate_summary_metrics(
 
 
 def manifest_cohort_identity(manifest: Mapping[str, object]) -> dict[str, object]:
+    # 반복 실험은 같은 설정으로 다시 실행한 결과끼리 묶는다. manifest에 기록된
+    # kernel/project 상태와 산출물 정보로 비교 조건을 구성한다.
+    # RT와 non-RT처럼 의도적으로 조건이 다른 실험은 각각 집계한 뒤 비교한다.
     interface = manifest.get("interface")
     interface_name = interface.get("name") if isinstance(interface, dict) else None
     system = manifest.get("system")
@@ -768,6 +786,9 @@ def aggregate_runs(
     metric_rows: list[dict[str, object]] = []
     run_summaries: list[dict[str, object]] = []
 
+    # 먼저 run마다 각 지연 성분의 분위수와 miss rate를 계산해 보관한다.
+    # 이후 패킷을 합쳐도 이 run 경계가 남아 있어 반복 사이의 변동을 볼 수 있다.
+    # 어떤 run에 특정 metric 표본이 없으면 그 metric의 CI 표본 수도 줄어든다.
     per_run_statistics: dict[str, dict[str, dict[str, object]]] = {}
     for run in runs:
         metric_map = {
@@ -799,6 +820,10 @@ def aggregate_runs(
 
     aggregated_metrics: dict[str, dict[str, object]] = {}
     for metric in METRIC_FIELDS:
+        # pooled는 모든 run의 패킷을 한 배열로 모은 분포다. 표본이 많은 run은
+        # 이 분포에서 자연스럽게 더 큰 비중을 차지한다.
+        # '전체 관측 패킷 중 99%가 어느 지연 이하인가'를 보고 싶을 때 사용한다.
+        # 아래 run_estimates의 동일 run 가중치 평균과는 답하는 질문이 다르다.
         pooled = [
             value
             for run in runs
@@ -813,6 +838,9 @@ def aggregate_runs(
             ) > 0
             for run in runs
         )
+        # 같은 run의 패킷들은 부하/스케줄링 상태를 공유할 수 있다.
+        # 따라서 패킷 수를 독립 반복 수로 삼지 않고 run별 요약값에 CI를 붙인다.
+        # p99 CI는 run별 p99 평균의 불확실성이고, miss rate CI도 같은 방식이다.
         run_estimates = {
             field: mean_confidence_interval_95([
                 cast(
@@ -826,6 +854,9 @@ def aggregate_runs(
                 "p50_ns", "p95_ns", "p99_ns", "deadline_miss_rate"
             )
         }
+        # packet-level miss rate: 유효 패킷 중 deadline을 넘긴 비율.
+        # run-level with_deadline_miss_rate: 표본이 있는 run 중 한 번이라도 넘긴 비율.
+        # 둘은 분모와 의미가 달라서 결과에 나란히 남긴다.
         run_level = {
             "total_count": len(runs),
             "with_samples_count": runs_with_samples,
@@ -992,6 +1023,9 @@ def write_outputs(
             os.fsync(file.fileno())
 
         fsync_directories((csv_path, json_path))
+        # 집계에서도 CSV/JSON 기록이 끝난 뒤 complete 표시를 만든다.
+        # 이 표시는 통계가 파일로 완성됐다는 뜻이며 deadline 충족 여부는
+        # summary의 각 metric 값과 유효 관측 수를 보고 해석한다.
         completion = {
             "completion_schema_version": AGGREGATION_COMPLETION_SCHEMA_VERSION,
             "artifact_kind": "ace-repeated-run-aggregation",

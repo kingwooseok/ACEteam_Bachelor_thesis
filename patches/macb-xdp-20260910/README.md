@@ -3,6 +3,9 @@
 2026-09-10 현재 소스와 보관된 커널 설정을 기준으로 생성했다.
 `드라이버 포팅한 그 모든것을 담아.md`의 초기 수동 포팅 7개 커밋과
 이후 미커밋 드라이버 변경을 모두 포함한다.
+업로드 전 검토 과정에서 추가한 한국어 설명 주석도 반영했다. 초기 7개 커밋은
+원본을 유지하며, 이후 주석은 0008과 통합 패치에 포함한다. 이 주석 보강에서
+실행 코드와 커널 설정은 변경하지 않았다.
 
 ## 가장 간단한 적용 방법
 
@@ -79,7 +82,7 @@ BPF 프로그램·UDP 도구·분석 코드는 `ACEteam_Bachelor_thesis` 저장�
 | 7 | `f934dc812d68` | `ndo_xdp_xmit` |
 | 8 | 미커밋 소스 | HW timestamp metadata, metadata 보존, multi-descriptor DROP/counter, 공통 TX kick |
 
-전체 드라이버 변경은 다음 4개 파일의 `+928 / -264`다.
+설명 주석을 포함한 전체 드라이버 변경은 다음 4개 파일의 `+986 / -264`다.
 
 ```text
 drivers/net/ethernet/cadence/Kconfig
@@ -87,6 +90,20 @@ drivers/net/ethernet/cadence/macb.h
 drivers/net/ethernet/cadence/macb_main.c
 drivers/net/ethernet/cadence/macb_ptp.c
 ```
+
+포팅 원리를 읽을 때는 `macb_main.c`의 다음 주석을 참고한다.
+
+- `gem_create_page_pool()`: page 재사용, DMA 방향, XDP core의 page 반환 경로.
+- `gem_xdp_setup()`: XDP 활성 여부가 바뀔 때 RX 메모리를 다시 준비하는 이유.
+- `macb_xdp_buff` / `gem_xdp_run()`: 현재 RX descriptor와 metadata callback의
+  연결, PASS/REDIRECT/TX/DROP에 따른 버퍼 처리.
+- `gem_rx()`: multi-descriptor frame을 전체 DROP하는 조건과 metadata의 SKB 보존.
+- `macb_tx_kick()`: SKB/XDP 공통 TX 시작 신호와 RP1 PCIe readback.
+
+`macb_ptp.c`의 `gem_ptp_rxstamp_ns()`에는 HW timestamp를 공통 helper로
+분리한 이유와 PHC 시계의 의미를 설명했다. RX descriptor 포인터를 다른 CPU나
+사용자 공간에 metadata로 전달하는 것이 아니라, BPF가 읽은 숫자 값을 metadata에
+복사해서 전달한다는 점이 핵심이다.
 
 변경을 단계별로 적용하려면 기준 커밋에서 다음을 실행한다. 모든 파일은
 `git apply`로 적용 가능하다. 0001~0007은 `git format-patch` 형식이고,
@@ -155,10 +172,10 @@ make ARCH=arm64 olddefconfig
 ## 확인한 내용
 
 - 통합/순차 드라이버 패치를 기준 커밋의 임시 index에 각각 적용해 동일한
-  Git tree `9e4f2916ff42b9c1c85d0f0234176696838b54ed`를 얻었다.
+  Git tree `dea83c077092854b49c9bcf0102f83e4ca1de404`를 얻었다.
 - 복원된 드라이버 4개 파일은 현재 작업 파일과 동일하다.
 - `kernel-and-config.patch` 적용 결과는 드라이버와 최종 설정을 함께 포함한
-  tree `623e7487fc6c94501d132a4a032e3c049f356454`다.
+  tree `487076614a2eead5a014f73677d99e5fdc4b12af`다.
 - 설정 통합/순차 패치 적용 결과와 현재 `.config`가 바이트 단위로 동일하다.
 - 별도 복사본에서 `olddefconfig`를 실행해도 현재 설정이 그대로 유지됐다.
 - 기준 커밋의 새 worktree에 통합 패치를 실제 적용한 뒤

@@ -160,7 +160,7 @@ index 8ef7995db60c63404cc39a7d4e81675388ac3dd2..5d6272f74ac9395e1f3851b8f3073ff7
  
  static inline bool macb_is_gem(struct macb *bp)
 diff --git a/drivers/net/ethernet/cadence/macb_main.c b/drivers/net/ethernet/cadence/macb_main.c
-index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39c1a2860e 100644
+index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..a1d4ca0e1aea6582b6303e3998fe9d3e3b7f89b8 100644
 --- a/drivers/net/ethernet/cadence/macb_main.c
 +++ b/drivers/net/ethernet/cadence/macb_main.c
 @@ -6,6 +6,7 @@
@@ -185,10 +185,15 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  }
  
  static dma_addr_t macb_tx_dma(struct macb_queue *queue, unsigned int index)
-@@ -712,6 +713,32 @@ static void macb_tx_lpi_wake(struct macb *bp)
+@@ -712,6 +713,37 @@ static void macb_tx_lpi_wake(struct macb *bp)
  	udelay(50);
  }
  
++/* SKB 송신과 XDP 송신 모두 descriptor 작성 뒤 같은 하드웨어 시작 절차를 쓴다.
++ * descriptor를 메모리에 써 둔 것만으로 NIC가 전송을 시작하지는 않는다.
++ * TSTART가 그 시작 신호이며, RP1의 PCIe 경로에서는 뒤의 readback까지 해야
++ * 지연된 register write가 장치에 전달되었음을 확인할 수 있다.
++ */
 +static void macb_tx_kick(struct macb_queue *queue, bool wake_lpi,
 +			 bool arm_retry)
 +{
@@ -218,7 +223,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  static void macb_mac_disable_tx_lpi(struct phylink_config *config)
  {
  	struct net_device *ndev = to_net_dev(config->dev);
-@@ -829,7 +856,7 @@ static void macb_mac_link_down(struct phylink_config *config, unsigned int mode,
+@@ -829,7 +861,7 @@ static void macb_mac_link_down(struct phylink_config *config, unsigned int mode,
  static void gem_shuffle_tx_one_ring(struct macb_queue *queue)
  {
  	unsigned int head, tail, count, ring_size, desc_size;
@@ -227,7 +232,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	struct macb_dma_desc *desc_curr, *desc_next;
  	unsigned int i, cycles, shift, curr, next;
  	struct macb *bp = queue->bp;
-@@ -861,8 +888,8 @@ static void gem_shuffle_tx_one_ring(struct macb_queue *queue)
+@@ -861,8 +893,8 @@ static void gem_shuffle_tx_one_ring(struct macb_queue *queue)
  
  	for (i = 0; i < cycles; i++) {
  		memcpy(&desc, macb_tx_desc(queue, i), desc_size);
@@ -238,7 +243,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  		curr = i;
  		next = (curr + shift) % ring_size;
-@@ -878,9 +905,9 @@ static void gem_shuffle_tx_one_ring(struct macb_queue *queue)
+@@ -878,9 +910,9 @@ static void gem_shuffle_tx_one_ring(struct macb_queue *queue)
  			if (curr == ring_size - 1)
  				desc_curr->ctrl |= MACB_BIT(TX_WRAP);
  
@@ -251,7 +256,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  			curr = next;
  			next = (curr + shift) % ring_size;
-@@ -892,8 +919,8 @@ static void gem_shuffle_tx_one_ring(struct macb_queue *queue)
+@@ -892,8 +924,8 @@ static void gem_shuffle_tx_one_ring(struct macb_queue *queue)
  			desc_curr->ctrl &= ~MACB_BIT(TX_WRAP);
  		if (curr == ring_size - 1)
  			desc_curr->ctrl |= MACB_BIT(TX_WRAP);
@@ -262,7 +267,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	}
  
  	queue->tx_head = count;
-@@ -1229,21 +1256,36 @@ static int macb_halt_tx(struct macb *bp)
+@@ -1229,21 +1261,36 @@ static int macb_halt_tx(struct macb *bp)
  					bp, TSR);
  }
  
@@ -310,7 +315,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	}
  }
  
-@@ -1291,11 +1333,13 @@ static void macb_tx_error_task(struct work_struct *work)
+@@ -1291,11 +1338,13 @@ static void macb_tx_error_task(struct work_struct *work)
  	bool			halt_timeout = false;
  	struct macb		*bp = queue->bp;
  	u32			queue_index;
@@ -325,7 +330,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	unsigned int		tail;
  	unsigned long		flags;
  
-@@ -1310,7 +1354,8 @@ static void macb_tx_error_task(struct work_struct *work)
+@@ -1310,7 +1359,8 @@ static void macb_tx_error_task(struct work_struct *work)
  	 * network engine about the macb/gem being halted.
  	 */
  	napi_disable(&queue->napi_tx);
@@ -335,7 +340,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	/* Make sure nobody is trying to queue up new packets */
  	netif_tx_stop_all_queues(bp->dev);
-@@ -1333,31 +1378,43 @@ static void macb_tx_error_task(struct work_struct *work)
+@@ -1333,31 +1383,43 @@ static void macb_tx_error_task(struct work_struct *work)
  
  		desc = macb_tx_desc(queue, tail);
  		ctrl = desc->ctrl;
@@ -393,7 +398,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  			}
  		} else {
  			/* "Buffers exhausted mid-frame" errors may only happen
-@@ -1371,11 +1428,13 @@ static void macb_tx_error_task(struct work_struct *work)
+@@ -1371,11 +1433,13 @@ static void macb_tx_error_task(struct work_struct *work)
  			desc->ctrl = ctrl | MACB_BIT(TX_USED);
  		}
  
@@ -410,7 +415,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	/* Set end of TX queue */
  	desc = macb_tx_desc(queue, 0);
-@@ -1402,7 +1461,8 @@ static void macb_tx_error_task(struct work_struct *work)
+@@ -1402,7 +1466,8 @@ static void macb_tx_error_task(struct work_struct *work)
  	netif_tx_start_all_queues(bp->dev);
  	macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
  
@@ -420,7 +425,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	napi_enable(&queue->napi_tx);
  }
  
-@@ -1439,19 +1499,23 @@ static bool ptp_one_step_sync(struct sk_buff *skb)
+@@ -1439,19 +1504,23 @@ static bool ptp_one_step_sync(struct sk_buff *skb)
  static int macb_tx_complete(struct macb_queue *queue, int budget)
  {
  	struct macb *bp = queue->bp;
@@ -447,7 +452,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  		u32			ctrl;
  
  		desc = macb_tx_desc(queue, tail);
-@@ -1469,8 +1533,15 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
+@@ -1469,8 +1538,15 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
  
  		/* Process all buffers of the current transmitted frame */
  		for (;; tail++) {
@@ -465,7 +470,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  			/* First, update TX stats if needed */
  			if (skb) {
-@@ -1485,24 +1556,27 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
+@@ -1485,24 +1561,27 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
  				queue->stats.tx_packets++;
  				bp->dev->stats.tx_bytes += skb->len;
  				queue->stats.tx_bytes += skb->len;
@@ -497,7 +502,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	queue->tx_tail = tail;
  	if (__netif_subqueue_stopped(bp->dev, queue_index) &&
-@@ -1517,13 +1591,75 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
+@@ -1517,13 +1596,75 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
  	return packets;
  }
  
@@ -577,7 +582,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	while (CIRC_SPACE(queue->rx_prepared_head, queue->rx_tail,
  			bp->rx_ring_size) > 0) {
-@@ -1534,25 +1670,28 @@ static void gem_rx_refill(struct macb_queue *queue)
+@@ -1534,25 +1675,28 @@ static void gem_rx_refill(struct macb_queue *queue)
  
  		desc = macb_rx_desc(queue, entry);
  
@@ -610,18 +615,18 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 -			}
 +			paddr = page_pool_get_dma_addr(page) +
 +				gem_rx_pad(bp) + offset;
-+
+ 
+-			queue->rx_skbuff[entry] = skb;
 +			dma_sync_single_for_device(&bp->pdev->dev,
 +						   paddr, bp->rx_buffer_size,
 +						   page_pool_get_dma_dir(queue->page_pool));
- 
--			queue->rx_skbuff[entry] = skb;
++
 +			data = page_address(page) + offset;
 +			queue->rx_buff[entry] = data;
  
  			if (entry == bp->rx_ring_size - 1)
  				paddr |= MACB_BIT(RX_WRAP);
-@@ -1562,9 +1701,6 @@ static void gem_rx_refill(struct macb_queue *queue)
+@@ -1562,9 +1706,6 @@ static void gem_rx_refill(struct macb_queue *queue)
  			 */
  			dma_wmb();
  			macb_set_addr(bp, desc, paddr);
@@ -631,7 +636,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  		} else {
  			desc->ctrl = 0;
  			dma_wmb();
-@@ -1578,6 +1714,7 @@ static void gem_rx_refill(struct macb_queue *queue)
+@@ -1578,6 +1719,7 @@ static void gem_rx_refill(struct macb_queue *queue)
  
  	netdev_vdbg(bp->dev, "rx ring: queue: %p, prepared head %d, tail %d\n",
  			queue, queue->rx_prepared_head, queue->rx_tail);
@@ -639,10 +644,15 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  }
  
  /* Mark DMA descriptors from begin up to and not including end as unused */
-@@ -1601,20 +1738,229 @@ static void discard_partial_frame(struct macb_queue *queue, unsigned int begin,
+@@ -1601,20 +1743,250 @@ static void discard_partial_frame(struct macb_queue *queue, unsigned int begin,
  	 */
  }
  
++/* XDP_TX와 ndo_xdp_xmit가 공유하는 송신 경로다.
++ * 이 NIC의 RX page를 되쏘는 XDP_TX는 기존 DMA mapping을 재사용하고,
++ * 외부에서 전달받은 ndo_xdp_xmit frame은 이 장치용 mapping을 새로 만든다.
++ * tx_buff의 type은 전송 완료 후 SKB/XDP frame별 반환 방법을 고르는 표식이다.
++ */
 +static int macb_xdp_submit_frame(struct macb *bp, struct xdp_frame *xdpf,
 +				 struct net_device *dev, bool dma_map,
 +				 dma_addr_t addr)
@@ -761,6 +771,12 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +	return xmitted;
 +}
 +
++/* XDP가 실행 중인 "현재 패킷"과 RX descriptor를 연결하는 임시 wrapper다.
++ * xdp를 첫 멤버로 둬 callback에 전달된 XDP context 주소에서 wrapper를 찾는다.
++ * BPF가 descriptor 포인터를 직접 읽는 것은 아니며 metadata kfunc가 아래
++ * callback을 거쳐 ns 값만 받는다. 이 wrapper는 gem_xdp_run() 호출 중에만
++ * 유효하므로 다른 CPU로 전달하기 전에 BPF가 timestamp를 metadata에 복사한다.
++ */
 +struct macb_xdp_buff {
 +	struct xdp_buff xdp;
 +	struct macb *bp;
@@ -801,11 +817,21 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +	if (!prog)
 +		goto out;
 +
++	/* page_pool의 RX 메모리를 SKB로 만들기 전에 XDP에 보여 준다.
++	 * prepare_buff의 마지막 true는 data_meta 사용을 허용한다는 뜻이다.
++	 * BPF는 headroom 안에 metadata를 넣을 수 있고, PASS 때는 변경된
++	 * data/headroom/metasize를 호출자에게 돌려줘 SKB에도 같은 배치를 유지한다.
++	 */
 +	xdp_init_buff(xdp, gem_total_rx_buffer_size(queue->bp), &queue->xdp_rxq);
 +	xdp_prepare_buff(xdp, buff_head, *headroom, *len, true);
 +	xdp_buff_clear_frags_flag(xdp);
 +	dev = queue->bp->dev;
 +
++	/* 판정은 버퍼의 다음 소유자도 결정한다.
++	 * PASS: gem_rx가 SKB로 감싸 stack에 전달.
++	 * REDIRECT/TX 성공: 해당 경로가 이어받으므로 여기서 page를 반환하지 않음.
++	 * DROP/실패: 아래 page_pool_put_full_page로 이 RX page를 반환.
++	 */
 +	act = bpf_prog_run_xdp(prog, xdp);
 +	switch (act) {
 +	case XDP_PASS:
@@ -876,7 +902,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  		entry = macb_rx_ring_wrap(bp, queue->rx_tail);
  		desc = macb_rx_desc(queue, entry);
-@@ -1636,58 +1982,166 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+@@ -1636,58 +2008,181 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
  		queue->rx_tail++;
  		count++;
  
@@ -910,7 +936,14 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +		if (unlikely(queue->xdp_rx_drop_multidesc && first_frame))
 +			queue->xdp_rx_drop_multidesc = false;
 +
-+		/* Native XDP currently supports only a frame contained in one
++		/* 여기서 frame은 Ethernet frame, descriptor는 NIC의 RX buffer 항목이다.
++		 * SOF와 EOF가 같은 항목에 있어야 한 buffer에 완성된 패킷이 들어 있다.
++		 * 여러 항목에 나뉜 frame은 이 실험의 XDP 처리 범위 밖이므로 전체를
++		 * 버린다. IPv4 fragmentation과는 별개의 드라이버 메모리 배치 문제다.
++		 * queue의 상태를 유지하며 EOF까지 회수하고 drop counter는 frame을
++		 * 버리기 시작할 때만 증가시킨다. XDP가 꺼져 있으면 기존 조립 경로다.
++		 *
++		 * Native XDP currently supports only a frame contained in one
 +		 * descriptor.  Fail closed instead of letting a fragmented frame
 +		 * bypass the attached program.  Keep draining across NAPI polls
 +		 * until the descriptor carrying EOF is returned to the page pool.
@@ -960,34 +993,29 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +				bp->dev->stats.rx_dropped++;
 +				queue->stats.rx_dropped++;
 +			}
- 
--		skb_put(skb, len);
--		dma_unmap_single(&bp->pdev->dev, addr,
--				 bp->rx_buffer_size, DMA_FROM_DEVICE);
++
 +			headroom = bp->rx_headroom;
 +			metasize = 0;
- 
--		skb->protocol = eth_type_trans(skb, bp->dev);
--		skb_checksum_none_assert(skb);
--		if (bp->dev->features & NETIF_F_RXCSUM &&
--		    !(bp->dev->flags & IFF_PROMISC) &&
--		    GEM_BFEXT(RX_CSUM, ctrl) & GEM_RX_CSUM_CHECKED_MASK)
--			skb->ip_summed = CHECKSUM_UNNECESSARY;
++
 +			if (last_frame) {
 +				ret = gem_xdp_run(queue, buff_head, &data_len,
 +						  &headroom, &metasize,
 +						  addr - gem_rx_pad(bp), desc);
 +				if (ret == XDP_REDIRECT)
 +					xdp_flush = true;
- 
--		bp->dev->stats.rx_packets++;
--		queue->stats.rx_packets++;
--		bp->dev->stats.rx_bytes += skb->len;
--		queue->stats.rx_bytes += skb->len;
++
 +				if (ret != XDP_PASS)
 +					goto next_frame;
 +			}
-+
+ 
+-		skb_put(skb, len);
+-		dma_unmap_single(&bp->pdev->dev, addr,
+-				 bp->rx_buffer_size, DMA_FROM_DEVICE);
++			/* PASS라고 해서 packet payload를 새 버퍼로 복사하지 않는다.
++			 * RX page를 SKB로 감싸고 recycle 표시를 붙여 stack의 사용이 끝나면
++			 * page_pool로 돌아가게 한다. metadata_set은 본문 앞에 남겨 둔
++			 * metadata의 길이를 기록하며 일반 UDP payload에 붙이는 동작은 아니다.
++			 */
 +			queue->skb = napi_build_skb(buff_head, gem_total_rx_buffer_size(bp));
 +			if (unlikely(!queue->skb)) {
 +				if (net_ratelimit())
@@ -995,7 +1023,13 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +						   "Unable to allocate sk_buff\n");
 +				goto free_frags;
 +			}
-+
+ 
+-		skb->protocol = eth_type_trans(skb, bp->dev);
+-		skb_checksum_none_assert(skb);
+-		if (bp->dev->features & NETIF_F_RXCSUM &&
+-		    !(bp->dev->flags & IFF_PROMISC) &&
+-		    GEM_BFEXT(RX_CSUM, ctrl) & GEM_RX_CSUM_CHECKED_MASK)
+-			skb->ip_summed = CHECKSUM_UNNECESSARY;
 +			skb_reserve(queue->skb, headroom);
 +			skb_mark_for_recycle(queue->skb);
 +			skb_put(queue->skb, data_len);
@@ -1006,10 +1040,14 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +			page = virt_to_head_page(buff_head);
 +			nr_frags = shinfo->nr_frags;
  
--		gem_ptp_do_rxstamp(bp, skb, desc);
+-		bp->dev->stats.rx_packets++;
+-		queue->stats.rx_packets++;
+-		bp->dev->stats.rx_bytes += skb->len;
+-		queue->stats.rx_bytes += skb->len;
 +			if (unlikely(nr_frags >= ARRAY_SIZE(shinfo->frags)))
 +				goto free_frags;
-+
+ 
+-		gem_ptp_do_rxstamp(bp, skb, desc);
 +			skb_add_rx_frag(queue->skb, nr_frags, page,
 +					buff_head - page_address(page) + gem_rx_pad(bp),
 +					data_len, gem_total_rx_buffer_size(bp));
@@ -1072,6 +1110,9 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	}
  
 -	gem_rx_refill(queue);
++	/* redirect는 위에서 패킷별로 요청하고 이 NAPI poll 끝에서 묶어 넘긴다.
++	 * 따라서 XDP_REDIRECT를 반환한 시점과 목적 경로가 실제 소비한 시점은 다르다.
++	 */
 +	if (xdp_flush)
 +		xdp_do_flush();
 +
@@ -1079,7 +1120,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	return count;
  }
-@@ -1947,16 +2401,7 @@ static void macb_tx_restart(struct macb_queue *queue)
+@@ -1947,16 +2442,7 @@ static void macb_tx_restart(struct macb_queue *queue)
  	if (tbqp == head_idx)
  		goto out_tx_ptr_unlock;
  
@@ -1097,7 +1138,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  out_tx_ptr_unlock:
  	spin_unlock_irqrestore(&queue->tx_ptr_lock, flags);
-@@ -2042,7 +2487,7 @@ static void macb_hresp_error_task(struct work_struct *work)
+@@ -2042,7 +2528,7 @@ static void macb_hresp_error_task(struct work_struct *work)
  	netif_tx_stop_all_queues(dev);
  	netif_carrier_off(dev);
  
@@ -1106,7 +1147,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	/* Initialize TX and RX buffers */
  	macb_init_buffers(bp);
-@@ -2266,7 +2711,7 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2266,7 +2752,7 @@ static unsigned int macb_tx_map(struct macb *bp,
  {
  	dma_addr_t mapping;
  	unsigned int len, entry, i, tx_head = queue->tx_head;
@@ -1115,7 +1156,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	struct macb_dma_desc *desc;
  	unsigned int offset, size, count = 0;
  	unsigned int f, nr_frags = skb_shinfo(skb)->nr_frags;
-@@ -2292,7 +2737,7 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2292,7 +2778,7 @@ static unsigned int macb_tx_map(struct macb *bp,
  	offset = 0;
  	while (len) {
  		entry = macb_tx_ring_wrap(bp, tx_head);
@@ -1124,7 +1165,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  		mapping = dma_map_single(&bp->pdev->dev,
  					 skb->data + offset,
-@@ -2301,10 +2746,11 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2301,10 +2787,11 @@ static unsigned int macb_tx_map(struct macb *bp,
  			goto dma_error;
  
  		/* Save info to properly release resources */
@@ -1140,7 +1181,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  		len -= size;
  		offset += size;
-@@ -2323,7 +2769,7 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2323,7 +2810,7 @@ static unsigned int macb_tx_map(struct macb *bp,
  		while (len) {
  			size = min(len, bp->max_tx_length);
  			entry = macb_tx_ring_wrap(bp, tx_head);
@@ -1149,7 +1190,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  			mapping = skb_frag_dma_map(&bp->pdev->dev, frag,
  						   offset, size, DMA_TO_DEVICE);
-@@ -2331,10 +2777,11 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2331,10 +2818,11 @@ static unsigned int macb_tx_map(struct macb *bp,
  				goto dma_error;
  
  			/* Save info to properly release resources */
@@ -1165,7 +1206,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  			len -= size;
  			offset += size;
-@@ -2344,13 +2791,14 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2344,13 +2832,14 @@ static unsigned int macb_tx_map(struct macb *bp,
  	}
  
  	/* Should never happen */
@@ -1182,7 +1223,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	/* Update TX ring: update buffer descriptors in reverse order
  	 * to avoid race condition
-@@ -2383,10 +2831,10 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2383,10 +2872,10 @@ static unsigned int macb_tx_map(struct macb *bp,
  	do {
  		i--;
  		entry = macb_tx_ring_wrap(bp, i);
@@ -1195,7 +1236,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  		if (eof) {
  			ctrl |= MACB_BIT(TX_LAST);
  			eof = 0;
-@@ -2409,7 +2857,7 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2409,7 +2898,7 @@ static unsigned int macb_tx_map(struct macb *bp,
  			ctrl |= MACB_BF(MSS_MFS, mss_mfs);
  
  		/* Set TX buffer descriptor */
@@ -1204,7 +1245,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  		/* desc->addr must be visible to hardware before clearing
  		 * 'TX_USED' bit in desc->ctrl.
  		 */
-@@ -2425,9 +2873,9 @@ static unsigned int macb_tx_map(struct macb *bp,
+@@ -2425,9 +2914,9 @@ static unsigned int macb_tx_map(struct macb *bp,
  	netdev_err(bp->dev, "TX DMA map failed\n");
  
  	for (i = queue->tx_head; i != tx_head; i++) {
@@ -1216,7 +1257,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	}
  
  	return 0;
-@@ -2629,21 +3077,7 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
+@@ -2629,21 +3118,7 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
  	netdev_tx_sent_queue(netdev_get_tx_queue(bp->dev, queue_index),
  			     skb->len);
  
@@ -1239,7 +1280,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	if (CIRC_SPACE(queue->tx_head, queue->tx_tail, bp->tx_ring_size) < 1)
  		netif_stop_subqueue(dev, queue_index);
-@@ -2654,12 +3088,22 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
+@@ -2654,12 +3129,22 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
  	return ret;
  }
  
@@ -1264,7 +1305,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  		if (bp->rx_buffer_size % RX_BUFFER_MULTIPLE) {
  			netdev_dbg(bp->dev,
-@@ -2670,40 +3114,44 @@ static void macb_init_rx_buffer_size(struct macb *bp, size_t size)
+@@ -2670,40 +3155,44 @@ static void macb_init_rx_buffer_size(struct macb *bp, size_t size)
  		}
  	}
  
@@ -1326,7 +1367,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	}
  }
  
-@@ -2751,21 +3199,21 @@ static void macb_free_consistent(struct macb *bp)
+@@ -2751,21 +3240,21 @@ static void macb_free_consistent(struct macb *bp)
  	dma_free_coherent(dev, size, bp->queues[0].rx_ring, bp->queues[0].rx_ring_dma);
  
  	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
@@ -1353,7 +1394,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  		}
  
  		queue->tx_head = 0;
-@@ -2782,14 +3230,14 @@ static int gem_alloc_rx_buffers(struct macb *bp)
+@@ -2782,14 +3271,14 @@ static int gem_alloc_rx_buffers(struct macb *bp)
  	int size;
  
  	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
@@ -1373,7 +1414,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	}
  	return 0;
  }
-@@ -2848,14 +3296,11 @@ static int macb_alloc_consistent(struct macb *bp)
+@@ -2848,14 +3337,11 @@ static int macb_alloc_consistent(struct macb *bp)
  		queue->rx_ring = rx + macb_rx_ring_size_per_queue(bp) * q;
  		queue->rx_ring_dma = rx_dma + macb_rx_ring_size_per_queue(bp) * q;
  
@@ -1391,7 +1432,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	/* Required for tie off descriptor for PM cases */
  	if (!(bp->caps & MACB_CAPS_QUEUE_DISABLE)) {
  		bp->rx_ring_tieoff = dma_alloc_coherent(&bp->pdev->dev,
-@@ -2866,6 +3311,11 @@ static int macb_alloc_consistent(struct macb *bp)
+@@ -2866,6 +3352,11 @@ static int macb_alloc_consistent(struct macb *bp)
  			goto out_err;
  	}
  
@@ -1403,10 +1444,15 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	return 0;
  
  out_err:
-@@ -2873,6 +3323,65 @@ static int macb_alloc_consistent(struct macb *bp)
+@@ -2873,6 +3364,70 @@ static int macb_alloc_consistent(struct macb *bp)
  	return -ENOMEM;
  }
  
++/* page_pool은 RX page와 DMA mapping을 재사용하는 기반이다. XDP_TX는 수신한
++ * page를 송신에도 쓰므로 XDP 활성 시 DMA_BIDIRECTIONAL로 생성한다.
++ * 이어지는 RXQ/memory-model 등록은 XDP core에 "이 queue의 page는 이 pool로
++ * 반환한다"고 알려 준다. CPUMAP처럼 다른 CPU로 넘어가도 반환 경로가 유지된다.
++ */
 +static int gem_create_page_pool(struct macb_queue *queue, int qid)
 +{
 +	struct page_pool_params pp_params = {
@@ -1469,7 +1515,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  static void macb_init_tieoff(struct macb *bp)
  {
  	struct macb_dma_desc *desc = bp->rx_ring_tieoff;
-@@ -2886,19 +3395,22 @@ static void macb_init_tieoff(struct macb *bp)
+@@ -2886,19 +3441,22 @@ static void macb_init_tieoff(struct macb *bp)
  	desc->ctrl = 0;
  }
  
@@ -1495,7 +1541,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	int i;
  
  	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
-@@ -2911,13 +3423,31 @@ static void gem_init_rings(struct macb *bp)
+@@ -2911,13 +3469,31 @@ static void gem_init_rings(struct macb *bp)
  		queue->tx_head = 0;
  		queue->tx_tail = 0;
  
@@ -1529,7 +1575,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  {
  	int i;
  	struct macb_dma_desc *desc = NULL;
-@@ -2934,6 +3464,8 @@ static void macb_init_rings(struct macb *bp)
+@@ -2934,6 +3510,8 @@ static void macb_init_rings(struct macb *bp)
  	desc->ctrl |= MACB_BIT(TX_WRAP);
  
  	macb_init_tieoff(bp);
@@ -1538,7 +1584,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  }
  
  static void macb_reset_hw(struct macb *bp)
-@@ -3048,43 +3580,44 @@ static void macb_configure_dma(struct macb *bp)
+@@ -3048,43 +3626,44 @@ static void macb_configure_dma(struct macb *bp)
  	unsigned int q;
  	u32 dmacfg;
  
@@ -1582,13 +1628,13 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +		dmacfg &= ~GEM_BIT(ENDIA_DESC);
 +	else
 +		dmacfg |= GEM_BIT(ENDIA_DESC); /* CPU in big endian */
- 
--		dmacfg &= ~GEM_BIT(ADDR64);
++
 +	if (bp->dev->features & NETIF_F_HW_CSUM)
 +		dmacfg |= GEM_BIT(TXCOEN);
 +	else
 +		dmacfg &= ~GEM_BIT(TXCOEN);
-+
+ 
+-		dmacfg &= ~GEM_BIT(ADDR64);
 +	dmacfg &= ~GEM_BIT(ADDR64);
  #ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
 -		if (bp->hw_dma_cap & HW_DMA_CAP_64B)
@@ -1612,7 +1658,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  }
  
  static void gem_init_axi(struct macb *bp)
-@@ -3279,7 +3812,6 @@ static void macb_set_rx_mode(struct net_device *dev)
+@@ -3279,7 +3858,6 @@ static void macb_set_rx_mode(struct net_device *dev)
  
  static int macb_open(struct net_device *dev)
  {
@@ -1620,7 +1666,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	struct macb *bp = netdev_priv(dev);
  	struct macb_queue *queue;
  	unsigned int q;
-@@ -3292,7 +3824,7 @@ static int macb_open(struct net_device *dev)
+@@ -3292,7 +3870,7 @@ static int macb_open(struct net_device *dev)
  		return err;
  
  	/* RX buffers initialization */
@@ -1629,7 +1675,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	err = macb_alloc_consistent(bp);
  	if (err) {
-@@ -3301,7 +3833,6 @@ static int macb_open(struct net_device *dev)
+@@ -3301,7 +3879,6 @@ static int macb_open(struct net_device *dev)
  		goto pm_exit;
  	}
  
@@ -1637,7 +1683,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	macb_init_buffers(bp);
  
  	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
-@@ -3378,16 +3909,78 @@ static int macb_close(struct net_device *dev)
+@@ -3378,16 +3955,83 @@ static int macb_close(struct net_device *dev)
  	return 0;
  }
  
@@ -1678,6 +1724,11 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
 +	}
 +
 +	running = netif_running(dev);
++	/* XDP의 없음/있음이 바뀌면 headroom과 page_pool DMA 방향도 달라진다.
++	 * 실행 중인 장치는 close/open으로 RX 메모리를 다시 준비한다. 프로그램만
++	 * 교체할 때는 재시작하지 않는다. 이 재시작 때문에 userspace loader는
++	 * attach가 끝난 뒤 NIC의 HW timestamp filter를 적용해야 한다.
++	 */
 +	need_update = !!bp->prog != !!prog;
 +	if (running && need_update)
 +		macb_close(dev);
@@ -1716,7 +1767,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  static int macb_set_mac_addr(struct net_device *dev, void *addr)
  {
  	int err;
-@@ -4725,6 +5318,8 @@ static const struct net_device_ops macb_netdev_ops = {
+@@ -4725,6 +5369,8 @@ static const struct net_device_ops macb_netdev_ops = {
  	.ndo_hwtstamp_get	= macb_hwtstamp_get,
  	.ndo_setup_tc		= macb_setup_tc,
  	.ndo_tx_timeout		= macb_tx_timeout,
@@ -1725,7 +1776,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  };
  
  /* Configure peripheral capabilities according to device tree
-@@ -5244,8 +5839,9 @@ static netdev_tx_t at91ether_start_xmit(struct sk_buff *skb,
+@@ -5244,8 +5890,9 @@ static netdev_tx_t at91ether_start_xmit(struct sk_buff *skb,
  		netif_stop_queue(dev);
  
  		/* Store packet information (to free when Tx completed) */
@@ -1736,7 +1787,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  		lp->rm9200_txq[desc].mapping = dma_map_single(&lp->pdev->dev, skb->data,
  							      skb->len, DMA_TO_DEVICE);
  		if (dma_mapping_error(&lp->pdev->dev, lp->rm9200_txq[desc].mapping)) {
-@@ -5337,9 +5933,9 @@ static irqreturn_t at91ether_interrupt(int irq, void *dev_id)
+@@ -5337,9 +5984,9 @@ static irqreturn_t at91ether_interrupt(int irq, void *dev_id)
  			dev->stats.tx_errors++;
  
  		desc = 0;
@@ -1749,7 +1800,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  			dma_unmap_single(&lp->pdev->dev, lp->rm9200_txq[desc].mapping,
  					 lp->rm9200_txq[desc].size, DMA_TO_DEVICE);
  			dev->stats.tx_packets++;
-@@ -6016,6 +6612,17 @@ static int macb_probe(struct platform_device *pdev)
+@@ -6016,6 +6663,17 @@ static int macb_probe(struct platform_device *pdev)
  	if (err)
  		goto err_out_phy_exit;
  
@@ -1767,7 +1818,7 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  	netif_carrier_off(dev);
  
  	err = register_netdev(dev);
-@@ -6282,12 +6889,20 @@ static int __maybe_unused macb_resume(struct device *dev)
+@@ -6282,12 +6940,20 @@ static int __maybe_unused macb_resume(struct device *dev)
  	for (q = 0, queue = bp->queues; q < bp->num_queues;
  	     ++q, ++queue) {
  		if (!(bp->caps & MACB_CAPS_MACB_IS_EMAC)) {
@@ -1792,13 +1843,20 @@ index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..328a3771f0ffccc8aa0e5d3ad0d10d39
  		napi_enable(&queue->napi_tx);
  	}
 diff --git a/drivers/net/ethernet/cadence/macb_ptp.c b/drivers/net/ethernet/cadence/macb_ptp.c
-index f2b09100f710e926bbfae689ea0c836163502156..df5674d05ad0ec593002b552511616ac8666dbab 100644
+index f2b09100f710e926bbfae689ea0c836163502156..1223f621786725ebdb8d8bc27524eb8ba8b90afa 100644
 --- a/drivers/net/ethernet/cadence/macb_ptp.c
 +++ b/drivers/net/ethernet/cadence/macb_ptp.c
-@@ -271,25 +271,46 @@ static int gem_hw_timestamp(struct macb *bp, u32 dma_desc_ts_1,
+@@ -271,25 +271,53 @@ static int gem_hw_timestamp(struct macb *bp, u32 dma_desc_ts_1,
  	return 0;
  }
  
++/* SKB timestamp와 XDP metadata가 같은 RX descriptor 해석을 쓰도록 분리했다.
++ * SKB가 아직 없는 native XDP 지점에서도 호출할 수 있게 결과는 u64 ns로 준다.
++ * 이 값은 NIC PHC 시계의 수신 시간이며 CPU의 CLOCK_MONOTONIC 값이 아니다.
++ * gem_hw_timestamp()가 descriptor에 없는 초 상위 비트를 현재 TSU로 보완한다.
++ * 필터가 꺼졌거나 이 descriptor에 유효한 HW 값이 없으면 소프트웨어 시간을
++ * 대신 만들지 않고 오류를 반환한다. 측정 코드는 그 표본을 구분해 기록한다.
++ */
 +int gem_ptp_rxstamp_ns(struct macb *bp, struct macb_dma_desc *desc,
 +		       u64 *timestamp)
 +{
@@ -1853,7 +1911,7 @@ index f2b09100f710e926bbfae689ea0c836163502156..df5674d05ad0ec593002b552511616ac
  }
  
  void gem_ptp_txstamp(struct macb *bp, struct sk_buff *skb,
-@@ -465,4 +486,3 @@ int gem_set_hwtst(struct net_device *dev,
+@@ -465,4 +493,3 @@ int gem_set_hwtst(struct net_device *dev,
  
  	return 0;
  }

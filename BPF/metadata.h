@@ -19,7 +19,11 @@
 #define ACE_RX_META_VERSION       1U
 #define ACE_RX_META_SIZE          56U
 
-/* Host-endian key shared by ingress_records and cpumap_records. */
+/* Host-endian key shared by ingress_records and cpumap_records.
+ * flow_id는 송신 흐름을, sequence는 그 흐름 안의 패킷을 구분한다.
+ * reserved까지 포함한 16바이트 전체가 HASH key이므로 이 필드는 항상 0이다.
+ * run 간 구분은 map 재생성과 결과 디렉터리가 맡으며 wire/map에 run_id는 없다.
+ */
 struct ace_packet_key {
 	__u32 flow_id;
 	__u32 reserved;
@@ -44,6 +48,11 @@ enum ace_rx_meta_flags {
 /*
  * Private XDP metadata stored immediately before packet data.  Numeric fields
  * use native byte order because the producer and consumers run on one host.
+ *
+ * wire의 32바이트 실험 header와 이 56바이트 metadata를 혼동하지 않는다.
+ * 전자는 송신자/수신자가 약속한 통신 형식, 후자는 수신 장치 내부 전달 형식이다.
+ * hw_rx_ns는 PHC, initial_xdp_ns와 cpumap_ns는 monotonic clock의 ns 값이다.
+ * timestamp의 사용 가능 여부는 값이 0인지가 아니라 flags로 판단한다.
  */
 struct ace_rx_meta {
 	__u32 magic;
@@ -60,7 +69,10 @@ struct ace_rx_meta {
 	__s16 timestamp_error;
 };
 
-/* Stable values stored in the two measurement hash maps. */
+/* Stable values stored in the two measurement hash maps.
+ * 패킷 버퍼는 소비 후 재사용되므로 그 주소를 map에 저장하면 안 된다.
+ * 필요한 숫자 값만 복사한 record를 보관하고, loader가 종료 시 CSV로 내보낸다.
+ */
 struct ace_ingress_record {
 	__u32 flow_id;
 	__u32 rx_queue;

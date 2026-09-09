@@ -3,6 +3,30 @@
 초기 macb 포팅부터 현재 드라이버 변경 및 RT 커널 설정을 재현하는 패치는
 [포팅 패치 묶음과 적용 안내](patches/macb-xdp-20260910/README.md)에 있다.
 
+### 코드를 처음 읽을 때
+
+`드라이버 포팅한 그 모든것을 담아.md`는 초기 포팅의 배경과 당시 검증 기록이다.
+그 뒤 추가한 측정 기능은 아래 순서로 읽으면 된다. 코드의 한국어 주석은
+주로 처리 순서, 버퍼를 넘기는 이유, 각 timestamp가 의미하는 지점을 설명한다.
+
+1. [`include/ace_packet_abi.h`](include/ace_packet_abi.h),
+   [`BPF/metadata.h`](BPF/metadata.h): 송신되는 패킷 ID와 수신 장치 내부 metadata의 차이.
+2. [`BPF/xdp_kern.c`](BPF/xdp_kern.c): 최초 XDP 측정 → 포트별 분류 →
+   PASS/CPUMAP/AF_XDP 전달, 목적 CPU에서의 두 번째 관찰.
+3. [`BPF/xdp_loader.c`](BPF/xdp_loader.c): 실행 준비, map 공유, 장치 attach와
+   HW timestamp 설정 순서, 종료 후 CSV 저장.
+4. [`udp_socket/src/receiver.c`](udp_socket/src/receiver.c),
+   [`BPF/afxdp_recv.c`](BPF/afxdp_recv.c): socket과 UMEM 수신 방식,
+   사용자 수신 시각을 찍는 위치. 송신 주기는 `udp_socket/src/sender.c`에서 읽는다.
+5. [`udp_socket/src/phc_calibrate.c`](udp_socket/src/phc_calibrate.c) →
+   [`analysis/join_results.py`](analysis/join_results.py) →
+   [`analysis/aggregate_runs.py`](analysis/aggregate_runs.py): 시계 기준 맞추기,
+   같은 패킷의 기록 합치기, 반복 실험 결과 집계.
+
+드라이버 쪽 핵심은 `macb_main.c`의 `gem_xdp_run()`과 `gem_rx()`,
+`macb_ptp.c`의 `gem_ptp_rxstamp_ns()`다. 해당 한국어 설명 주석도
+패치 묶음에 들어 있으며, 적용한 커널 소스에서 직접 읽을 수 있다.
+
 ## 1. 프로젝트 개요
 
 본 프로젝트는 임베디드 Linux 환경에서 네트워크 패킷을 하나의 RX 경로로 수신한 뒤, XDP를 이용해 패킷의 특성에 따라 서로 다른 처리 경로로 분기하는 구조를 설계하고 성능을 분석한다.

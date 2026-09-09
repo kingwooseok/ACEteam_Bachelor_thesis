@@ -9,6 +9,13 @@
 // requested_path records the classifier decision.  It is not proof that a
 // redirect was delivered; consumers and redirect/error counters provide that
 // evidence separately.
+//
+// 읽는 순서: xdp_dispatch() -> parse_experiment_packet()
+//            -> prepare_measurement_metadata() -> dispatch_requested_path()
+// CPUMAP으로 보낸 패킷은 목적 CPU에서 xdp_cpumap_measure()를 한 번 더 탄다.
+// 첫 프로그램은 "NIC 수신 직후", 두 번째는 "CPU 이동 후"의 관찰 지점이다.
+// 두 시점의 기록을 같은 flow_id + sequence로 연결하므로, CPU가 바뀌어도
+// 나중에 분석할 때 어느 패킷의 지연인지 구분할 수 있다.
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
@@ -55,7 +62,15 @@ struct {
 	__type(value, __u64);
 } stats SEC(".maps");
 
-/* Default-preallocated HASH maps avoid allocation in the packet hot path. */
+/* Default-preallocated HASH maps avoid allocation in the packet hot path.
+ *
+ * 이 두 map은 전달 경로가 아니라 측정용 장부다. ingress_records는 최초 XDP,
+ * cpumap_records는 목적 CPU 도착을 기록한다. 서로 다른 flow가 sequence=0부터
+ * 시작해도 복합 key가 달라 충돌하지 않는다. 별도 run_id는 key에 넣지 않으며,
+ * 실험마다 새 map을 만들고 결과 디렉터리로 실행을 구분하는 것이 전제다.
+ * LRU처럼 오래된 기록을 자동 제거하지 않는다. 용량 초과 시 새 기록 실패를
+ * counter로 남기므로 loader의 --records는 한 실행의 예상 패킷 수에 맞춘다.
+ */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, ACE_XDP_RECORD_DEFAULT_ENTRIES);
@@ -210,6 +225,9 @@ static __always_inline void record_ingress(const struct ace_packet_key *key,
 	};
 	int err;
 
+	/* 같은 ID가 또 와도 첫 관찰값을 덮어쓰지 않는다. 중복 패킷 수는 따로
+	 * 세므로 "최초 수신 시간"과 "같은 ID가 여러 번 온 현상"을 구분한다.
+	 */
 	err = bpf_map_update_elem(&ingress_records, key, &record, BPF_NOEXIST);
 	if (!err)
 		count_stat(ACE_XDP_STAT_INGRESS_RECORDED);
@@ -219,6 +237,16 @@ static __always_inline void record_ingress(const struct ace_packet_key *key,
 		count_stat(ACE_XDP_STAT_INGRESS_UPDATE_ERROR);
 }
 
+/* wire header와 달리 이 metadata는 송신자가 보내는 데이터가 아니다.
+ * 수신 장치가 Ethernet header 앞의 headroom에 추가하는 내부 메모다.
+ *
+ *   [남은 headroom][ace_rx_meta][Ethernet][IPv4][UDP][실험 header][payload]
+ * data_meta는 메모의 시작, data는 Ethernet header의 시작을 가리킨다.
+ *
+ * 패킷 본문은 유지되고 CPUMAP/AF_XDP 소비자는 본문 앞의 메모를 이어받는다.
+ * 동시에 ingress map에도 복사해 두므로 일반 UDP 수신처럼 이 메모를 직접
+ * 읽지 않는 경로도 packet ID로 최초 XDP 기록과 연결할 수 있다.
+ */
 static __always_inline int prepare_measurement_metadata(struct xdp_md *ctx,
 							 const struct ace_packet_key *key,
 							 __u16 requested_path,
@@ -255,6 +283,11 @@ static __always_inline int prepare_measurement_metadata(struct xdp_md *ctx,
 	meta->rx_queue = ctx->rx_queue_index;
 	meta->requested_path = requested_path;
 
+	/* 포팅한 macb callback이 현재 RX descriptor의 timestamp를 읽는다.
+	 * hw_rx_ns는 NIC의 PHC 시계, initial_xdp_ns는 커널 monotonic 시계다.
+	 * 둘 다 ns여도 원점이 다르므로 여기서 빼지 않고 분석 단계에서 보정한다.
+	 * HW 값이 없으면 소프트웨어 시간으로 대체하지 않고 validity flag로 남긴다.
+	 */
 	ts_err = bpf_xdp_metadata_rx_timestamp(ctx, &hw_rx_ns);
 	if (!ts_err) {
 		meta->hw_rx_ns = hw_rx_ns;
@@ -270,6 +303,11 @@ static __always_inline int prepare_measurement_metadata(struct xdp_md *ctx,
 	return 0;
 }
 
+/* CPUMAP key는 목적 CPU 번호, XSKMAP key는 현재 NIC의 RX queue 번호다.
+ * 즉 같은 redirect helper를 쓰더라도 두 map이 가리키는 대상은 다르다.
+ * XDP_REDIRECT 반환은 전달 요청이 접수됐다는 뜻이지 최종 수신의 증거가 아니다.
+ * map entry가 없으면 helper의 마지막 인자(XDP_PASS)에 따라 일반 stack으로 간다.
+ */
 static __always_inline int dispatch_requested_path(struct xdp_md *ctx,
 							   __u16 requested_path)
 {
@@ -304,6 +342,9 @@ SEC("xdp")
 int xdp_dispatch(struct xdp_md *ctx)
 {
 	struct ace_packet_key packet_key = {};
+	/* 파싱/분류/기록 비용도 이후 관찰 시점까지의 구간에 포함시키기 위해
+	 * 프로그램 진입 초기에 찍는다. NIC hardware 수신 시각 그 자체는 아니다.
+	 */
 	__u64 initial_xdp_ns = bpf_ktime_get_ns();
 	__u16 requested_path = ACE_PATH_PASS;
 	int parsed;
@@ -321,6 +362,13 @@ int xdp_dispatch(struct xdp_md *ctx)
 	return XDP_PASS;
 }
 
+/* CPUMAP worker가 목적 CPU에서 실행하는 별도 XDP 프로그램이다.
+ * metadata 검사 뒤 찍는 cpumap_ns와 최초 XDP 시간의 차이는 CPU 전달/대기와
+ * 두 관찰 지점 사이의 처리 비용을 포함한다. 순수 scheduler latency는 아니다.
+ * 마지막 XDP_PASS는 원래 CPU로 되돌린다는 뜻이 아니라 이 CPU에서 이어서
+ * 일반 network stack으로 올린다는 뜻이다. 여기서는 HW kfunc를 다시 부르지
+ * 않고 최초 NIC RX 때 저장한 metadata를 사용한다.
+ */
 SEC("xdp/cpumap")
 int xdp_cpumap_measure(struct xdp_md *ctx)
 {

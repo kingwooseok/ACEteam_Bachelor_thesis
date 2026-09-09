@@ -11,7 +11,7 @@
  *  4. packet마다 flow ID, sequence와 CLOCK_REALTIME TX 시각을 기록함.
  *  5. sendto()로 고정 크기 UDP datagram을 전송함.
  *
- * CLOCK_REALTIME은 PTP로 동기화된 두 장비 사이의 OWD 계산에 사용하고,
+ * CLOCK_REALTIME은 별도로 PTP 동기화를 마친 두 장비 사이의 OWD 계산에 사용하고,
  * CLOCK_MONOTONIC은 시스템 시각 보정에 영향을 받지 않는 주기 제어에 사용함.
  * 측정 loop 안에서는 메모리 할당과 packet별 로그 출력을 수행하지 않음.
  */
@@ -298,7 +298,12 @@ int main(int argc, char **argv)
 		perror("socket");
 		return 1;
 	}
-	/* 실험 traffic은 MTU 1500의 단일 Ethernet frame으로 제한한다. */
+	/*
+	 * 실험 traffic은 MTU 1500의 단일 Ethernet frame으로 제한한다.
+	 * 크기 제한과 함께 IP fragmentation을 금지하여 한 UDP datagram을 여러
+	 * IP fragment로 나누지 않는다. 드라이버의 multi-descriptor DROP과는
+	 * 다른 계층의 조건이다. descriptor 개수는 NIC의 RX buffer 구성에 달렸다.
+	 */
 	if (setsockopt(socket_fd, IPPROTO_IP, IP_MTU_DISCOVER,
 		&pmtudisc, sizeof(pmtudisc))) {
 		perror("setsockopt(IP_MTU_DISCOVER)");
@@ -344,6 +349,12 @@ int main(int argc, char **argv)
 		ssize_t result;
 
 		if (seq != 0) {
+			/*
+			 * 직전 sendto() 완료 시각이 아니라 최초 기준 시각에 주기를 누적한다.
+			 * 따라서 header 작성·syscall 시간이 매 주기에 추가되어 밀리지 않는다.
+			 * 이미 deadline을 지난 경우 sleep은 즉시 끝난다. 이 코드는 주기
+			 * 기준을 유지할 뿐, 실제 NIC 송신 시각을 정밀하게 예약하는 것은 아니다.
+			 */
 			add_ns(&next_send, config.period_ns);
 			int sleep_result = sleep_until(&next_send);
 			if (sleep_result && sleep_result != EINTR) {
@@ -356,12 +367,22 @@ int main(int argc, char **argv)
 				break;
 		}
 
+		/*
+		 * TX 기준점은 user space에서 header를 만들기 직전이다. 이후 header
+		 * 복사, sendto(), 송신 stack/queue 지연도 user-to-user OWD에 포함된다.
+		 * NIC가 선로로 내보낸 HW TX timestamp와 혼동하지 않는다.
+		 */
 		tx_ns = realtime_ns();
 		if (tx_ns < 0) {
 			errors++;
 			break;
 		}
-		/* 서로 다른 byte order의 장비에서도 동일하게 해석하도록 network order 사용. */
+		/*
+		 * 모든 경로가 같은 32-byte wire ABI를 읽는다. flow_id는 실험 흐름을,
+		 * sequence는 그 흐름의 packet을 구별하며 둘을 함께 offline join에 쓴다.
+		 * sequence는 송신 시도마다 증가하므로 sendto 실패를 다음 packet ID로
+		 * 재사용하지 않는다. network order는 송·수신 CPU의 endian 차이를 없앤다.
+		 */
 		header.magic = htobe32(ACE_PACKET_MAGIC);
 		header.version = htobe16(ACE_PACKET_VERSION);
 		header.size = htobe16(sizeof(header));

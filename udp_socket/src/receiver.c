@@ -12,7 +12,9 @@
  *  5. run 종료 후 실제 record만 persistent samples.bin으로 복사하고 fsync함.
  *
  * 수신 hot path에는 disk I/O, 동적 메모리 할당, packet별 로그, mutex가 없음.
- * sequence number와 TX/RX 원시 시각만 저장하며 OWD 계산은 offline에서 수행함.
+ * packet ID와 TX/RX 원시 시각을 저장하며 OWD 계산은 offline에서 수행함.
+ * 일반 socket 경로의 user 도달 시점을 XDP/CPUMAP/AF_XDP의 기록과 비교하기 위한
+ * 수신기다. NIC 수신 시각과 recvmsg 반환 시각은 서로 다른 측정 지점이다.
  */
 
 #include <arpa/inet.h>
@@ -62,7 +64,7 @@ static volatile sig_atomic_t stop;
  * #### 종료 신호 처리
  *
  * signal handler는 플래그만 변경함. 이미 수신한 sample의 동기화와 최종 파일
- * 저장은 recv()가 EINTR로 반환된 뒤 main()의 정상 실행 경로에서 수행함.
+ * 저장은 recvmsg()가 EINTR로 반환된 뒤 main()의 정상 실행 경로에서 수행함.
  * ========================================================================= */
 
 /**
@@ -230,7 +232,7 @@ static int parse_arguments(int argc, char **argv, struct receiver_config *config
 /* =========================================================================
  * #### 시각 측정과 종료 후 결과 저장
  *
- * realtime_ns()는 recv() 직후에만 호출됨. save_records()의 write/fsync는
+ * realtime_ns()는 recvmsg() 직후에만 호출됨. save_records()의 write/fsync는
  * 수신 loop가 완전히 끝난 다음에만 실행되어 측정 경로에 storage I/O를 넣지 않음.
  * ========================================================================= */
 
@@ -281,6 +283,11 @@ static bool extract_hw_timestamp(const struct msghdr *message, int64_t *timestam
 		    control->cmsg_len < CMSG_LEN(sizeof(timestamps)))
 			continue;
 
+		/*
+		 * SCM_TIMESTAMPING의 ts[2]가 변환하지 않은 NIC PHC 시각이다.
+		 * ts[0]의 software timestamp로 대신 채우면 HW→user라는 측정 구간이
+		 * 달라진다. HW 값이 없을 때는 없다고 기록하고 offline에서 구분한다.
+		 */
 		memcpy(&timestamps, CMSG_DATA(control), sizeof(timestamps));
 		hardware = &timestamps.ts[2];
 		if (hardware->tv_sec < 0 || hardware->tv_nsec < 0 ||
@@ -317,15 +324,11 @@ static bool extract_rxq_overflow(const struct msghdr *message, uint32_t *drops)
 }
 
 /**
- * @brief interface의 기존 HWTSTAMP 설정을 저장하고 RX ALL을 요청함.
- * @note 기존 설정을 읽을 수 없으면 변경하지 않아 반드시 복원 가능하게 함.
- */
-/**
  * @brief mmap buffer의 유효 record를 persistent 결과 파일로 저장함.
  * @param fd 이미 O_EXCL로 생성한 결과 파일 descriptor.
  * @param records 저장할 첫 record 주소.
  * @param bytes 저장할 유효 byte 수.
- * @return write, fsync, close까지 성공하면 0, 실패하면 -1.
+ * @return write와 fsync가 성공하면 0, 실패하면 -1. close는 호출자가 수행함.
  * @note 이 함수는 수신 hot path가 종료된 뒤에만 호출함.
  */
 static int save_records(int fd, const struct sample_record *records, size_t bytes)
@@ -430,6 +433,12 @@ int main(int argc, char **argv)
 		perror("socket");
 		goto out;
 	}
+	/*
+	 * socket 옵션은 드라이버가 skb에 넣은 HW 시각을 ancillary data로 전달받는
+	 * 요청이다. NIC 자체의 timestamp 수집 설정은 아래 -I 처리와 별도다.
+	 * 포팅한 드라이버의 RX descriptor → skb HW timestamp → recvmsg control
+	 * message 전달 경로가 여기서 일반 socket 측정과 연결된다.
+	 */
 	if (setsockopt(socket_fd, SOL_SOCKET, SO_TIMESTAMPING,
 		&timestamping_flags, sizeof(timestamping_flags))) {
 		perror("setsockopt(SO_TIMESTAMPING)");
@@ -441,6 +450,7 @@ int main(int argc, char **argv)
 		goto out;
 	}
 	if (config.interface_name) {
+		/* 공통 helper가 기존 NIC 설정을 기억하고 RX ALL을 요청하며, 종료 시 복원한다. */
 		int timestamp_err = ace_hwtstamp_enable(socket_fd,
 			config.interface_name, &hwtstamp);
 
@@ -461,7 +471,12 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	/* 실험 전에 전체 run 크기의 덮어쓰기 없는 linear buffer를 tmpfs에 확보함. */
+	/*
+	 * tmpfs는 RAM 기반 staging 영역이고 mmap은 이 파일을 배열처럼 쓰게 한다.
+	 * 전체 run 크기를 미리 잡고 received 순서로 채우므로 ring처럼 과거 sample을
+	 * 덮어쓰지 않는다. sequence를 배열 index로 쓰지 않아 중간 packet이 빠져도
+	 * 빈 공간을 만들지 않으며, 실제 packet 식별은 record의 flow_id+seq로 한다.
+	 */
 	tmpfs_fd = open(config.tmpfs_path,
 		O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
 	if (tmpfs_fd < 0) {
@@ -528,7 +543,7 @@ int main(int argc, char **argv)
 		printf("HWTSTAMP interface: %s, effective RX filter: %d\n",
 			hwtstamp.interface_name, hwtstamp.effective.rx_filter);
 
-	/* 측정 구간: recvmsg 직후 시각을 얻고 record 대입과 index 증가만 수행함. */
+	/* 측정 구간: recvmsg 직후 시각을 얻고 header 확인과 메모리 기록을 수행함. */
 	while (received < config.expected_samples && !stop) {
 		union {
 			struct cmsghdr alignment;
@@ -559,6 +574,12 @@ int main(int argc, char **argv)
 			receive_errors++;
 			break;
 		}
+		/*
+		 * 먼저 MONOTONIC을 읽어 packet 파싱과 cmsg 해석 시간을 측정 끝점에서
+		 * 제외한다. 이 시각까지는 수신 stack, socket 대기열, task wakeup 지연이
+		 * 포함된다. 뒤의 REALTIME 읽기는 별도 끝점이므로 두 값이 동시 측정은 아니다.
+		 * MONOTONIC은 BPF의 bpf_ktime_get_ns() 기록과 같은 clock domain이다.
+		 */
 		user_rx_mono_ns = monotonic_ns();
 		if (user_rx_mono_ns < 0) {
 			receive_errors++;
@@ -596,6 +617,12 @@ int main(int argc, char **argv)
 		if (!hwts_valid)
 			missing_hwts++;
 
+		/*
+		 * wire 값만 host endian으로 풀고 clock은 원래 domain 그대로 보존한다.
+		 * hw_rx_ns를 user_rx_mono_ns에서 직접 빼면 서로 다른 시계의 offset이
+		 * 지연처럼 섞인다. PHC calibration으로 기준을 맞추는 일은 offline 몫이다.
+		 * user_rx_real_ns - tx_ns 역시 송·수신 장비의 REALTIME 동기화가 전제다.
+		 */
 		record.seq = be64toh(header.sequence);
 		record.tx_ns = (int64_t)be64toh(header.tx_realtime_ns);
 		record.user_rx_mono_ns = user_rx_mono_ns;
@@ -611,7 +638,11 @@ int main(int argc, char **argv)
 		received++;
 	}
 
-	/* 측정 종료 후에만 tmpfs 동기화와 persistent storage 저장을 수행함. */
+	/*
+	 * 측정이 끝난 뒤 유효 record만 디스크로 옮긴다. tmpfs의 msync만으로
+	 * 영구 저장되는 것은 아니며 save_records의 write/fsync가 그 역할을 맡는다.
+	 * 따라서 저장 장치의 지연이 packet별 RX timestamp에 끼어들지 않는다.
+	 */
 	result_bytes = (size_t)received * sizeof(*records);
 	if (result_bytes > 0 && msync(records, result_bytes, MS_SYNC)) {
 		perror("msync tmpfs records");

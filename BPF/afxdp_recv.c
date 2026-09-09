@@ -9,6 +9,11 @@
 // 실행 흐름:
 //   pin된 map 열기 → UMEM/FILL·RX ring 생성 → AF_XDP socket 생성
 //   → XSKMAP[queue_id] 등록 → RX polling
+//
+// 이 경로는 zero-copy가 아니라 XDP_COPY다. macb의 page_pool RX 버퍼에서
+// XDP를 실행한 뒤 커널이 metadata와 패킷을 사용자 UMEM으로 복사한다.
+// 따라서 측정하는 지연에는 이 복사와 사용자 프로세스가 깨어나는 시간이
+// 포함된다. 사용자 수신 기록은 메모리에 모았다가 종료 시 CSV로 저장한다.
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -78,6 +83,12 @@ static void on_signal(int signo)
 
 /* UMEM과 그에 연결된 FILL/COMPLETION ring. 수신만 하므로 completion은
  * 생성만 하고 사용하지 않는다(TX packet을 보낼 때 필요). */
+/* 수신용 UMEM frame의 순환:
+ *   사용자: 빈 frame 주소를 FILL에 제출
+ *   커널: 그 frame에 패킷을 복사하고 RX에 descriptor 게시
+ *   사용자: RX에서 주소를 받아 읽고 같은 frame 시작 주소를 FILL에 반환
+ * ring에는 패킷 본문이 아니라 UMEM 안의 위치가 들어 있다. RX slot을
+ * release하는 것과 frame을 FILL로 돌려주는 것은 서로 별개의 작업이다. */
 struct umem_info {
 	void *buffer;
 	struct xsk_umem *umem;
@@ -169,6 +180,9 @@ static int register_socket(struct xsk_info *xsk, int xsk_map_fd,
 {
 	int socket_fd = xsk_socket__fd(xsk->socket);
 
+	/* XSKMAP의 key는 UDP 포트/flow_id가 아니라 실제 NIC RX queue 번호다.
+	 * xdp_dispatch의 ctx->rx_queue_index와 이 queue_id가 같아야 이 socket으로
+	 * 전달된다. UDP/9002 분류는 그보다 앞선 BPF 단계에서 이미 끝난다. */
 	/* BPF_NOEXIST prevents a second receiver from silently replacing the
 	 * live owner of this queue. Closing the socket later removes only entries
 	 * that still point at this socket, so cleanup cannot delete another
@@ -279,6 +293,10 @@ static bool experiment_packet_id(const struct udp_packet_info *packet,
 	return true;
 }
 
+/* MONOTONIC은 같은 Pi의 bpf_ktime_get_ns()와 비교하는 사용자 도착 시각,
+ * REALTIME은 송신 기록 및 외부 clock 보정과 연결할 때 쓰는 시각이다.
+ * NIC의 PHC timestamp와 MONOTONIC은 기준 시계가 다르므로 단순히 빼지
+ * 않는다. PHC 보정 결과를 이용한 변환은 오프라인 분석기가 담당한다. */
 static int capture_user_timestamps(__u64 *monotonic, __s64 *realtime)
 {
 	struct timespec mono;
@@ -292,6 +310,11 @@ static int capture_user_timestamps(__u64 *monotonic, __s64 *realtime)
 	return 0;
 }
 
+/* xdp_dispatch가 data_meta에 쓴 ace_rx_meta는 Ethernet header 바로 앞에
+ * 붙어 온다. UDP payload의 실험 header와 달리 네트워크로 전송된 내용이
+ * 아니라 이 Pi의 XDP가 추가한 로컬 측정값이다. 따라서 packet_addr에서
+ * metadata 크기만큼 뒤로 가서 읽고 payload의 flow_id + sequence와 맞춘다.
+ * timestamp 유효성은 값이 0인지가 아니라 meta_flags로 판단한다. */
 static void read_xdp_metadata(const struct umem_info *umem, __u64 packet_addr,
 		__u32 flow_id, __u64 sequence,
 		struct ace_xsk_user_record *record)
@@ -410,6 +433,9 @@ static int validate_rx_descriptor(const struct xdp_desc *desc,
 	return 0;
 }
 
+/* 한 batch에서 주소 확인 → FILL 반환 자리 확보 → 패킷별 시각/기록 복사
+ * → RX slot 해제·FILL 제출까지 끝낸다. 기록은 별도 배열로 복사하므로
+ * frame을 커널에 돌려준 뒤에도 저장할 측정값은 계속 보존된다. */
 static int receive_batch(struct xsk_info *xsk, struct umem_info *umem,
 		__u32 queue_id, struct ace_xsk_user_record *records,
 		__u32 record_capacity, __u32 *record_count)
@@ -488,6 +514,10 @@ static int receive_batch(struct xsk_info *xsk, struct umem_info *umem,
 		__s64 user_rx_real_ns = 0;
 
 		received_packets++;
+		/* 논문에서의 사용자 수신 경계는 바로 여기다: batch 주소 확인과
+		 * FILL 예약 뒤, 개별 패킷의 header parsing/기록 복사 직전이다.
+		 * 배치의 뒤쪽 패킷에는 앞선 패킷 처리 시간도 포함되며, poll 반환
+		 * 시각이나 NIC 도착 시각 자체를 측정하는 것은 아니다. */
 		err = capture_user_timestamps(&user_rx_mono_ns,
 			&user_rx_real_ns);
 		if (err) {
@@ -1095,6 +1125,9 @@ int main(int argc, char **argv)
 		goto out;
 
 	records_size = (size_t)options.record_capacity * sizeof(*records);
+	/* 측정 루프에서 malloc/CSV 쓰기를 하지 않도록 저장 공간을 미리 잡는다.
+	 * 이어서 메모리를 잠그고 페이지를 실제로 접근해 두어 첫 접근 시 발생하는
+	 * page fault가 실험 도중 기록 지연으로 섞이는 것을 줄인다. */
 	records = calloc(options.record_capacity, sizeof(*records));
 	if (!records) {
 		err = -ENOMEM;
@@ -1129,9 +1162,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "AF_XDP socket setup failed: %s\n", strerror(-err));
 		goto out;
 	}
-	/* Claim the queue before the final runtime check.  The loader publishes
-	 * STOPPING before it scans claims: whichever side wins this ordering is
-	 * visible to the other before XSKMAP registration or XDP detach. */
+	/* xsk_owners는 패킷 기록이 아니라 "이 queue의 수신기가 살아 있다"는
+	 * 준비/종료 연락용 map이다. queue 사용을 먼저 표시하고 loader 상태를
+	 * 다시 확인한 뒤 실제 XSKMAP에 등록한다. loader는 STOPPING을 공개한
+	 * 뒤 이 표시를 확인하므로 수신기 준비 중의 XDP detach를 막을 수 있다. */
 	err = claim_xsk_queue(xsk_owner_fd, options.queue_id, &self_owner);
 	if (err) {
 		if (err == -EEXIST)
@@ -1239,6 +1273,8 @@ int main(int argc, char **argv)
 	print_receiver_stats(&umem);
 	print_xsk_stats(&xsk);
 	print_stats(stats_fd);
+	/* 수신을 멈춘 뒤 한 번만 파일로 내보낸다. 다른 경로의 CSV와는
+	 * 출력 행 번호가 아닌 flow_id + sequence로 연결해야 한다. */
 	if (output_fd >= 0) {
 		int save_err = save_user_records(output_fd, records, record_count);
 

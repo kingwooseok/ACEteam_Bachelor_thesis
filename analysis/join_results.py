@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence, TextIO, cast
 
 
+# 이 분석기는 한 번의 실험에서 흩어져 저장된 관측을 패킷별로 다시 연결한다.
+# ingress CSV -> NIC 쪽 최초 XDP, CPUMAP CSV -> 대상 CPU의 두 번째 XDP,
+# AF_XDP CSV / UDP binary -> 각 사용자 수신 프로그램의 관측이라는 대응이다.
+# 패킷에는 run_id를 싣지 않는다. manifest의 run 디렉터리가 실험 경계를 정하고,
+# 그 안에서만 (flow_id, sequence)가 동일한 패킷을 뜻한다.
+# 따라서 서로 다른 run의 sequence가 다시 0부터 시작해도 여기서 섞이지 않는다.
 Key = tuple[int, int]
 
 MANIFEST_VERSION = 1
@@ -130,6 +136,11 @@ class Calibration:
     ) -> CalibrationLookup:
         """Locate/interpolate the PHC-minus-MONOTONIC offset."""
 
+        # PHC와 MONOTONIC의 차이는 실행 중 조금씩 변할 수 있으므로,
+        # 관측 시각을 둘러싼 보정점 두 개 사이에서 offset을 선형 보간한다.
+        # 측정 범위 밖에는 두 보정점이 없으므로 기본값은 변환 불가(None)다.
+        # endpoint-clamp를 명시했을 때만 가장 가까운 끝점의 offset을 쓴다.
+        # 보간은 두 시계를 연결하는 추정이며 HW timestamp 자체를 다시 재는 일은 아니다.
         right = bisect.bisect_right(self.times, monotonic_ns)
         if right == 0:
             first = self.points[0]
@@ -295,6 +306,9 @@ def load_csv_table(path: Path, required_fields: set[str]) -> SourceTable:
 
 
 def load_udp_records(path: Path) -> SourceTable:
+    # receiver.c가 남긴 sample_record를 읽는다. wire packet의 32-byte header와
+    # 이 56-byte 측정 파일 형식은 서로 다르다. 전자는 송수신 공용 식별 정보이고,
+    # 후자는 수신기가 추가로 측정한 user/HW 시각까지 담은 로컬 기록이다.
     try:
         contents = path.read_bytes()
     except OSError as error:
@@ -403,6 +417,9 @@ def load_calibration_file(
                 raise InputError(
                     f"{path}: row {row_number}: inconsistent system span"
                 )
+            # 보정 도구는 MONOTONIC -> PHC -> MONOTONIC 순서로 시계를 읽는다.
+            # 두 MONOTONIC 시각의 중간을 PHC를 읽은 시각으로 근사하므로
+            # offset의 부호는 항상 PHC - MONOTONIC이다.
             midpoint = before + span // 2
             expected_offset = values["phc_ns"] - midpoint
             if values["offset_ns"] != expected_offset:
@@ -424,6 +441,9 @@ def load_calibration_file(
 def load_calibration(paths: Path | Sequence[Path]) -> Calibration:
     """Load and merge one or more calibration captures."""
 
+    # 실험 전/후 보정 파일을 함께 넣으면 하나의 시간축으로 연결된다.
+    # 각 iteration에서 보정 도구가 selected로 표시한 표본만 보간점으로 쓰며,
+    # 파일을 준 순서가 아니라 MONOTONIC 시각 순서로 정렬한다.
     path_list = [paths] if isinstance(paths, Path) else list(paths)
     if not path_list:
         raise InputError("at least one PHC calibration file is required")
@@ -565,6 +585,10 @@ def joined_row(
 ) -> dict[str, int | str | None]:
     """Build one processed row while retaining every source's raw values."""
 
+    # 한 행은 동일한 패킷의 관측 지점들을 모은 것이다. 모든 지점이 필수는 아니다.
+    # PASS에는 CPUMAP 기록이 없고, XSK 경로에는 일반 UDP 수신 기록이 없다.
+    # flags/path는 해당 timestamp가 어느 경로에서 생겼는지 판단하는 데 사용한다.
+    # 관측이 없는 지연 성분은 0으로 채우지 않고 None으로 남긴다.
     if afxdp is not None and udp is not None:
         user_source = "ambiguous"
         user = None
@@ -709,6 +733,9 @@ def joined_row(
     if ingress is None:
         raw_xdp_mono = positive_u64_value(afxdp, "initial_xdp_ns")
 
+    # AF_XDP metadata에는 최초 XDP 시각도 복사되어 있다. ingress map 기록이
+    # 없더라도 유효한 AF_XDP metadata가 있으면 그 시각을 이어 쓸 수 있다.
+    # initial_xdp_source를 함께 남겨 실제 사용한 기록 출처를 구분한다.
     initial_xdp: int | None = None
     initial_xdp_source = ""
     if ingress is not None and ingress_core_valid:
@@ -718,6 +745,9 @@ def joined_row(
         initial_xdp = positive_u64_value(afxdp, "initial_xdp_ns")
         initial_xdp_source = "afxdp"
 
+    # t_user는 수신 프로그램의 관측 경계다. UDP는 recvmsg 반환 직후,
+    # AF_XDP는 각 RX descriptor의 패킷을 파싱하기 직전에 시각을 읽는다.
+    # NIC 도착이나 업무 처리 완료 시각이 아니므로 지연 해석에서도 구분한다.
     cpumap_ns = positive_u64_value(cpumap, "cpumap_ns")
     user_mono = positive_value(user, "user_rx_mono_ns")
     xdp_lookup = (
@@ -757,6 +787,11 @@ def joined_row(
         elif ingress_hw_valid:
             user_hw = positive_value(ingress, "hw_rx_ns")
 
+    # HW RX는 PHC, XDP/CPUMAP/user_mono는 같은 Pi의 MONOTONIC 계열이다.
+    # 서로 다른 기준 시각끼리 바로 빼면 시계 offset이 지연에 섞여 들어간다.
+    # PHC -> MONOTONIC 변환은 hw - offset이므로 아래 계산은
+    # mono - (hw - offset) == mono + offset - hw로 표현한다.
+    # 송신자의 tx_realtime_ns는 원본으로 보존할 뿐 이 로컬 지연식에 넣지 않는다.
     xdp_offset = None if xdp_lookup is None else xdp_lookup.offset_ns
     user_offset = None if user_lookup is None else user_lookup.offset_ns
     xdp_hw_metric = (
@@ -766,6 +801,10 @@ def joined_row(
         and xdp_hw is not None
         else None
     )
+    # CPUMAP-XDP는 최초 분류 이후 대상 CPU의 CPUMAP 프로그램까지 걸린 시간이다.
+    # queue 대기와 CPU 간 전달이 포함되므로 CPUMAP 함수 실행 시간만 뜻하지 않는다.
+    # user-XDP는 최초 XDP부터 사용자 관측까지, user-CPUMAP은 두 번째 XDP부터
+    # 사용자 관측까지다. 이 세 성분은 같은 시계라 PHC 보정 없이 계산한다.
     cpumap_xdp_metric = (
         cpumap_ns - initial_xdp
         if cpumap_valid and cpumap_ns is not None and initial_xdp is not None
@@ -801,6 +840,9 @@ def joined_row(
     if requested_path is None:
         requested_path = cpumap_path
 
+    # 계산에 선택한 값과 별개로 각 source의 원시 timestamp도 모두 남긴다.
+    # 나중에 보정 방식이나 관측 출처를 확인할 때 joined CSV만으로 비교할 수 있다.
+    # present 열은 기록의 존재, metric 열의 빈칸은 그 지연 성분의 계산 불가를 뜻한다.
     row: dict[str, int | str | None] = {
         "flow_id": key[0],
         "sequence": key[1],
@@ -861,6 +903,9 @@ def percentile_nearest_rank(sorted_values: Sequence[int], percentile: int) -> in
 
 
 def summarize_metric(values: Sequence[int], joined_rows: int) -> dict[str, object]:
+    # 통계의 표본 수는 계산 가능한 관측 수다. missing을 0ns로 넣으면 분포가
+    # 실제보다 좋아 보이므로 개수만 따로 센다. 음수도 삭제하지 않고 표시한다.
+    # missing_count는 이 joined 집합에 대한 값이지 송신한 전체 패킷의 손실률은 아니다.
     ordered = sorted(values)
     result: dict[str, object] = {
         "unit": "ns",
@@ -1196,6 +1241,9 @@ def analyze(
         "afxdp": (afxdp, args.afxdp is not None),
         "udp": (udp, args.udp_native is not None),
     }
+    # inner join이면 중간 관측이 빠진 패킷까지 사라져 결과가 편향될 수 있다.
+    # 모든 source의 key 합집합을 사용해 한 지점에서만 보인 패킷도 한 행으로 남긴다.
+    # 어느 source에도 기록되지 않은 패킷 수는 이 파일들만으로 복원하지 못한다.
     keys: set[Key] = set()
     for table, _ in sources.values():
         keys.update(table.records)
@@ -1365,6 +1413,9 @@ def write_outputs(
             os.fsync(file.fileno())
 
         fsync_directories((csv_path, json_path))
+        # complete 표시는 CSV와 summary의 쓰기가 끝났다는 파일 단위 표시다.
+        # 모든 패킷이 모든 경로를 통과했다는 뜻은 아니며 누락 관측은 그대로 남는다.
+        # 반복 실험 집계는 이 표시를 입구로 삼아 완성된 분석 결과를 읽는다.
         completion = {
             "schema_version": COMPLETION_SCHEMA_VERSION,
             "completion_schema_version": COMPLETION_SCHEMA_VERSION,

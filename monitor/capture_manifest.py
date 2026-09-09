@@ -18,6 +18,10 @@ import sys
 from typing import Any
 
 
+# manifest는 한 run의 실험 노트다. 나중에 지연 수치만 남았을 때도
+# 어떤 소스/커널/설정으로 실행했는지 다시 연결할 수 있도록 기록한다.
+# 패킷마다 이 정보를 복사하지 않고 run 디렉터리에 한 번 저장한다.
+# 측정 시각을 만드는 도구는 아니며 PHC 보정은 별도의 phc_calibrate가 수행한다.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KERNEL_TREE = PROJECT_ROOT.parent / "rt-experiment" / "linux-6.18-rt"
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -191,6 +195,10 @@ def tree_sha256(root: Path, suffixes: tuple[str, ...]) -> dict[str, Any] | None:
 
 
 def git_repository(path: Path) -> tuple[dict[str, Any], bytes]:
+    # commit ID만 저장하면 실험 중 아직 commit하지 않은 수정은 재현되지 않는다.
+    # HEAD/branch/status와 함께 HEAD -> 현재 작업 파일의 patch를 저장한다.
+    # project와 kernel은 별도 저장소이므로 각각 같은 방식으로 기록한다.
+    # 이미 commit된 이력은 HEAD로, 이후 실험용 수정은 worktree patch로 식별한다.
     info: dict[str, Any] = {"path": str(path)}
     if not (path / ".git").exists():
         raise ProvenanceError(f"required source tree is not a git repository: {path}")
@@ -221,6 +229,9 @@ def git_repository(path: Path) -> tuple[dict[str, Any], bytes]:
         raise ProvenanceError(f"required git diff capture failed in {path}: {patch_result}")
     patches: list[bytes] = [patch_result.get("stdout", b"")]
 
+    # 새로 만든 header나 도구처럼 아직 Git이 추적하지 않는 파일도 실험 코드다.
+    # 일반 diff에는 빠지므로 별도 추가 patch와 hash를 함께 기록한다.
+    # patch 본문은 나중에 적용할 데이터이므로 문자열 정리 없이 bytes로 보존한다.
     # git diff omits untracked source.  Record both hashes and apply-able
     # no-index patches so a dirty experimental tree is still reconstructible.
     untracked_result = command_bytes(
@@ -262,6 +273,10 @@ def git_committed_series(
     path: Path, base_ref: str, expected_head: str | None = None
 ) -> tuple[dict[str, Any], bytes]:
     """Describe and export commits after the merge-base with base_ref."""
+    # macb 포팅은 Raspberry Pi kernel 기준 위에 쌓은 commit series다.
+    # base_ref라는 이동 가능한 이름만 두지 않고 실제 merge-base hash를 남긴다.
+    # 재구성 순서는 base -> committed series -> kernel worktree patch다.
+    # 따라서 초기 수동 포팅과 이후 timestamp/DROP 실험 수정의 출처가 함께 남는다.
     details: dict[str, Any] = {"requested_base_ref": base_ref}
     head = command(["git", "rev-parse", "HEAD"], path)
     if head.get("returncode") != 0 or not head.get("stdout"):
@@ -320,6 +335,10 @@ def git_committed_series(
 
 
 def boot_artifact_paths(kernel_tree: Path) -> list[Path]:
+    # 소스가 같아도 .config와 설치한 Image/modules가 다르면 실행 결과가 달라진다.
+    # 빌드 트리의 설정/이미지와 부팅 디렉터리의 이미지/DTB를 각각 식별한다.
+    # 이 목록과 hash는 존재하는 파일의 기록이며 설치나 재부팅을 수행하지 않는다.
+    # 실제 실행 중인 release/cmdline은 아래 manifest.system에 별도로 기록한다.
     paths = [
         kernel_tree / ".config",
         kernel_tree / "arch/arm64/boot/Image",
@@ -433,12 +452,18 @@ def main() -> int:
         if output_path.exists() or output_path.is_symlink():
             parser.error(f"refusing to overwrite {output_path}")
 
+    # run_id는 결과 폴더를 구분하는 이름이다. wire header나 BPF map의 key에는
+    # 넣지 않으며, join 단계가 이 폴더 안에서 flow_id + sequence를 연결한다.
+    # 반복 실행에서는 같은 패킷 번호를 써도 결과 디렉터리를 새로 만든다.
     run_id = args.run_id or output_dir.name
     if RUN_ID_PATTERN.fullmatch(run_id) is None:
         parser.error(
             "run_id must start with an ASCII alphanumeric and contain only "
             "ASCII alphanumerics, '.', '_', or '-' (maximum 128 characters)"
         )
+    # --set으로 주는 부하/실험 class 등의 조건도 수치와 함께 보존한다.
+    # 반복 집계에서는 이 parameters가 같은 run끼리 묶는다.
+    # 설정을 실제로 적용하는 역할은 controller/실행 명령에 있다.
     parameters: dict[str, str] = {}
     for key, value in args.set:
         if key in parameters:
@@ -472,6 +497,9 @@ def main() -> int:
             digest = sha256(candidate)
             if digest:
                 artifacts.append(digest)
+        # module/overlay처럼 여러 파일이 한 세트를 이루는 산출물은 디렉터리 단위
+        # digest도 남긴다. 파일별 내용과 상대 경로를 모아 세트의 상태를 식별한다.
+        # hash 자체는 파일 백업이 아니므로 재배포에는 대응하는 산출물이 필요하다.
         tree_hashes = []
         for root, suffixes in (
             (Path("/lib/modules") / os.uname().release,
@@ -506,6 +534,9 @@ def main() -> int:
     }.items():
         versions[name] = command(argv)
 
+    # 실행 환경, 사용자 지정 조건, 소스 이력, 빌드 산출물을 한 문서로 연결한다.
+    # 이 시점의 상태 기록이므로 실험 중 설정을 바꾸면 그 변경까지 자동 추적하지는 않는다.
+    # 논문의 반복 결과를 설명할 때 각 run의 manifest가 당시 조건의 근거가 된다.
     manifest = {
         "manifest_version": 1,
         "run_id": run_id,
@@ -557,6 +588,9 @@ def main() -> int:
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     ).encode()
 
+    # JSON이 가리키는 patch 파일들을 먼저 쓰고 manifest를 마지막에 저장한다.
+    # 결과 폴더만 옮겨도 기록과 해당 patch를 함께 찾을 수 있게 파일명으로 연결한다.
+    # 여기의 완료는 환경 기록의 완료이며 패킷 수신/분석 완료 표시는 별도다.
     created: list[Path] = []
     try:
         if project_patch:

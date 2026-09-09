@@ -49,13 +49,18 @@ index 5cf5ce69b4092f977b869932ad39099914f9fa86..5d6272f74ac9395e1f3851b8f3073ff7
  
  static inline bool macb_is_gem(struct macb *bp)
 diff --git a/drivers/net/ethernet/cadence/macb_main.c b/drivers/net/ethernet/cadence/macb_main.c
-index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39c1a2860e 100644
+index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..a1d4ca0e1aea6582b6303e3998fe9d3e3b7f89b8 100644
 --- a/drivers/net/ethernet/cadence/macb_main.c
 +++ b/drivers/net/ethernet/cadence/macb_main.c
-@@ -713,6 +713,32 @@ static void macb_tx_lpi_wake(struct macb *bp)
+@@ -713,6 +713,37 @@ static void macb_tx_lpi_wake(struct macb *bp)
  	udelay(50);
  }
  
++/* SKB 송신과 XDP 송신 모두 descriptor 작성 뒤 같은 하드웨어 시작 절차를 쓴다.
++ * descriptor를 메모리에 써 둔 것만으로 NIC가 전송을 시작하지는 않는다.
++ * TSTART가 그 시작 신호이며, RP1의 PCIe 경로에서는 뒤의 readback까지 해야
++ * 지연된 register write가 장치에 전달되었음을 확인할 수 있다.
++ */
 +static void macb_tx_kick(struct macb_queue *queue, bool wake_lpi,
 +			 bool arm_retry)
 +{
@@ -85,7 +90,19 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  static void macb_mac_disable_tx_lpi(struct phylink_config *config)
  {
  	struct net_device *ndev = to_net_dev(config->dev);
-@@ -1793,10 +1819,7 @@ static int macb_xdp_submit_frame(struct macb *bp, struct xdp_frame *xdpf,
+@@ -1712,6 +1743,11 @@ static void discard_partial_frame(struct macb_queue *queue, unsigned int begin,
+ 	 */
+ }
+ 
++/* XDP_TX와 ndo_xdp_xmit가 공유하는 송신 경로다.
++ * 이 NIC의 RX page를 되쏘는 XDP_TX는 기존 DMA mapping을 재사용하고,
++ * 외부에서 전달받은 ndo_xdp_xmit frame은 이 장치용 mapping을 새로 만든다.
++ * tx_buff의 type은 전송 완료 후 SKB/XDP frame별 반환 방법을 고르는 표식이다.
++ */
+ static int macb_xdp_submit_frame(struct macb *bp, struct xdp_frame *xdpf,
+ 				 struct net_device *dev, bool dma_map,
+ 				 dma_addr_t addr)
+@@ -1793,10 +1829,7 @@ static int macb_xdp_submit_frame(struct macb *bp, struct xdp_frame *xdpf,
  	/* Make newly initialized descriptor visible to hardware */
  	wmb();
  
@@ -97,10 +114,16 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	if (CIRC_SPACE(queue->tx_head, queue->tx_tail, bp->tx_ring_size) < 1)
  		netif_stop_subqueue(dev, queue_index);
-@@ -1833,16 +1856,39 @@ static int gem_xdp_xmit(struct net_device *dev, int num_frame,
+@@ -1833,16 +1866,45 @@ static int gem_xdp_xmit(struct net_device *dev, int num_frame,
  	return xmitted;
  }
  
++/* XDP가 실행 중인 "현재 패킷"과 RX descriptor를 연결하는 임시 wrapper다.
++ * xdp를 첫 멤버로 둬 callback에 전달된 XDP context 주소에서 wrapper를 찾는다.
++ * BPF가 descriptor 포인터를 직접 읽는 것은 아니며 metadata kfunc가 아래
++ * callback을 거쳐 ns 값만 받는다. 이 wrapper는 gem_xdp_run() 호출 중에만
++ * 유효하므로 다른 CPU로 전달하기 전에 BPF가 timestamp를 metadata에 복사한다.
++ */
 +struct macb_xdp_buff {
 +	struct xdp_buff xdp;
 +	struct macb *bp;
@@ -139,19 +162,29 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	rcu_read_lock();
  
-@@ -1850,25 +1896,26 @@ static u32 gem_xdp_run(struct macb_queue *queue, void *buff_head,
+@@ -1850,25 +1912,36 @@ static u32 gem_xdp_run(struct macb_queue *queue, void *buff_head,
  	if (!prog)
  		goto out;
  
 -	xdp_init_buff(&xdp, gem_total_rx_buffer_size(queue->bp), &queue->xdp_rxq);
 -	xdp_prepare_buff(&xdp, buff_head, *headroom, *len, false);
 -	xdp_buff_clear_frags_flag(&xdp);
++	/* page_pool의 RX 메모리를 SKB로 만들기 전에 XDP에 보여 준다.
++	 * prepare_buff의 마지막 true는 data_meta 사용을 허용한다는 뜻이다.
++	 * BPF는 headroom 안에 metadata를 넣을 수 있고, PASS 때는 변경된
++	 * data/headroom/metasize를 호출자에게 돌려줘 SKB에도 같은 배치를 유지한다.
++	 */
 +	xdp_init_buff(xdp, gem_total_rx_buffer_size(queue->bp), &queue->xdp_rxq);
 +	xdp_prepare_buff(xdp, buff_head, *headroom, *len, true);
 +	xdp_buff_clear_frags_flag(xdp);
  	dev = queue->bp->dev;
  
 -	act = bpf_prog_run_xdp(prog, &xdp);
++	/* 판정은 버퍼의 다음 소유자도 결정한다.
++	 * PASS: gem_rx가 SKB로 감싸 stack에 전달.
++	 * REDIRECT/TX 성공: 해당 경로가 이어받으므로 여기서 page를 반환하지 않음.
++	 * DROP/실패: 아래 page_pool_put_full_page로 이 RX page를 반환.
++	 */
 +	act = bpf_prog_run_xdp(prog, xdp);
  	switch (act) {
  	case XDP_PASS:
@@ -174,7 +207,7 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  		if (unlikely(!xdpf) || macb_xdp_submit_frame(queue->bp, xdpf,
  							     dev, false, addr)) {
  			act = XDP_DROP;
-@@ -1886,7 +1933,7 @@ static u32 gem_xdp_run(struct macb_queue *queue, void *buff_head,
+@@ -1886,7 +1959,7 @@ static u32 gem_xdp_run(struct macb_queue *queue, void *buff_head,
  	}
  
  	page_pool_put_full_page(queue->page_pool,
@@ -183,7 +216,7 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  out:
  	rcu_read_unlock();
  
-@@ -1901,6 +1948,7 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+@@ -1901,6 +1974,7 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
  	struct macb_dma_desc *desc;
  	bool xdp_flush = false;
  	unsigned int headroom;
@@ -191,7 +224,7 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  	unsigned int entry;
  	struct page *page;
  	void *buff_head;
-@@ -1947,6 +1995,41 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+@@ -1947,6 +2021,48 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
  		first_frame = ctrl & MACB_BIT(RX_SOF);
  		last_frame = ctrl & MACB_BIT(RX_EOF);
  
@@ -202,7 +235,14 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
 +		if (unlikely(queue->xdp_rx_drop_multidesc && first_frame))
 +			queue->xdp_rx_drop_multidesc = false;
 +
-+		/* Native XDP currently supports only a frame contained in one
++		/* 여기서 frame은 Ethernet frame, descriptor는 NIC의 RX buffer 항목이다.
++		 * SOF와 EOF가 같은 항목에 있어야 한 buffer에 완성된 패킷이 들어 있다.
++		 * 여러 항목에 나뉜 frame은 이 실험의 XDP 처리 범위 밖이므로 전체를
++		 * 버린다. IPv4 fragmentation과는 별개의 드라이버 메모리 배치 문제다.
++		 * queue의 상태를 유지하며 EOF까지 회수하고 drop counter는 frame을
++		 * 버리기 시작할 때만 증가시킨다. XDP가 꺼져 있으면 기존 조립 경로다.
++		 *
++		 * Native XDP currently supports only a frame contained in one
 +		 * descriptor.  Fail closed instead of letting a fragmented frame
 +		 * bypass the attached program.  Keep draining across NAPI polls
 +		 * until the descriptor carrying EOF is returned to the page pool.
@@ -233,7 +273,7 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  		data_len = gem_rx_data_len(bp, queue, ctrl, first_frame,
  					   last_frame);
  		if (data_len < 0)
-@@ -1967,10 +2050,12 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+@@ -1967,10 +2083,12 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
  			}
  
  			headroom = bp->rx_headroom;
@@ -247,7 +287,19 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  				if (ret == XDP_REDIRECT)
  					xdp_flush = true;
  
-@@ -1989,6 +2074,8 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+@@ -1978,6 +2096,11 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 					goto next_frame;
+ 			}
+ 
++			/* PASS라고 해서 packet payload를 새 버퍼로 복사하지 않는다.
++			 * RX page를 SKB로 감싸고 recycle 표시를 붙여 stack의 사용이 끝나면
++			 * page_pool로 돌아가게 한다. metadata_set은 본문 앞에 남겨 둔
++			 * metadata의 길이를 기록하며 일반 UDP payload에 붙이는 동작은 아니다.
++			 */
+ 			queue->skb = napi_build_skb(buff_head, gem_total_rx_buffer_size(bp));
+ 			if (unlikely(!queue->skb)) {
+ 				if (net_ratelimit())
+@@ -1989,6 +2112,8 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
  			skb_reserve(queue->skb, headroom);
  			skb_mark_for_recycle(queue->skb);
  			skb_put(queue->skb, data_len);
@@ -256,7 +308,17 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  		} else {
  			shinfo = skb_shinfo(queue->skb);
  			page = virt_to_head_page(buff_head);
-@@ -2314,16 +2401,7 @@ static void macb_tx_restart(struct macb_queue *queue)
+@@ -2051,6 +2176,9 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 		queue->rx_buff[entry] = NULL;
+ 	}
+ 
++	/* redirect는 위에서 패킷별로 요청하고 이 NAPI poll 끝에서 묶어 넘긴다.
++	 * 따라서 XDP_REDIRECT를 반환한 시점과 목적 경로가 실제 소비한 시점은 다르다.
++	 */
+ 	if (xdp_flush)
+ 		xdp_do_flush();
+ 
+@@ -2314,16 +2442,7 @@ static void macb_tx_restart(struct macb_queue *queue)
  	if (tbqp == head_idx)
  		goto out_tx_ptr_unlock;
  
@@ -274,7 +336,7 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  out_tx_ptr_unlock:
  	spin_unlock_irqrestore(&queue->tx_ptr_lock, flags);
-@@ -2999,21 +3077,7 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
+@@ -2999,21 +3118,7 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
  	netdev_tx_sent_queue(netdev_get_tx_queue(bp->dev, queue_index),
  			     skb->len);
  
@@ -297,7 +359,19 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	if (CIRC_SPACE(queue->tx_head, queue->tx_tail, bp->tx_ring_size) < 1)
  		netif_stop_subqueue(dev, queue_index);
-@@ -3335,6 +3399,7 @@ static int gem_init_rx_ring(struct macb_queue *queue)
+@@ -3259,6 +3364,11 @@ static int macb_alloc_consistent(struct macb *bp)
+ 	return -ENOMEM;
+ }
+ 
++/* page_pool은 RX page와 DMA mapping을 재사용하는 기반이다. XDP_TX는 수신한
++ * page를 송신에도 쓰므로 XDP 활성 시 DMA_BIDIRECTIONAL로 생성한다.
++ * 이어지는 RXQ/memory-model 등록은 XDP core에 "이 queue의 page는 이 pool로
++ * 반환한다"고 알려 준다. CPUMAP처럼 다른 CPU로 넘어가도 반환 경로가 유지된다.
++ */
+ static int gem_create_page_pool(struct macb_queue *queue, int qid)
+ {
+ 	struct page_pool_params pp_params = {
+@@ -3335,6 +3445,7 @@ static int gem_init_rx_ring(struct macb_queue *queue)
  {
  	queue->rx_tail = 0;
  	queue->rx_prepared_head = 0;
@@ -305,7 +379,19 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	return gem_rx_refill(queue, false);
  }
-@@ -6553,6 +6618,9 @@ static int macb_probe(struct platform_device *pdev)
+@@ -3881,6 +3992,11 @@ static int gem_xdp_setup(struct net_device *dev, struct bpf_prog *prog,
+ 	}
+ 
+ 	running = netif_running(dev);
++	/* XDP의 없음/있음이 바뀌면 headroom과 page_pool DMA 방향도 달라진다.
++	 * 실행 중인 장치는 close/open으로 RX 메모리를 다시 준비한다. 프로그램만
++	 * 교체할 때는 재시작하지 않는다. 이 재시작 때문에 userspace loader는
++	 * attach가 끝난 뒤 NIC의 HW timestamp filter를 적용해야 한다.
++	 */
+ 	need_update = !!bp->prog != !!prog;
+ 	if (running && need_update)
+ 		macb_close(dev);
+@@ -6553,6 +6669,9 @@ static int macb_probe(struct platform_device *pdev)
  		dev->xdp_features = NETDEV_XDP_ACT_BASIC |
  				    NETDEV_XDP_ACT_REDIRECT |
  				    NETDEV_XDP_ACT_NDO_XMIT;
@@ -316,13 +402,20 @@ index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39
  
  	netif_carrier_off(dev);
 diff --git a/drivers/net/ethernet/cadence/macb_ptp.c b/drivers/net/ethernet/cadence/macb_ptp.c
-index f2b09100f710e926bbfae689ea0c836163502156..df5674d05ad0ec593002b552511616ac8666dbab 100644
+index f2b09100f710e926bbfae689ea0c836163502156..1223f621786725ebdb8d8bc27524eb8ba8b90afa 100644
 --- a/drivers/net/ethernet/cadence/macb_ptp.c
 +++ b/drivers/net/ethernet/cadence/macb_ptp.c
-@@ -271,25 +271,46 @@ static int gem_hw_timestamp(struct macb *bp, u32 dma_desc_ts_1,
+@@ -271,25 +271,53 @@ static int gem_hw_timestamp(struct macb *bp, u32 dma_desc_ts_1,
  	return 0;
  }
  
++/* SKB timestamp와 XDP metadata가 같은 RX descriptor 해석을 쓰도록 분리했다.
++ * SKB가 아직 없는 native XDP 지점에서도 호출할 수 있게 결과는 u64 ns로 준다.
++ * 이 값은 NIC PHC 시계의 수신 시간이며 CPU의 CLOCK_MONOTONIC 값이 아니다.
++ * gem_hw_timestamp()가 descriptor에 없는 초 상위 비트를 현재 TSU로 보완한다.
++ * 필터가 꺼졌거나 이 descriptor에 유효한 HW 값이 없으면 소프트웨어 시간을
++ * 대신 만들지 않고 오류를 반환한다. 측정 코드는 그 표본을 구분해 기록한다.
++ */
 +int gem_ptp_rxstamp_ns(struct macb *bp, struct macb_dma_desc *desc,
 +		       u64 *timestamp)
 +{
@@ -377,7 +470,7 @@ index f2b09100f710e926bbfae689ea0c836163502156..df5674d05ad0ec593002b552511616ac
  }
  
  void gem_ptp_txstamp(struct macb *bp, struct sk_buff *skb,
-@@ -465,4 +486,3 @@ int gem_set_hwtst(struct net_device *dev,
+@@ -465,4 +493,3 @@ int gem_set_hwtst(struct net_device *dev,
  
  	return 0;
  }

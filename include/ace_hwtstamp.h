@@ -10,7 +10,15 @@
 #include <string.h>
 #include <sys/ioctl.h>
 
-/* State needed to restore a netdevice-wide timestamp configuration. */
+/* State needed to restore a netdevice-wide timestamp configuration.
+ *
+ * SO_TIMESTAMPING은 "이 소켓으로 timestamp를 받고 싶다"는 요청이고,
+ * SIOCSHWTSTAMP는 "NIC가 어떤 패킷에 HW timestamp를 찍을지" 정하는 설정이다.
+ * 둘은 별개라 소켓 옵션만 켜서는 NIC timestamp가 생기지 않는다.
+ * NIC 설정은 소켓 하나가 아니라 interface 전체에 적용되므로 이전 값을
+ * saved에 보관한다. effective는 ioctl 뒤 드라이버가 실제 채택한 값이다.
+ * XDP attach/detach가 MAC을 재시작할 수 있어 적용/복원 순서도 중요하다.
+ */
 struct ace_hwtstamp_state {
 	struct hwtstamp_config saved;
 	struct hwtstamp_config effective;

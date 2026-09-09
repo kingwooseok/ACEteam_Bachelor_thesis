@@ -1,0 +1,3 @@
+# Unified diff의 context 표시 공백은 패치 문법이므로 그대로 보존한다.
+# 실제 C/Python 소스에 대한 whitespace 검사는 기존대로 유지한다.
+patches/**/*.patch -whitespace
