@@ -1,4 +1,4 @@
-# Deterministic Packet Processing Architecture for Mixed-Criticality Traffic on Embedded Linux with PREEMPT_RT
+# Deterministic Mixed-Criticality Packet Processing on Embedded PREEMPT_RT Linux with Driver-Level BPF
 
 초기 macb 포팅부터 현재 드라이버 변경 및 RT 커널 설정을 재현하는 패치는
 [포팅 패치 묶음과 적용 안내](patches/macb-xdp-20260910/README.md)에 있다.
