@@ -15,7 +15,8 @@ enum {
 	ACE_DEFAULT_PAYLOAD_SIZE = 64,
 	ACE_DEFAULT_PERIOD_NS = 1000000,
 	ACE_DEFAULT_SAMPLE_COUNT = 200000,
-	ACE_MAX_UDP_PAYLOAD = 65507,
+	/* IPv4 MTU 1500 - IPv4 header 20 - UDP header 8. */
+	ACE_MAX_UDP_PAYLOAD = 1472,
 };
 
 /* 문자열 기본값은 sender/receiver가 직접 참조하는 단일 정의로 유지함. */

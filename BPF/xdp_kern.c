@@ -1,59 +1,53 @@
 // SPDX-License-Identifier: GPL-2.0
 //
-// xdp_kern.c — XDP 패킷 분류기 (커널에서 실행되는 BPF 프로그램)
+// Native XDP classifier and per-packet measurement instrumentation.
 //
-// XDP hook에서 IPv4/UDP 패킷을 확인하고 destination port에 따라 경로를
-// 선택한다. 현재 포트 규칙은 packet-path 검증을 위한 임시 정책이다.
+//   UDP/9000 -> requested PASS path
+//   UDP/9001 -> requested CPUMAP path (CPU 3)
+//   UDP/9002 -> requested XSK path (current receiver uses XDP_COPY)
 //
-//   UDP 9001 → CPUMAP[3] → RT CPU
-//   UDP 9002 → XSKMAP[RX queue] → AF_XDP userspace
-//   그 외    → XDP_PASS → 일반 Linux 네트워크 스택
+// requested_path records the classifier decision.  It is not proof that a
+// redirect was delivered; consumers and redirect/error counters provide that
+// evidence separately.
 
-#include "vmlinux.h"            /* 현재 커널 BTF에서 bpftool로 생성한 타입 정의 */
-#include <bpf/bpf_helpers.h>    /* SEC(), map helper 등 BPF 공용 매크로 */
-#include <bpf/bpf_endian.h>     /* bpf_htons() 등 바이트 순서 변환 helper */
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
 #include "config.h"
+#include "metadata.h"
 
-/* ===== 분류 정책 ===== */
+#define ETH_P_IP                0x0800
+#define ACE_IPV4_FRAGMENT_MASK  0x3fff /* MF plus fragment offset; DF excluded */
+#define ACE_EEXIST              17
 
-#define ETH_P_IP   0x0800       /* IPv4 EtherType; 비교할 때 bpf_htons() 사용 */
+extern int bpf_xdp_metadata_rx_timestamp(const struct xdp_md *ctx,
+					 __u64 *timestamp) __ksym;
 
-/* ===== BPF map ===== */
-
-/*
- * CPUMAP: 패킷을 지정 CPU의 CPUMAP processing path로 보낸다.
- *
- * key는 CPU 번호, value는 해당 CPU의 CPUMAP queue size다. 엔트리는
- * userspace loader가 등록한다. CPUMAP은 NIC RX queue를 직접 polling하지
- * 않으며, redirect된 frame을 지정 CPU의 후속 처리 경로로 전달한다.
- */
+/* CPUMAP entry also carries the destination-CPU XDP program FD. */
 struct {
 	__uint(type, BPF_MAP_TYPE_CPUMAP);
 	__uint(max_entries, ACE_XDP_CPU_MAP_MAX_ENTRIES);
-	__type(key, __u32);         /* CPU 번호 */
-	__type(value, __u32);       /* CPUMAP queue size */
+	__type(key, __u32);
+	__type(value, struct bpf_cpumap_val);
 } cpu_map SEC(".maps");
 
-/*
- * XSKMAP: RX queue와 AF_XDP socket을 연결한다.
- *
- * XSKMAP은 packet data를 저장하지 않는다. key는 RX queue index이며,
- * userspace가 해당 key에 AF_XDP socket FD를 등록해야 redirect가 성공한다.
- * 등록된 socket이 없으면 프로그램은 XDP_PASS로 fallback한다.
- */
 struct {
 	__uint(type, BPF_MAP_TYPE_XSKMAP);
 	__uint(max_entries, ACE_XDP_XSK_MAP_MAX_ENTRIES);
-	__type(key, __u32);         /* RX queue index */
-	__type(value, __u32);       /* userspace가 등록하는 AF_XDP socket FD */
+	__type(key, __u32);
+	__type(value, __u32);
 } xsk_map SEC(".maps");
 
-/*
- * Per-CPU 통계 배열
- *
- * CPU별로 counter를 따로 유지하므로 BPF 측에서 lock이 필요 없다.
- * userspace는 모든 CPU의 값을 합산해 전체 통계를 계산한다.
- */
+/* Userspace-only XSK queue claims make receiver setup and loader teardown
+ * mutually observable.  XSKMAP itself cannot report occupancy by lookup. */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, ACE_XDP_XSK_MAP_MAX_ENTRIES);
+	__type(key, __u32);
+	__type(value, struct ace_xsk_owner);
+} xsk_owners SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, ACE_XDP_STAT_COUNT);
@@ -61,101 +55,314 @@ struct {
 	__type(value, __u64);
 } stats SEC(".maps");
 
-/* ===== 통계 helper ===== */
+/* Default-preallocated HASH maps avoid allocation in the packet hot path. */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, ACE_XDP_RECORD_DEFAULT_ENTRIES);
+	__type(key, struct ace_packet_key);
+	__type(value, struct ace_ingress_record);
+} ingress_records SEC(".maps");
 
-/*
- * map에서 현재 CPU의 counter를 찾고 1 증가시킨다. lookup 결과는 NULL일
- * 수 있으므로, verifier가 요구하는 NULL 검사를 거친 뒤 값을 변경한다.
- */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, ACE_XDP_RECORD_DEFAULT_ENTRIES);
+	__type(key, struct ace_packet_key);
+	__type(value, struct ace_cpumap_record);
+} cpumap_records SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct ace_runtime_config);
+} runtime_config SEC(".maps");
+
 static __always_inline void count_stat(__u32 id)
 {
 	__u64 *value = bpf_map_lookup_elem(&stats, &id);
+
 	if (value)
 		(*value)++;
 }
 
-/* ===== XDP entry point ===== */
-
 /*
- * NIC에서 packet이 들어올 때마다 호출되는 분류 함수다. SEC("xdp")가
- * XDP program임을 지정한다.
- *
- * 반환값은 XDP_PASS 또는 bpf_redirect_map()이 반환한 XDP_REDIRECT다.
+ * Parse only the fixed experiment envelope.  Return 1 for a valid experiment
+ * packet, 0 for unrelated traffic, and -1 for an experiment port carrying an
+ * invalid/missing experiment header.  IPv4 fragments are deliberately passed
+ * without L4 classification, so non-initial fragments cannot be mistaken for
+ * UDP headers.
  */
-SEC("xdp")
-int xdp_dispatch(struct xdp_md *ctx)
+static __always_inline int parse_experiment_packet(struct xdp_md *ctx,
+						   struct ace_packet_key *key,
+						   __u16 *requested_path)
 {
-	/* 1. 패킷 범위: 이후 모든 헤더 접근은 data_end 검사 후 수행한다. */
-	void *data     = (void *)(long)ctx->data;
+	void *data = (void *)(long)ctx->data;
 	void *data_end = (void *)(long)ctx->data_end;
-
-	/* 2. Ethernet: IPv4 packet만 다음 단계로 보낸다. */
+	struct ace_experiment_header wire = {};
 	struct ethhdr *eth = data;
-	__u32 key;
+	struct iphdr *iph;
+	struct udphdr *udp;
+	void *ip_end;
+	void *udp_end;
+	void *payload;
+	__u32 ihl_len;
+	__u32 ip_len;
+	__u32 udp_len;
+	__u16 frag_off;
+	__u16 dest;
 
-	/* 경로를 선택하기 전에 전체 수신 수를 먼저 기록한다. */
-	count_stat(ACE_XDP_STAT_TOTAL);
-
-	/* Ethernet header가 packet 범위 안에 있는지 확인한다. */
 	if ((void *)(eth + 1) > data_end)
-		goto pass;
-
-	/* IPv4가 아니면 이 분류기의 대상이 아니다. */
+		return 0;
 	if (eth->h_proto != bpf_htons(ETH_P_IP))
-		goto pass;
+		return 0;
 
-	/* 3. IPv4: 최소 header와 UDP 여부를 확인한다. */
-	struct iphdr *iph = (void *)(eth + 1);
+	iph = (void *)(eth + 1);
+	if ((void *)(iph + 1) > data_end) {
+		count_stat(ACE_XDP_STAT_IPV4_INVALID);
+		return 0;
+	}
+	if (iph->version != 4 || iph->ihl < 5) {
+		count_stat(ACE_XDP_STAT_IPV4_INVALID);
+		return 0;
+	}
 
-	/* header 범위, 최소 IHL(5 = 20 bytes), UDP protocol을 확인한다. */
-	if ((void *)(iph + 1) > data_end || iph->ihl < 5 || iph->protocol != IPPROTO_UDP)
-		goto pass;
+	ihl_len = (__u32)iph->ihl * 4;
+	ip_len = (__u32)bpf_ntohs(iph->tot_len);
+	if (ip_len < ihl_len || (void *)iph + ihl_len > data_end ||
+	    (void *)iph + ip_len > data_end) {
+		count_stat(ACE_XDP_STAT_IPV4_INVALID);
+		return 0;
+	}
+	ip_end = (void *)iph + ip_len;
 
-	/* IP option을 고려해 고정 20 bytes가 아닌 IHL 기반 길이를 사용한다. */
-	__u32 ihl_len = (__u32)iph->ihl * 4;
-	if ((void *)iph + ihl_len > data_end)
-		goto pass;
+	frag_off = bpf_ntohs(iph->frag_off);
+	if (frag_off & ACE_IPV4_FRAGMENT_MASK) {
+		count_stat(ACE_XDP_STAT_IPV4_FRAGMENT);
+		return 0;
+	}
+	if (iph->protocol != IPPROTO_UDP)
+		return 0;
+	if (ip_len < ihl_len + sizeof(*udp)) {
+		count_stat(ACE_XDP_STAT_IPV4_INVALID);
+		return 0;
+	}
 
-	/* 4. UDP: IP header 길이 뒤에 있는 UDP header를 확인한다. */
-	struct udphdr *udp = (void *)iph + ihl_len;
-	if ((void *)(udp + 1) > data_end)
-		goto pass;
+	udp = (void *)iph + ihl_len;
+	if ((void *)(udp + 1) > data_end || (void *)(udp + 1) > ip_end) {
+		count_stat(ACE_XDP_STAT_IPV4_INVALID);
+		return 0;
+	}
 
-	/* 5. 분류: destination port에 따라 redirect하고, 실패하면 PASS한다. */
-	/* UDP dst 9001: CPUMAP을 통해 RT CPU로 보낸다. */
-	if (udp->dest == bpf_htons(ACE_XDP_RT_PORT)) {
+	udp_len = (__u32)bpf_ntohs(udp->len);
+	if (udp_len < sizeof(*udp) || udp_len > ip_len - ihl_len ||
+	    (void *)udp + udp_len > data_end || (void *)udp + udp_len > ip_end) {
+		count_stat(ACE_XDP_STAT_IPV4_INVALID);
+		return 0;
+	}
+	udp_end = (void *)udp + udp_len;
+
+	dest = bpf_ntohs(udp->dest);
+	if (dest == ACE_XDP_PASS_PORT)
+		*requested_path = ACE_PATH_PASS;
+	else if (dest == ACE_XDP_RT_PORT)
+		*requested_path = ACE_PATH_CPUMAP;
+	else if (dest == ACE_XDP_XSK_PORT)
+		*requested_path = ACE_PATH_XSK;
+	else
+		return 0;
+
+	payload = (void *)(udp + 1);
+	if (udp_len < sizeof(*udp) + sizeof(wire) ||
+	    payload + sizeof(wire) > data_end ||
+	    payload + sizeof(wire) > udp_end) {
+		count_stat(ACE_XDP_STAT_PACKET_HEADER_INVALID);
+		return -1;
+	}
+
+	/* Packet payload starts at an unaligned Ethernet offset: copy before read. */
+	__builtin_memcpy(&wire, payload, sizeof(wire));
+	if (bpf_ntohl(wire.magic) != ACE_PACKET_MAGIC ||
+	    bpf_ntohs(wire.version) != ACE_PACKET_VERSION ||
+	    bpf_ntohs(wire.size) != ACE_PACKET_HEADER_SIZE ||
+	    bpf_ntohl(wire.reserved) != 0) {
+		count_stat(ACE_XDP_STAT_PACKET_HEADER_INVALID);
+		return -1;
+	}
+
+	key->flow_id = bpf_ntohl(wire.flow_id);
+	key->reserved = 0;
+	key->sequence = bpf_be64_to_cpu(wire.sequence);
+	return 1;
+}
+
+static __always_inline void record_ingress(const struct ace_packet_key *key,
+						   const struct ace_rx_meta *meta)
+{
+	struct ace_ingress_record record = {
+		.flow_id = key->flow_id,
+		.rx_queue = meta->rx_queue,
+		.sequence = key->sequence,
+		.hw_rx_ns = meta->hw_rx_ns,
+		.initial_xdp_ns = meta->initial_xdp_ns,
+		.flags = meta->flags,
+		.requested_path = meta->requested_path,
+		.timestamp_error = meta->timestamp_error,
+	};
+	int err;
+
+	err = bpf_map_update_elem(&ingress_records, key, &record, BPF_NOEXIST);
+	if (!err)
+		count_stat(ACE_XDP_STAT_INGRESS_RECORDED);
+	else if (err == -ACE_EEXIST)
+		count_stat(ACE_XDP_STAT_INGRESS_DUPLICATE);
+	else
+		count_stat(ACE_XDP_STAT_INGRESS_UPDATE_ERROR);
+}
+
+static __always_inline int prepare_measurement_metadata(struct xdp_md *ctx,
+							 const struct ace_packet_key *key,
+							 __u16 requested_path,
+							 __u64 initial_xdp_ns)
+{
+	void *data;
+	void *data_meta;
+	struct ace_rx_meta *meta;
+	__u64 hw_rx_ns = 0;
+	int ts_err;
+
+	if (bpf_xdp_adjust_meta(ctx, -(int)sizeof(*meta))) {
+		count_stat(ACE_XDP_STAT_META_ADJUST_ERROR);
+		return -1;
+	}
+
+	/* adjust_meta invalidates all packet pointers from the parser. */
+	data = (void *)(long)ctx->data;
+	data_meta = (void *)(long)ctx->data_meta;
+	meta = data_meta;
+	if ((void *)(meta + 1) > data) {
+		count_stat(ACE_XDP_STAT_META_BOUNDS_ERROR);
+		return -1;
+	}
+
+	__builtin_memset(meta, 0, sizeof(*meta));
+	meta->magic = ACE_RX_META_MAGIC;
+	meta->version = ACE_RX_META_VERSION;
+	meta->size = sizeof(*meta);
+	meta->flags = ACE_META_F_PACKET_ID_VALID | ACE_META_F_PATH_REQUESTED;
+	meta->flow_id = key->flow_id;
+	meta->sequence = key->sequence;
+	meta->initial_xdp_ns = initial_xdp_ns;
+	meta->rx_queue = ctx->rx_queue_index;
+	meta->requested_path = requested_path;
+
+	ts_err = bpf_xdp_metadata_rx_timestamp(ctx, &hw_rx_ns);
+	if (!ts_err) {
+		meta->hw_rx_ns = hw_rx_ns;
+		meta->flags |= ACE_META_F_HWTS_VALID;
+		count_stat(ACE_XDP_STAT_HWTS_VALID);
+	} else {
+		meta->flags |= ACE_META_F_TIMESTAMP_ERROR;
+		meta->timestamp_error = (__s16)ts_err;
+		count_stat(ACE_XDP_STAT_HWTS_ERROR);
+	}
+
+	record_ingress(key, meta);
+	return 0;
+}
+
+static __always_inline int dispatch_requested_path(struct xdp_md *ctx,
+							   __u16 requested_path)
+{
+	__u32 key;
+	int action;
+
+	if (requested_path == ACE_PATH_CPUMAP) {
 		key = ACE_XDP_RT_CPU;
-		/*
-		 * 세 번째 인자 XDP_PASS는 map 엔트리가 없을 때의 fallback이다.
-		 *
-		 * redirect 성공 시에만 CPUMAP 통계를 기록한다. 실패하면 pass label로
-		 * 이동해 PASS 통계를 기록한다.
-		 */
-		int action = bpf_redirect_map(&cpu_map, key, XDP_PASS);
+		action = bpf_redirect_map(&cpu_map, key, XDP_PASS);
 		if (action == XDP_REDIRECT) {
 			count_stat(ACE_XDP_STAT_CPUMAP);
 			return action;
 		}
-		goto pass; /* userspace가 CPUMAP[3]을 설정하기 전까지 fallback */
-	}
-
-	/* UDP dst 9002: RX queue에 등록된 AF_XDP socket으로 보낸다. */
-	if (udp->dest == bpf_htons(ACE_XDP_XSK_PORT)) {
-		key = ctx->rx_queue_index;   /* XSKMAP key = 현재 RX queue index */
-		/*
-		 * 해당 queue에 AF_XDP socket이 등록되어 있으면 redirect한다. 등록되지
-		 * 않은 경우 세 번째 인자(XDP_PASS)가 적용되어 일반 경로로 전달된다.
-		 */
-		int action = bpf_redirect_map(&xsk_map, key, XDP_PASS);
+		count_stat(ACE_XDP_STAT_CPUMAP_FALLBACK);
+	} else if (requested_path == ACE_PATH_XSK) {
+		key = ctx->rx_queue_index;
+		action = bpf_redirect_map(&xsk_map, key, XDP_PASS);
 		if (action == XDP_REDIRECT) {
 			count_stat(ACE_XDP_STAT_XSK);
 			return action;
 		}
+		count_stat(ACE_XDP_STAT_XSK_FALLBACK);
+	} else {
+		count_stat(ACE_XDP_STAT_EXPERIMENT_PASS);
 	}
 
-pass:
-	/* 분류 대상이 아니거나 redirect map이 준비되지 않은 packet. */
 	count_stat(ACE_XDP_STAT_PASS);
+	return XDP_PASS;
+}
+
+SEC("xdp")
+int xdp_dispatch(struct xdp_md *ctx)
+{
+	struct ace_packet_key packet_key = {};
+	__u64 initial_xdp_ns = bpf_ktime_get_ns();
+	__u16 requested_path = ACE_PATH_PASS;
+	int parsed;
+
+	count_stat(ACE_XDP_STAT_TOTAL);
+	parsed = parse_experiment_packet(ctx, &packet_key, &requested_path);
+	if (parsed > 0 &&
+	    !prepare_measurement_metadata(ctx, &packet_key, requested_path,
+					  initial_xdp_ns))
+		return dispatch_requested_path(ctx, requested_path);
+
+	/* Malformed experiment envelopes and metadata setup failures are never
+	 * redirected into a consumer that could mistake stale metadata as valid. */
+	count_stat(ACE_XDP_STAT_PASS);
+	return XDP_PASS;
+}
+
+SEC("xdp/cpumap")
+int xdp_cpumap_measure(struct xdp_md *ctx)
+{
+	void *data = (void *)(long)ctx->data;
+	void *data_meta = (void *)(long)ctx->data_meta;
+	struct ace_cpumap_record record = {};
+	struct ace_packet_key key = {};
+	struct ace_rx_meta *meta = data_meta;
+	__u64 cpumap_ns;
+	int err;
+
+	if ((void *)(meta + 1) > data ||
+	    meta->magic != ACE_RX_META_MAGIC ||
+	    meta->version != ACE_RX_META_VERSION ||
+	    meta->size != sizeof(*meta) ||
+	    !(meta->flags & ACE_META_F_PACKET_ID_VALID) ||
+	    meta->requested_path != ACE_PATH_CPUMAP) {
+		count_stat(ACE_XDP_STAT_CPUMAP_META_INVALID);
+		return XDP_PASS;
+	}
+
+	cpumap_ns = bpf_ktime_get_ns();
+	meta->cpumap_ns = cpumap_ns;
+	meta->flags |= ACE_META_F_CPUMAP_SEEN;
+
+	key.flow_id = meta->flow_id;
+	key.sequence = meta->sequence;
+	record.flow_id = meta->flow_id;
+	record.cpu = bpf_get_smp_processor_id();
+	record.sequence = meta->sequence;
+	record.cpumap_ns = cpumap_ns;
+	record.flags = meta->flags;
+	record.requested_path = meta->requested_path;
+
+	err = bpf_map_update_elem(&cpumap_records, &key, &record, BPF_NOEXIST);
+	if (!err)
+		count_stat(ACE_XDP_STAT_CPUMAP_RECORDED);
+	else if (err == -ACE_EEXIST)
+		count_stat(ACE_XDP_STAT_CPUMAP_DUPLICATE);
+	else
+		count_stat(ACE_XDP_STAT_CPUMAP_UPDATE_ERROR);
+
 	return XDP_PASS;
 }
 

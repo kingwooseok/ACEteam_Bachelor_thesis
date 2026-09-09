@@ -1,0 +1,113 @@
+From aa19c8495b994443d6decdcd6cc04b15552bcd0c Mon Sep 17 00:00:00 2001
+From: kingwooseok <ssassa601@gmail.com>
+Date: Thu, 27 Aug 2026 23:15:16 +0900
+Subject: [PATCH 2/7] net: macb: rename rx_skbuff into rx_buff
+
+Port of upstream v6 2/7. Rename struct sk_buff **rx_skbuff to
+void **rx_buff in macb_queue. This prepares for page pool support
+where rx_buff stores void* data pointers from page_pool_alloc_frag()
+instead of sk_buff pointers.
+
+Based-on: v6 patch by Paolo Valerio <pvalerio@redhat.com>
+Ported-by: thesis-macb-xdp manual porting
+---
+ drivers/net/ethernet/cadence/macb.h      |  2 +-
+ drivers/net/ethernet/cadence/macb_main.c | 24 ++++++++++++------------
+ 2 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/net/ethernet/cadence/macb.h b/drivers/net/ethernet/cadence/macb.h
+index 10eb3187a1700af174f75c9af21e82415ee9d8da..c81257182f24975446653766890a6a263cc0bd79 100644
+--- a/drivers/net/ethernet/cadence/macb.h
++++ b/drivers/net/ethernet/cadence/macb.h
+@@ -1305,7 +1305,7 @@ struct macb_queue {
+ 	unsigned int		rx_tail;
+ 	unsigned int		rx_prepared_head;
+ 	struct macb_dma_desc	*rx_ring;
+-	struct sk_buff		**rx_skbuff;
++	void			**rx_buff;
+ 	void			*rx_buffers;
+ 	struct napi_struct	napi_rx;
+ 	struct queue_stats stats;
+diff --git a/drivers/net/ethernet/cadence/macb_main.c b/drivers/net/ethernet/cadence/macb_main.c
+index f81541eded0da6255dc193d6e9392b306605fd4f..4b8175865b7eb1a01e34ab7c4cff9ea1b01f77f6 100644
+--- a/drivers/net/ethernet/cadence/macb_main.c
++++ b/drivers/net/ethernet/cadence/macb_main.c
+@@ -1535,7 +1535,7 @@ static int gem_rx_refill(struct macb_queue *queue)
+ 
+ 		desc = macb_rx_desc(queue, entry);
+ 
+-		if (!queue->rx_skbuff[entry]) {
++		if (!queue->rx_buff[entry]) {
+ 			/* allocate sk_buff for this free entry in ring */
+ 			skb = netdev_alloc_skb(bp->dev, bp->rx_buffer_size);
+ 			if (unlikely(!skb)) {
+@@ -1555,7 +1555,7 @@ static int gem_rx_refill(struct macb_queue *queue)
+ 				break;
+ 			}
+ 
+-			queue->rx_skbuff[entry] = skb;
++			queue->rx_buff[entry] = skb;
+ 
+ 			if (entry == bp->rx_ring_size - 1)
+ 				paddr |= MACB_BIT(RX_WRAP);
+@@ -1648,7 +1648,7 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 			queue->stats.rx_dropped++;
+ 			break;
+ 		}
+-		skb = queue->rx_skbuff[entry];
++		skb = queue->rx_buff[entry];
+ 		if (unlikely(!skb)) {
+ 			netdev_err(bp->dev,
+ 				   "inconsistent Rx descriptor chain\n");
+@@ -1657,7 +1657,7 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 			break;
+ 		}
+ 		/* now everything is ready for receiving packet */
+-		queue->rx_skbuff[entry] = NULL;
++		queue->rx_buff[entry] = NULL;
+ 		len = ctrl & bp->rx_frm_len_mask;
+ 
+ 		netdev_vdbg(bp->dev, "gem_rx %u (len %u)\n", entry, len);
+@@ -2689,11 +2689,11 @@ static void gem_free_rx_buffers(struct macb *bp)
+ 	int i;
+ 
+ 	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
+-		if (!queue->rx_skbuff)
++		if (!queue->rx_buff)
+ 			continue;
+ 
+ 		for (i = 0; i < bp->rx_ring_size; i++) {
+-			skb = queue->rx_skbuff[i];
++			skb = queue->rx_buff[i];
+ 
+ 			if (!skb)
+ 				continue;
+@@ -2707,8 +2707,8 @@ static void gem_free_rx_buffers(struct macb *bp)
+ 			skb = NULL;
+ 		}
+ 
+-		kfree(queue->rx_skbuff);
+-		queue->rx_skbuff = NULL;
++		kfree(queue->rx_buff);
++		queue->rx_buff = NULL;
+ 	}
+ }
+ 
+@@ -2788,13 +2788,13 @@ static int gem_alloc_rx_buffers(struct macb *bp)
+ 
+ 	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
+ 		size = bp->rx_ring_size * sizeof(struct sk_buff *);
+-		queue->rx_skbuff = kzalloc(size, GFP_KERNEL);
+-		if (!queue->rx_skbuff)
++		queue->rx_buff = kzalloc(size, GFP_KERNEL);
++		if (!queue->rx_buff)
+ 			return -ENOMEM;
+ 		else
+ 			netdev_dbg(bp->dev,
+-				   "Allocated %d RX struct sk_buff entries at %p\n",
+-				   bp->rx_ring_size, queue->rx_skbuff);
++				   "Allocated %d RX buff entries at %p\n",
++				   bp->rx_ring_size, queue->rx_buff);
+ 	}
+ 	return 0;
+ }

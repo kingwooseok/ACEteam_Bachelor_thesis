@@ -1,0 +1,204 @@
+From c520b905a460d7e1ace2eee9adf132c3a6b09173 Mon Sep 17 00:00:00 2001
+From: kingwooseok <ssassa601@gmail.com>
+Date: Thu, 27 Aug 2026 23:14:17 +0900
+Subject: [PATCH 1/7] net: macb: move Rx buffers alloc from link up to open
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Port of upstream v6 1/7 by Théo Lebrun. Move rx buffer allocation
+and ring initialization from link-up time to macb_open(), allowing
+early error propagation on open. gem_rx_refill() and gem_init_rings()
+now return int for error handling. mog_init_rings() takes a fail_early
+parameter to distinguish open (fail immediately) from HRESP error
+recovery (attempt all queues).
+
+Based-on: v6 patch by Théo Lebrun <theo.lebrun@bootlin.com>
+Ported-by: thesis-macb-xdp manual porting
+---
+ drivers/net/ethernet/cadence/macb.h      |  2 +-
+ drivers/net/ethernet/cadence/macb_main.c | 57 ++++++++++++++++++------
+ 2 files changed, 44 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/net/ethernet/cadence/macb.h b/drivers/net/ethernet/cadence/macb.h
+index 8ef7995db60c63404cc39a7d4e81675388ac3dd2..10eb3187a1700af174f75c9af21e82415ee9d8da 100644
+--- a/drivers/net/ethernet/cadence/macb.h
++++ b/drivers/net/ethernet/cadence/macb.h
+@@ -1222,7 +1222,7 @@ struct macb_queue;
+ struct macb_or_gem_ops {
+ 	int	(*mog_alloc_rx_buffers)(struct macb *bp);
+ 	void	(*mog_free_rx_buffers)(struct macb *bp);
+-	void	(*mog_init_rings)(struct macb *bp);
++	int	(*mog_init_rings)(struct macb *bp, bool fail_early);
+ 	int	(*mog_rx)(struct macb_queue *queue, struct napi_struct *napi,
+ 			  int budget);
+ };
+diff --git a/drivers/net/ethernet/cadence/macb_main.c b/drivers/net/ethernet/cadence/macb_main.c
+index b6e824531081e83554a2b83f2c2e1f9a4ed8b78e..f81541eded0da6255dc193d6e9392b306605fd4f 100644
+--- a/drivers/net/ethernet/cadence/macb_main.c
++++ b/drivers/net/ethernet/cadence/macb_main.c
+@@ -1517,13 +1517,14 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
+ 	return packets;
+ }
+ 
+-static void gem_rx_refill(struct macb_queue *queue)
++static int gem_rx_refill(struct macb_queue *queue)
+ {
+ 	unsigned int		entry;
+ 	struct sk_buff		*skb;
+ 	dma_addr_t		paddr;
+ 	struct macb *bp = queue->bp;
+ 	struct macb_dma_desc *desc;
++	int err = 0;
+ 
+ 	while (CIRC_SPACE(queue->rx_prepared_head, queue->rx_tail,
+ 			bp->rx_ring_size) > 0) {
+@@ -1540,6 +1541,7 @@ static void gem_rx_refill(struct macb_queue *queue)
+ 			if (unlikely(!skb)) {
+ 				netdev_err(bp->dev,
+ 					   "Unable to allocate sk_buff\n");
++				err = -ENOMEM;
+ 				break;
+ 			}
+ 
+@@ -1549,6 +1551,7 @@ static void gem_rx_refill(struct macb_queue *queue)
+ 					       DMA_FROM_DEVICE);
+ 			if (dma_mapping_error(&bp->pdev->dev, paddr)) {
+ 				dev_kfree_skb(skb);
++				err = -ENOMEM;
+ 				break;
+ 			}
+ 
+@@ -1578,6 +1581,8 @@ static void gem_rx_refill(struct macb_queue *queue)
+ 
+ 	netdev_vdbg(bp->dev, "rx ring: queue: %p, prepared head %d, tail %d\n",
+ 			queue, queue->rx_prepared_head, queue->rx_tail);
++
++	return err;
+ }
+ 
+ /* Mark DMA descriptors from begin up to and not including end as unused */
+@@ -2042,7 +2047,7 @@ static void macb_hresp_error_task(struct work_struct *work)
+ 	netif_tx_stop_all_queues(dev);
+ 	netif_carrier_off(dev);
+ 
+-	bp->macbgem_ops.mog_init_rings(bp);
++	bp->macbgem_ops.mog_init_rings(bp, false);
+ 
+ 	/* Initialize TX and RX buffers */
+ 	macb_init_buffers(bp);
+@@ -2853,9 +2858,6 @@ static int macb_alloc_consistent(struct macb *bp)
+ 		if (!queue->tx_skb)
+ 			goto out_err;
+ 	}
+-	if (bp->macbgem_ops.mog_alloc_rx_buffers(bp))
+-		goto out_err;
+-
+ 	/* Required for tie off descriptor for PM cases */
+ 	if (!(bp->caps & MACB_CAPS_QUEUE_DISABLE)) {
+ 		bp->rx_ring_tieoff = dma_alloc_coherent(&bp->pdev->dev,
+@@ -2866,6 +2868,11 @@ static int macb_alloc_consistent(struct macb *bp)
+ 			goto out_err;
+ 	}
+ 
++	if (bp->macbgem_ops.mog_alloc_rx_buffers(bp))
++		goto out_err;
++	if (bp->macbgem_ops.mog_init_rings(bp, true))
++		goto out_err;
++
+ 	return 0;
+ 
+ out_err:
+@@ -2886,19 +2893,21 @@ static void macb_init_tieoff(struct macb *bp)
+ 	desc->ctrl = 0;
+ }
+ 
+-static void gem_init_rx_ring(struct macb_queue *queue)
++static int gem_init_rx_ring(struct macb_queue *queue)
+ {
+ 	queue->rx_tail = 0;
+ 	queue->rx_prepared_head = 0;
+ 
+-	gem_rx_refill(queue);
++	return gem_rx_refill(queue);
+ }
+ 
+-static void gem_init_rings(struct macb *bp)
++static int gem_init_rings(struct macb *bp, bool fail_early)
+ {
+ 	struct macb_queue *queue;
+ 	struct macb_dma_desc *desc = NULL;
++	int last_err = 0;
+ 	unsigned int q;
++	int err;
+ 	int i;
+ 
+ 	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
+@@ -2911,13 +2920,24 @@ static void gem_init_rings(struct macb *bp)
+ 		queue->tx_head = 0;
+ 		queue->tx_tail = 0;
+ 
+-		gem_init_rx_ring(queue);
++		/* We get called in two cases:
++		 *  - open: we can propagate alloc errors (so fail early),
++		 *  - HRESP error: cannot propagate, we attempt to reinit
++		 *    all queues in case of failure.
++		 */
++		err = gem_init_rx_ring(queue);
++		if (err) {
++			last_err = err;
++			if (fail_early)
++				break;
++		}
+ 	}
+ 
+ 	macb_init_tieoff(bp);
++	return last_err;
+ }
+ 
+-static void macb_init_rings(struct macb *bp)
++static int macb_init_rings(struct macb *bp, bool fail_early)
+ {
+ 	int i;
+ 	struct macb_dma_desc *desc = NULL;
+@@ -2934,6 +2954,8 @@ static void macb_init_rings(struct macb *bp)
+ 	desc->ctrl |= MACB_BIT(TX_WRAP);
+ 
+ 	macb_init_tieoff(bp);
++
++	return 0;
+ }
+ 
+ static void macb_reset_hw(struct macb *bp)
+@@ -3301,7 +3323,6 @@ static int macb_open(struct net_device *dev)
+ 		goto pm_exit;
+ 	}
+ 
+-	bp->macbgem_ops.mog_init_rings(bp);
+ 	macb_init_buffers(bp);
+ 
+ 	for (q = 0, queue = bp->queues; q < bp->num_queues; ++q, ++queue) {
+@@ -6282,12 +6303,20 @@ static int __maybe_unused macb_resume(struct device *dev)
+ 	for (q = 0, queue = bp->queues; q < bp->num_queues;
+ 	     ++q, ++queue) {
+ 		if (!(bp->caps & MACB_CAPS_MACB_IS_EMAC)) {
+-			if (macb_is_gem(bp))
+-				gem_init_rx_ring(queue);
+-			else
++			if (macb_is_gem(bp)) {
++				err = gem_init_rx_ring(queue);
++				if (err) {
++					dev_err(dev, "Unable to init RX ring: %d\n", err);
++					return err;
++				}
++			} else {
+ 				macb_init_rx_ring(queue);
++			}
+ 		}
++	}
+ 
++	for (q = 0, queue = bp->queues; q < bp->num_queues;
++	     ++q, ++queue) {
+ 		napi_enable(&queue->napi_rx);
+ 		napi_enable(&queue->napi_tx);
+ 	}

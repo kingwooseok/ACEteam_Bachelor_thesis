@@ -21,9 +21,12 @@
 #   0,1,2,3 -> CPU0~CPU3 전체 부하
 # ============================================================
 
-set -u
+set -Eeuo pipefail
 
-RESULT_ROOT="./results"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
+RESULT_ROOT=${ACE_RESULT_ROOT:-"${PROJECT_DIR}/results"}
+INTERFACE=${ACE_INTERFACE:-eth0}
 
 RESULT_DIR=""
 
@@ -53,7 +56,7 @@ cleanup()
     # stress-ng 종료
     for pid in "${STRESS_PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null
+            kill "$pid" 2>/dev/null || true
         fi
     done
 
@@ -61,32 +64,32 @@ cleanup()
     if [ -n "$MPSTAT_PID" ] &&
        kill -0 "$MPSTAT_PID" 2>/dev/null; then
 
-        kill "$MPSTAT_PID" 2>/dev/null
+        kill "$MPSTAT_PID" 2>/dev/null || true
     fi
 
     # sar 종료
     if [ -n "$SAR_PID" ] &&
        kill -0 "$SAR_PID" 2>/dev/null; then
 
-        kill "$SAR_PID" 2>/dev/null
+        kill "$SAR_PID" 2>/dev/null || true
     fi
 
     # iperf3 종료
     if [ -n "$IPERF_PID" ] &&
        kill -0 "$IPERF_PID" 2>/dev/null; then
 
-        kill "$IPERF_PID" 2>/dev/null
+        kill "$IPERF_PID" 2>/dev/null || true
     fi
 
 
     # 프로세스 종료 대기
     for pid in "${STRESS_PIDS[@]}"; do
-        wait "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null || true
     done
 
-    [ -n "$MPSTAT_PID" ] && wait "$MPSTAT_PID" 2>/dev/null
-    [ -n "$SAR_PID" ]    && wait "$SAR_PID" 2>/dev/null
-    [ -n "$IPERF_PID" ]  && wait "$IPERF_PID" 2>/dev/null
+    [ -n "$MPSTAT_PID" ] && wait "$MPSTAT_PID" 2>/dev/null || true
+    [ -n "$SAR_PID" ]    && wait "$SAR_PID" 2>/dev/null || true
+    [ -n "$IPERF_PID" ]  && wait "$IPERF_PID" 2>/dev/null || true
 
 
     if [ -n "$RESULT_DIR" ]; then
@@ -165,7 +168,7 @@ fi
 # Check required commands
 # ============================================================
 
-for cmd in stress-ng mpstat sar iperf3 taskset; do
+for cmd in stress-ng mpstat sar iperf3 taskset python3; do
 
     if ! command -v "$cmd" >/dev/null 2>&1; then
 
@@ -203,9 +206,11 @@ done
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
-RESULT_DIR="${RESULT_ROOT}/${TIMESTAMP}"
+RUN_ID="${TIMESTAMP}_$$"
+RESULT_DIR="${RESULT_ROOT}/${RUN_ID}"
 
-mkdir -p "$RESULT_DIR"
+mkdir -p "$RESULT_ROOT"
+mkdir "$RESULT_DIR"
 
 
 # ============================================================
@@ -217,7 +222,17 @@ cpu_load=${CPU_LOAD}
 load_cpus=${LOAD_CPUS}
 measurement_interval=${INTERVAL}
 duration=${DURATION}
+interface=${INTERFACE}
+run_id=${RUN_ID}
 EOF
+
+"${SCRIPT_DIR}/capture_manifest.py" "$RESULT_DIR" \
+    --interface "$INTERFACE" \
+    --run-id "$RUN_ID" \
+    --set "cpu_load=${CPU_LOAD}" \
+    --set "load_cpus=${LOAD_CPUS}" \
+    --set "measurement_interval=${INTERVAL}" \
+    --set "duration=${DURATION}"
 
 
 # ============================================================
@@ -261,13 +276,13 @@ MPSTAT_PID=$!
 
 
 # ============================================================
-# 3. Start network monitoring (eth0만 측정)
+# 3. Start network monitoring
 # ============================================================
 
 stdbuf -oL \
     sar \
     -n DEV \
-    --iface=eth0 \
+    --iface="$INTERFACE" \
     "$INTERVAL" \
     > "${RESULT_DIR}/network.log" 2>&1 &
 

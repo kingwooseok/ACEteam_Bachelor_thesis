@@ -1,8 +1,10 @@
 # 최상위 Makefile — 서로 독립적인 UDP와 BPF 하위 빌드를 연결함.
 
-.PHONY: all clean udp afxdp
+.PHONY: all clean bpf udp afxdp test
 
-all:
+all: bpf udp
+
+bpf:
 	$(MAKE) -C BPF
 
 clean:
@@ -15,3 +17,6 @@ udp:
 # pin된 map을 사용하는 XDP loader와 AF_XDP receiver를 함께 빌드함.
 afxdp:
 	$(MAKE) -C BPF afxdp
+
+test:
+	./tests/run_offline.sh

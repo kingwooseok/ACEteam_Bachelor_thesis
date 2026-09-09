@@ -122,10 +122,15 @@ StyleCopReport.xml
 
 # eBPF/XDP build products
 BPF/vmlinux.h
-BPF/xdp_kern.o
+BPF/*.o
 BPF/xdp_kern.skel.h
 BPF/xdp_loader
 BPF/afxdp_recv
+__pycache__/
+*.py[cod]
+results/
+# Rebuilt patch archives are distributed as release assets.
+/patches/*.tar.gz
 *.tlog
 *.vspscc
 *.vssscc

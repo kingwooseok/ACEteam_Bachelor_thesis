@@ -8,7 +8,7 @@
  *  1. CLI 인자를 검증하고 UDP 목적지를 준비함.
  *  2. 송신 buffer를 미리 초기화하고 전체 주소 공간을 잠금.
  *  3. CLOCK_MONOTONIC 절대 시각을 기준으로 송신 주기를 유지함.
- *  4. packet마다 sequence number와 CLOCK_REALTIME TX 시각을 기록함.
+ *  4. packet마다 flow ID, sequence와 CLOCK_REALTIME TX 시각을 기록함.
  *  5. sendto()로 고정 크기 UDP datagram을 전송함.
  *
  * CLOCK_REALTIME은 PTP로 동기화된 두 장비 사이의 OWD 계산에 사용하고,
@@ -21,10 +21,12 @@
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/ip.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -37,9 +39,11 @@
 struct sender_config {
 	const char *destination;
 	uint16_t port;
+	uint32_t flow_id;
 	uint32_t payload_size;
 	uint64_t period_ns;
 	uint64_t packet_count;
+	bool flow_id_set;
 };
 
 /** @brief SIGINT/SIGTERM 수신 시 송신 loop 종료를 요청하는 플래그. */
@@ -95,6 +99,7 @@ static void usage(const char *program)
 	fprintf(stderr,
 		"Usage: %s [options] DESTINATION_IPV4\n"
 		"  -p, --port PORT          UDP port (default: %d)\n"
+		"  -f, --flow-id ID         packet flow identifier (required)\n"
 		"  -s, --payload-size BYTES experiment payload bytes (default: %d)\n"
 		"  -n, --count COUNT        packets to send (default: %d)\n"
 		"  -i, --period-ns NS       send period (default: %d)\n",
@@ -116,6 +121,12 @@ static int parse_u64(const char *text, uint64_t minimum, uint64_t maximum,
 	char *end;
 	unsigned long long parsed;
 
+	if (!text || !text[0])
+		return -1;
+	for (const unsigned char *cursor = (const unsigned char *)text;
+	     *cursor; cursor++)
+		if (*cursor < '0' || *cursor > '9')
+			return -1;
 	errno = 0;
 	parsed = strtoull(text, &end, 10);
 	if (errno || text == end || *end != '\0' || parsed < minimum ||
@@ -136,6 +147,7 @@ static int parse_arguments(int argc, char **argv, struct sender_config *config)
 {
 	static const struct option options[] = {
 		{"port", required_argument, NULL, 'p'},
+		{"flow-id", required_argument, NULL, 'f'},
 		{"payload-size", required_argument, NULL, 's'},
 		{"count", required_argument, NULL, 'n'},
 		{"period-ns", required_argument, NULL, 'i'},
@@ -145,16 +157,22 @@ static int parse_arguments(int argc, char **argv, struct sender_config *config)
 	int option;
 	uint64_t value;
 
-	while ((option = getopt_long(argc, argv, "p:s:n:i:h", options, NULL)) != -1) {
+	while ((option = getopt_long(argc, argv, "p:f:s:n:i:h", options, NULL)) != -1) {
 		switch (option) {
 		case 'p':
 			if (parse_u64(optarg, 1, UINT16_MAX, &value))
 				return -1;
 			config->port = (uint16_t)value;
 			break;
+		case 'f':
+			if (parse_u64(optarg, 0, UINT32_MAX, &value))
+				return -1;
+			config->flow_id = (uint32_t)value;
+			config->flow_id_set = true;
+			break;
 		case 's':
 			if (parse_u64(optarg, 0,
-				ACE_MAX_UDP_PAYLOAD - sizeof(struct packet_header), &value))
+				ACE_MAX_UDP_PAYLOAD - sizeof(struct ace_experiment_header), &value))
 				return -1;
 			config->payload_size = (uint32_t)value;
 			break;
@@ -173,7 +191,7 @@ static int parse_arguments(int argc, char **argv, struct sender_config *config)
 			return -1;
 		}
 	}
-	if (optind + 1 != argc)
+	if (!config->flow_id_set || optind + 1 != argc)
 		return -1;
 	config->destination = argv[optind];
 	return 0;
@@ -259,6 +277,7 @@ int main(int argc, char **argv)
 	size_t packet_size;
 	struct timespec next_send;
 	uint64_t sent = 0, errors = 0;
+	int pmtudisc = IP_PMTUDISC_DO;
 	int socket_fd;
 
 	if (parse_arguments(argc, argv, &config)) {
@@ -266,7 +285,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	destination.sin_port = htons(config.port);
-	packet_size = sizeof(struct packet_header) + config.payload_size;
+	packet_size = sizeof(struct ace_experiment_header) + config.payload_size;
 	if (inet_pton(AF_INET, config.destination, &destination.sin_addr) != 1) {
 		fprintf(stderr, "invalid destination IPv4 address: %s\n",
 			config.destination);
@@ -277,6 +296,13 @@ int main(int argc, char **argv)
 	socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (socket_fd < 0) {
 		perror("socket");
+		return 1;
+	}
+	/* 실험 traffic은 MTU 1500의 단일 Ethernet frame으로 제한한다. */
+	if (setsockopt(socket_fd, IPPROTO_IP, IP_MTU_DISCOVER,
+		&pmtudisc, sizeof(pmtudisc))) {
+		perror("setsockopt(IP_MTU_DISCOVER)");
+		close(socket_fd);
 		return 1;
 	}
 	/* 측정 전에 최대 packet buffer 전체를 접근하고 현재/미래 page를 잠금. */
@@ -295,12 +321,13 @@ int main(int argc, char **argv)
 	printf("role: sender\n"
 	       "destination: %s\n"
 	       "UDP port: %u\n"
+	       "flow ID: %u\n"
 	       "period: %llu ns\n"
 	       "payload size: %u bytes\n"
 	       "UDP datagram payload: %zu bytes (header + payload)\n"
 	       "packet count: %llu\n"
 	       "clock: CLOCK_REALTIME (TX), CLOCK_MONOTONIC (pacing)\n",
-		config.destination, config.port,
+		config.destination, config.port, config.flow_id,
 		(unsigned long long)config.period_ns, config.payload_size, packet_size,
 		(unsigned long long)config.packet_count);
 
@@ -312,7 +339,7 @@ int main(int argc, char **argv)
 
 	/* 측정 구간: 동적 할당과 packet별 출력 없이 timestamp와 송신만 수행함. */
 	for (uint64_t seq = 0; seq < config.packet_count && !stop; seq++) {
-		struct packet_header header;
+		struct ace_experiment_header header;
 		int64_t tx_ns;
 		ssize_t result;
 
@@ -335,8 +362,13 @@ int main(int argc, char **argv)
 			break;
 		}
 		/* 서로 다른 byte order의 장비에서도 동일하게 해석하도록 network order 사용. */
-		header.seq = htobe64(seq);
-		header.tx_ns = (int64_t)htobe64((uint64_t)tx_ns);
+		header.magic = htobe32(ACE_PACKET_MAGIC);
+		header.version = htobe16(ACE_PACKET_VERSION);
+		header.size = htobe16(sizeof(header));
+		header.flow_id = htobe32(config.flow_id);
+		header.reserved = 0;
+		header.sequence = htobe64(seq);
+		header.tx_realtime_ns = htobe64((uint64_t)tx_ns);
 		memcpy(packet, &header, sizeof(header));
 		result = sendto(socket_fd, packet, packet_size, 0,
 			(const struct sockaddr *)&destination, sizeof(destination));

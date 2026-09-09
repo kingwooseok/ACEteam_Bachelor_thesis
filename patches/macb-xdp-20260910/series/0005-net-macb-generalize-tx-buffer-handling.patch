@@ -1,0 +1,180 @@
+From 8bf7571774349fef04f84a0d11a2ff536ae1773d Mon Sep 17 00:00:00 2001
+From: kingwooseok <ssassa601@gmail.com>
+Date: Fri, 28 Aug 2026 00:19:04 +0900
+Subject: [PATCH 5/7] net: macb: generalize tx buffer handling
+
+Rename struct macb_tx_buff member skb to ptr and introduce
+macb_tx_buff_type to identify the buffer type macb_tx_buff
+represents.
+
+Currently the buffer can only be MACB_TYPE_SKB, so the sk_buff
+case is handled unconditionally in the tx path.
+The remaining type handling will be handled by subsequent patches.
+
+This is the last preparatory step for XDP xmit support.
+
+Signed-off-by: Paolo Valerio <pvalerio@redhat.com>
+Reviewed-by: Nicolai Buchwitz <nb@tipi-net.de>
+---
+ drivers/net/ethernet/cadence/macb.h      | 25 +++++++++++------
+ drivers/net/ethernet/cadence/macb_main.c | 35 ++++++++++++++----------
+ 2 files changed, 37 insertions(+), 23 deletions(-)
+
+diff --git a/drivers/net/ethernet/cadence/macb.h b/drivers/net/ethernet/cadence/macb.h
+index 01c10a69084874551b81b9b0d6dfc9ea886fea7d..ae12ecec4588e15132619e553cec58d297d1fa49 100644
+--- a/drivers/net/ethernet/cadence/macb.h
++++ b/drivers/net/ethernet/cadence/macb.h
+@@ -992,19 +992,28 @@ struct macb_dma_desc_ptp {
+ /* Scaled PPM fraction */
+ #define PPM_FRACTION	16
+ 
+-/* struct macb_tx_buff - data about an skb which is being transmitted
+- * @skb: skb currently being transmitted, only set for the last buffer
+- *       of the frame
+- * @mapping: DMA address of the skb's fragment buffer
++enum macb_tx_buff_type {
++	MACB_TYPE_SKB,
++	MACB_TYPE_XDP_TX,
++	MACB_TYPE_XDP_NDO,
++};
++
++/* struct macb_tx_buff - data about an skb or xdp frame which is being
++ * transmitted.
++ * @ptr: pointer to skb or xdp frame being transmitted, only set
++ *        for the last buffer for sk_buff
++ * @mapping: DMA address of the skb's fragment or xdp buffer
+  * @size: size of the DMA mapped buffer
+  * @mapped_as_page: true when buffer was mapped with skb_frag_dma_map(),
+  *                  false when buffer was mapped with dma_map_single()
++ * @type: type of buffer (MACB_TYPE_SKB, MACB_TYPE_XDP_TX, MACB_TYPE_XDP_NDO)
+  */
+ struct macb_tx_buff {
+-	struct sk_buff		*skb;
+-	dma_addr_t		mapping;
+-	size_t			size;
+-	bool			mapped_as_page;
++	void				*ptr;
++	dma_addr_t			mapping;
++	size_t				size;
++	bool				mapped_as_page;
++	enum macb_tx_buff_type		type;
+ };
+ 
+ /* Hardware-collected statistics. Used when updating the network
+diff --git a/drivers/net/ethernet/cadence/macb_main.c b/drivers/net/ethernet/cadence/macb_main.c
+index 83c5a2c27e213da09c59095e079574ea52f5eeb0..0e9d2261038156ebbf2ce6dbd02a061a4e8d58eb 100644
+--- a/drivers/net/ethernet/cadence/macb_main.c
++++ b/drivers/net/ethernet/cadence/macb_main.c
+@@ -1229,7 +1229,8 @@ static int macb_halt_tx(struct macb *bp)
+ 					bp, TSR);
+ }
+ 
+-static void macb_tx_unmap(struct macb *bp, struct macb_tx_buff *tx_buff, int budget)
++static void macb_tx_unmap(struct macb *bp, struct macb_tx_buff *tx_buff,
++			  int budget)
+ {
+ 	if (tx_buff->mapping) {
+ 		if (tx_buff->mapped_as_page)
+@@ -1241,9 +1242,9 @@ static void macb_tx_unmap(struct macb *bp, struct macb_tx_buff *tx_buff, int bud
+ 		tx_buff->mapping = 0;
+ 	}
+ 
+-	if (tx_buff->skb) {
+-		dev_consume_skb_any(tx_buff->skb);
+-		tx_buff->skb = NULL;
++	if (tx_buff->ptr) {
++		dev_consume_skb_any(tx_buff->ptr);
++		tx_buff->ptr = NULL;
+ 	}
+ }
+ 
+@@ -1334,7 +1335,7 @@ static void macb_tx_error_task(struct work_struct *work)
+ 		desc = macb_tx_desc(queue, tail);
+ 		ctrl = desc->ctrl;
+ 		tx_buff = macb_tx_buff(queue, tail);
+-		skb = tx_buff->skb;
++		skb = tx_buff->ptr;
+ 
+ 		if (ctrl & MACB_BIT(TX_USED)) {
+ 			/* skb is set for the last buffer of the frame */
+@@ -1342,7 +1343,7 @@ static void macb_tx_error_task(struct work_struct *work)
+ 				macb_tx_unmap(bp, tx_buff, 0);
+ 				tail++;
+ 				tx_buff = macb_tx_buff(queue, tail);
+-				skb = tx_buff->skb;
++				skb = tx_buff->ptr;
+ 			}
+ 
+ 			/* ctrl still refers to the first buffer descriptor
+@@ -1470,7 +1471,7 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
+ 		/* Process all buffers of the current transmitted frame */
+ 		for (;; tail++) {
+ 			tx_buff = macb_tx_buff(queue, tail);
+-			skb = tx_buff->skb;
++			skb = tx_buff->ptr;
+ 
+ 			/* First, update TX stats if needed */
+ 			if (skb) {
+@@ -2404,7 +2405,8 @@ static unsigned int macb_tx_map(struct macb *bp,
+ 			goto dma_error;
+ 
+ 		/* Save info to properly release resources */
+-		tx_buff->skb = NULL;
++		tx_buff->ptr = NULL;
++		tx_buff->type = MACB_TYPE_SKB;
+ 		tx_buff->mapping = mapping;
+ 		tx_buff->size = size;
+ 		tx_buff->mapped_as_page = false;
+@@ -2434,7 +2436,8 @@ static unsigned int macb_tx_map(struct macb *bp,
+ 				goto dma_error;
+ 
+ 			/* Save info to properly release resources */
+-			tx_buff->skb = NULL;
++			tx_buff->ptr = NULL;
++			tx_buff->type = MACB_TYPE_SKB;
+ 			tx_buff->mapping = mapping;
+ 			tx_buff->size = size;
+ 			tx_buff->mapped_as_page = true;
+@@ -2453,7 +2456,8 @@ static unsigned int macb_tx_map(struct macb *bp,
+ 	}
+ 
+ 	/* This is the last buffer of the frame: save socket buffer */
+-	tx_buff->skb = skb;
++	tx_buff->ptr = skb;
++	tx_buff->type = MACB_TYPE_SKB;
+ 
+ 	/* Update TX ring: update buffer descriptors in reverse order
+ 	 * to avoid race condition
+@@ -2871,7 +2875,7 @@ static void macb_free_consistent(struct macb *bp)
+ 
+ 			for (tail = queue->tx_tail; tail != queue->tx_head;
+ 			     tail++) {
+-				if (macb_tx_buff(queue, tail)->skb)
++				if (macb_tx_buff(queue, tail)->ptr)
+ 					dropped++;
+ 				macb_tx_unmap(bp, macb_tx_buff(queue, tail), 0);
+ 			}
+@@ -5416,8 +5420,9 @@ static netdev_tx_t at91ether_start_xmit(struct sk_buff *skb,
+ 		netif_stop_queue(dev);
+ 
+ 		/* Store packet information (to free when Tx completed) */
+-		lp->rm9200_txq[desc].skb = skb;
++		lp->rm9200_txq[desc].ptr = skb;
+ 		lp->rm9200_txq[desc].size = skb->len;
++		lp->rm9200_txq[desc].type = MACB_TYPE_SKB;
+ 		lp->rm9200_txq[desc].mapping = dma_map_single(&lp->pdev->dev, skb->data,
+ 							      skb->len, DMA_TO_DEVICE);
+ 		if (dma_mapping_error(&lp->pdev->dev, lp->rm9200_txq[desc].mapping)) {
+@@ -5509,9 +5514,9 @@ static irqreturn_t at91ether_interrupt(int irq, void *dev_id)
+ 			dev->stats.tx_errors++;
+ 
+ 		desc = 0;
+-		if (lp->rm9200_txq[desc].skb) {
+-			dev_consume_skb_irq(lp->rm9200_txq[desc].skb);
+-			lp->rm9200_txq[desc].skb = NULL;
++		if (lp->rm9200_txq[desc].ptr) {
++			dev_consume_skb_irq(lp->rm9200_txq[desc].ptr);
++			lp->rm9200_txq[desc].ptr = NULL;
+ 			dma_unmap_single(&lp->pdev->dev, lp->rm9200_txq[desc].mapping,
+ 					 lp->rm9200_txq[desc].size, DMA_TO_DEVICE);
+ 			dev->stats.tx_packets++;

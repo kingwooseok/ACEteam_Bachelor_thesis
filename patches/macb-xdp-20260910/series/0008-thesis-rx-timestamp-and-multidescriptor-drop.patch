@@ -1,0 +1,384 @@
+diff --git a/drivers/net/ethernet/cadence/macb.h b/drivers/net/ethernet/cadence/macb.h
+index 5cf5ce69b4092f977b869932ad39099914f9fa86..5d6272f74ac9395e1f3851b8f3073ff77e89e9ab 100644
+--- a/drivers/net/ethernet/cadence/macb.h
++++ b/drivers/net/ethernet/cadence/macb.h
+@@ -1211,6 +1211,7 @@ struct queue_stats {
+ 	};
+ 	unsigned long rx_bytes;
+ 	unsigned long rx_dropped;
++	unsigned long rx_xdp_multidesc_drops;
+ 	unsigned long tx_packets;
+ 	unsigned long tx_bytes;
+ 	unsigned long tx_dropped;
+@@ -1220,6 +1221,7 @@ static const struct gem_statistic queue_statistics[] = {
+ 		QUEUE_STAT_TITLE("rx_packets"),
+ 		QUEUE_STAT_TITLE("rx_bytes"),
+ 		QUEUE_STAT_TITLE("rx_dropped"),
++		QUEUE_STAT_TITLE("rx_xdp_multidesc_drops"),
+ 		QUEUE_STAT_TITLE("tx_packets"),
+ 		QUEUE_STAT_TITLE("tx_bytes"),
+ 		QUEUE_STAT_TITLE("tx_dropped"),
+@@ -1323,6 +1325,7 @@ struct macb_queue {
+ 	struct page_pool	*page_pool;
+ 	struct sk_buff		*skb;
+ 	struct xdp_rxq_info	xdp_rxq;
++	bool			xdp_rx_drop_multidesc;
+ };
+ 
+ struct ethtool_rx_fs_item {
+@@ -1457,6 +1460,8 @@ void gem_ptp_init(struct net_device *ndev);
+ void gem_ptp_remove(struct net_device *ndev);
+ void gem_ptp_txstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc);
+ void gem_ptp_rxstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc);
++int gem_ptp_rxstamp_ns(struct macb *bp, struct macb_dma_desc *desc,
++		       u64 *timestamp);
+ static inline void gem_ptp_do_txstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc)
+ {
+ 	if (bp->tstamp_config.tx_type == TSTAMP_DISABLED)
+@@ -1484,6 +1489,12 @@ static inline void gem_ptp_remove(struct net_device *ndev) { }
+ 
+ static inline void gem_ptp_do_txstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc) { }
+ static inline void gem_ptp_do_rxstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc) { }
++static inline int gem_ptp_rxstamp_ns(struct macb *bp,
++				     struct macb_dma_desc *desc,
++				     u64 *timestamp)
++{
++	return -EOPNOTSUPP;
++}
+ #endif
+ 
+ static inline bool macb_is_gem(struct macb *bp)
+diff --git a/drivers/net/ethernet/cadence/macb_main.c b/drivers/net/ethernet/cadence/macb_main.c
+index d04300c816f2fcaf1c49f04dd860da4b085e7dfc..328a3771f0ffccc8aa0e5d3ad0d10d39c1a2860e 100644
+--- a/drivers/net/ethernet/cadence/macb_main.c
++++ b/drivers/net/ethernet/cadence/macb_main.c
+@@ -713,6 +713,32 @@ static void macb_tx_lpi_wake(struct macb *bp)
+ 	udelay(50);
+ }
+ 
++static void macb_tx_kick(struct macb_queue *queue, bool wake_lpi,
++			 bool arm_retry)
++{
++	struct macb *bp = queue->bp;
++
++	spin_lock(&bp->lock);
++
++	if (wake_lpi)
++		macb_tx_lpi_wake(bp);
++
++	/* TSTART can be lost while TX is already running.  Leave a
++	 * breadcrumb so a subsequent TX interrupt retries the doorbell.
++	 */
++	if (arm_retry && (macb_readl(bp, TSR) & MACB_BIT(TGO)))
++		queue->tx_pending = true;
++
++	macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
++
++	/* Flush PCIe posted writes so the doorbell reaches RP1 before the
++	 * caller returns.
++	 */
++	if (bp->caps & MACB_CAPS_PCIE_POSTED_WRITES)
++		(void)macb_readl(bp, NCR);
++	spin_unlock(&bp->lock);
++}
++
+ static void macb_mac_disable_tx_lpi(struct phylink_config *config)
+ {
+ 	struct net_device *ndev = to_net_dev(config->dev);
+@@ -1793,10 +1819,7 @@ static int macb_xdp_submit_frame(struct macb *bp, struct xdp_frame *xdpf,
+ 	/* Make newly initialized descriptor visible to hardware */
+ 	wmb();
+ 
+-	spin_lock(&bp->lock);
+-	macb_tx_lpi_wake(bp);
+-	macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
+-	spin_unlock(&bp->lock);
++	macb_tx_kick(queue, true, true);
+ 
+ 	if (CIRC_SPACE(queue->tx_head, queue->tx_tail, bp->tx_ring_size) < 1)
+ 		netif_stop_subqueue(dev, queue_index);
+@@ -1833,16 +1856,39 @@ static int gem_xdp_xmit(struct net_device *dev, int num_frame,
+ 	return xmitted;
+ }
+ 
++struct macb_xdp_buff {
++	struct xdp_buff xdp;
++	struct macb *bp;
++	struct macb_dma_desc *desc;
++};
++
++static int gem_xdp_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp)
++{
++	const struct macb_xdp_buff *mxbuf = (const void *)ctx;
++
++	return gem_ptp_rxstamp_ns(mxbuf->bp, mxbuf->desc, timestamp);
++}
++
++static const struct xdp_metadata_ops gem_xdp_metadata_ops = {
++	.xmo_rx_timestamp = gem_xdp_rx_timestamp,
++};
++
+ static u32 gem_xdp_run(struct macb_queue *queue, void *buff_head,
+ 		       unsigned int *len, unsigned int *headroom,
+-		       dma_addr_t addr)
++		       unsigned int *metasize, dma_addr_t addr,
++		       struct macb_dma_desc *desc)
+ {
++	struct macb_xdp_buff mxbuf = {
++		.bp = queue->bp,
++		.desc = desc,
++	};
+ 	struct net_device *dev;
+ 	struct xdp_frame *xdpf;
+ 	struct bpf_prog *prog;
+-	struct xdp_buff xdp;
++	struct xdp_buff *xdp = &mxbuf.xdp;
+ 
+ 	u32 act = XDP_PASS;
++	*metasize = 0;
+ 
+ 	rcu_read_lock();
+ 
+@@ -1850,25 +1896,26 @@ static u32 gem_xdp_run(struct macb_queue *queue, void *buff_head,
+ 	if (!prog)
+ 		goto out;
+ 
+-	xdp_init_buff(&xdp, gem_total_rx_buffer_size(queue->bp), &queue->xdp_rxq);
+-	xdp_prepare_buff(&xdp, buff_head, *headroom, *len, false);
+-	xdp_buff_clear_frags_flag(&xdp);
++	xdp_init_buff(xdp, gem_total_rx_buffer_size(queue->bp), &queue->xdp_rxq);
++	xdp_prepare_buff(xdp, buff_head, *headroom, *len, true);
++	xdp_buff_clear_frags_flag(xdp);
+ 	dev = queue->bp->dev;
+ 
+-	act = bpf_prog_run_xdp(prog, &xdp);
++	act = bpf_prog_run_xdp(prog, xdp);
+ 	switch (act) {
+ 	case XDP_PASS:
+-		*len = xdp.data_end - xdp.data;
+-		*headroom = xdp.data - xdp.data_hard_start;
++		*len = xdp->data_end - xdp->data;
++		*headroom = xdp->data - xdp->data_hard_start;
++		*metasize = xdp->data - xdp->data_meta;
+ 		goto out;
+ 	case XDP_REDIRECT:
+-		if (unlikely(xdp_do_redirect(dev, &xdp, prog))) {
++		if (unlikely(xdp_do_redirect(dev, xdp, prog))) {
+ 			act = XDP_DROP;
+ 			break;
+ 		}
+ 		goto out;
+ 	case XDP_TX:
+-		xdpf = xdp_convert_buff_to_frame(&xdp);
++		xdpf = xdp_convert_buff_to_frame(xdp);
+ 		if (unlikely(!xdpf) || macb_xdp_submit_frame(queue->bp, xdpf,
+ 							     dev, false, addr)) {
+ 			act = XDP_DROP;
+@@ -1886,7 +1933,7 @@ static u32 gem_xdp_run(struct macb_queue *queue, void *buff_head,
+ 	}
+ 
+ 	page_pool_put_full_page(queue->page_pool,
+-				virt_to_head_page(xdp.data), true);
++				virt_to_head_page(xdp->data), true);
+ out:
+ 	rcu_read_unlock();
+ 
+@@ -1901,6 +1948,7 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 	struct macb_dma_desc *desc;
+ 	bool xdp_flush = false;
+ 	unsigned int headroom;
++	unsigned int metasize;
+ 	unsigned int entry;
+ 	struct page *page;
+ 	void *buff_head;
+@@ -1947,6 +1995,41 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 		first_frame = ctrl & MACB_BIT(RX_SOF);
+ 		last_frame = ctrl & MACB_BIT(RX_EOF);
+ 
++		/* A new SOF is an unambiguous frame boundary.  If EOF was lost
++		 * for the frame being discarded, resynchronise here rather than
++		 * dropping the first complete frame that follows it as well.
++		 */
++		if (unlikely(queue->xdp_rx_drop_multidesc && first_frame))
++			queue->xdp_rx_drop_multidesc = false;
++
++		/* Native XDP currently supports only a frame contained in one
++		 * descriptor.  Fail closed instead of letting a fragmented frame
++		 * bypass the attached program.  Keep draining across NAPI polls
++		 * until the descriptor carrying EOF is returned to the page pool.
++		 */
++		if (unlikely(queue->xdp_rx_drop_multidesc ||
++			     (rcu_access_pointer(bp->prog) &&
++			      (!first_frame || !last_frame)))) {
++			if (!queue->xdp_rx_drop_multidesc) {
++				queue->xdp_rx_drop_multidesc = true;
++				bp->dev->stats.rx_dropped++;
++				queue->stats.rx_dropped++;
++				queue->stats.rx_xdp_multidesc_drops++;
++			}
++
++			if (queue->skb) {
++				dev_kfree_skb(queue->skb);
++				queue->skb = NULL;
++			}
++
++			page_pool_put_full_page(queue->page_pool,
++						virt_to_head_page(buff_head), true);
++			queue->rx_buff[entry] = NULL;
++			if (last_frame)
++				queue->xdp_rx_drop_multidesc = false;
++			continue;
++		}
++
+ 		data_len = gem_rx_data_len(bp, queue, ctrl, first_frame,
+ 					   last_frame);
+ 		if (data_len < 0)
+@@ -1967,10 +2050,12 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 			}
+ 
+ 			headroom = bp->rx_headroom;
++			metasize = 0;
+ 
+ 			if (last_frame) {
+ 				ret = gem_xdp_run(queue, buff_head, &data_len,
+-						  &headroom, addr - gem_rx_pad(bp));
++						  &headroom, &metasize,
++						  addr - gem_rx_pad(bp), desc);
+ 				if (ret == XDP_REDIRECT)
+ 					xdp_flush = true;
+ 
+@@ -1989,6 +2074,8 @@ static int gem_rx(struct macb_queue *queue, struct napi_struct *napi,
+ 			skb_reserve(queue->skb, headroom);
+ 			skb_mark_for_recycle(queue->skb);
+ 			skb_put(queue->skb, data_len);
++			if (metasize)
++				skb_metadata_set(queue->skb, metasize);
+ 		} else {
+ 			shinfo = skb_shinfo(queue->skb);
+ 			page = virt_to_head_page(buff_head);
+@@ -2314,16 +2401,7 @@ static void macb_tx_restart(struct macb_queue *queue)
+ 	if (tbqp == head_idx)
+ 		goto out_tx_ptr_unlock;
+ 
+-	spin_lock(&bp->lock);
+-	macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
+-	/* On PCIe-attached parts, flush the posted-write queue so the
+-	 * TSTART doorbell reliably reaches the MAC.  Without this the
+-	 * write can sit in the fabric and the MAC never advances,
+-	 * causing a silent TX stall.
+-	 */
+-	if (bp->caps & MACB_CAPS_PCIE_POSTED_WRITES)
+-		(void)macb_readl(bp, NCR);
+-	spin_unlock(&bp->lock);
++	macb_tx_kick(queue, false, false);
+ 
+ out_tx_ptr_unlock:
+ 	spin_unlock_irqrestore(&queue->tx_ptr_lock, flags);
+@@ -2999,21 +3077,7 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
+ 	netdev_tx_sent_queue(netdev_get_tx_queue(bp->dev, queue_index),
+ 			     skb->len);
+ 
+-	spin_lock(&bp->lock);
+-	macb_tx_lpi_wake(bp);
+-
+-	/* TSTART write might get dropped, so make the IRQ retrigger a buffer read */
+-	if (macb_readl(bp, TSR) & MACB_BIT(TGO))
+-		queue->tx_pending = 1;
+-
+-	macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
+-	/* Flush PCIe posted-write queue; see comment in macb_tx_restart().
+-	 * Also flushes the preceding macb_tx_lpi_wake() NCR write and the
+-	 * TSR-read tx_pending breadcrumb above.
+-	 */
+-	if (bp->caps & MACB_CAPS_PCIE_POSTED_WRITES)
+-		(void)macb_readl(bp, NCR);
+-	spin_unlock(&bp->lock);
++	macb_tx_kick(queue, true, true);
+ 
+ 	if (CIRC_SPACE(queue->tx_head, queue->tx_tail, bp->tx_ring_size) < 1)
+ 		netif_stop_subqueue(dev, queue_index);
+@@ -3335,6 +3399,7 @@ static int gem_init_rx_ring(struct macb_queue *queue)
+ {
+ 	queue->rx_tail = 0;
+ 	queue->rx_prepared_head = 0;
++	queue->xdp_rx_drop_multidesc = false;
+ 
+ 	return gem_rx_refill(queue, false);
+ }
+@@ -6553,6 +6618,9 @@ static int macb_probe(struct platform_device *pdev)
+ 		dev->xdp_features = NETDEV_XDP_ACT_BASIC |
+ 				    NETDEV_XDP_ACT_REDIRECT |
+ 				    NETDEV_XDP_ACT_NDO_XMIT;
++		if (IS_ENABLED(CONFIG_MACB_USE_HWSTAMP) &&
++		    (bp->hw_dma_cap & HW_DMA_CAP_PTP))
++			dev->xdp_metadata_ops = &gem_xdp_metadata_ops;
+ 	}
+ 
+ 	netif_carrier_off(dev);
+diff --git a/drivers/net/ethernet/cadence/macb_ptp.c b/drivers/net/ethernet/cadence/macb_ptp.c
+index f2b09100f710e926bbfae689ea0c836163502156..df5674d05ad0ec593002b552511616ac8666dbab 100644
+--- a/drivers/net/ethernet/cadence/macb_ptp.c
++++ b/drivers/net/ethernet/cadence/macb_ptp.c
+@@ -271,25 +271,46 @@ static int gem_hw_timestamp(struct macb *bp, u32 dma_desc_ts_1,
+ 	return 0;
+ }
+ 
++int gem_ptp_rxstamp_ns(struct macb *bp, struct macb_dma_desc *desc,
++		       u64 *timestamp)
++{
++	struct macb_dma_desc_ptp *desc_ptp;
++	struct timespec64 ts;
++
++	if (!READ_ONCE(bp->ptp_clock) ||
++	    bp->tstamp_config.rx_filter == HWTSTAMP_FILTER_NONE ||
++	    !GEM_BFEXT(DMA_RXVALID, desc->addr))
++		return -ENODATA;
++
++	desc_ptp = macb_ptp_desc(bp, desc);
++	if (!desc_ptp)
++		return -EOPNOTSUPP;
++
++	/* Ensure the extended descriptor words are read after RX ownership. */
++	dma_rmb();
++	gem_hw_timestamp(bp, desc_ptp->ts_1, desc_ptp->ts_2, &ts);
++	*timestamp = timespec64_to_ns(&ts);
++
++	return 0;
++}
++
+ void gem_ptp_rxstamp(struct macb *bp, struct sk_buff *skb,
+ 		     struct macb_dma_desc *desc)
+ {
+ 	struct skb_shared_hwtstamps *shhwtstamps = skb_hwtstamps(skb);
+-	struct macb_dma_desc_ptp *desc_ptp;
+-	struct timespec64 ts;
++	u64 timestamp;
++	int err;
+ 
+-	if (GEM_BFEXT(DMA_RXVALID, desc->addr)) {
+-		desc_ptp = macb_ptp_desc(bp, desc);
+-		/* Unlikely but check */
+-		if (!desc_ptp) {
++	err = gem_ptp_rxstamp_ns(bp, desc, &timestamp);
++	if (err) {
++		if (err == -EOPNOTSUPP)
+ 			dev_warn_ratelimited(&bp->pdev->dev,
+ 					     "Timestamp not supported in BD\n");
+-			return;
+-		}
+-		gem_hw_timestamp(bp, desc_ptp->ts_1, desc_ptp->ts_2, &ts);
+-		memset(shhwtstamps, 0, sizeof(struct skb_shared_hwtstamps));
+-		shhwtstamps->hwtstamp = ktime_set(ts.tv_sec, ts.tv_nsec);
++		return;
+ 	}
++
++	memset(shhwtstamps, 0, sizeof(struct skb_shared_hwtstamps));
++	shhwtstamps->hwtstamp = ns_to_ktime(timestamp);
+ }
+ 
+ void gem_ptp_txstamp(struct macb *bp, struct sk_buff *skb,
+@@ -465,4 +486,3 @@ int gem_set_hwtst(struct net_device *dev,
+ 
+ 	return 0;
+ }
+-

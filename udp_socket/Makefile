@@ -1,10 +1,10 @@
 CC ?= cc
-CPPFLAGS += -Iinclude
+CPPFLAGS += -Iinclude -I../include
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic
 
 BIN_DIR := bin
-TARGETS := $(BIN_DIR)/sender $(BIN_DIR)/receiver
+TARGETS := $(BIN_DIR)/sender $(BIN_DIR)/receiver $(BIN_DIR)/phc_calibrate
 
 .PHONY: all clean
 
@@ -13,10 +13,14 @@ all: $(TARGETS)
 $(BIN_DIR):
 	mkdir -p $@
 
-$(BIN_DIR)/sender: src/sender.c include/config.h include/protocol.h | $(BIN_DIR)
+$(BIN_DIR)/sender: src/sender.c include/config.h include/protocol.h ../include/ace_packet_abi.h | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
-$(BIN_DIR)/receiver: src/receiver.c include/config.h include/protocol.h | $(BIN_DIR)
+$(BIN_DIR)/receiver: src/receiver.c include/config.h include/protocol.h \
+		../include/ace_packet_abi.h ../include/ace_hwtstamp.h | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(BIN_DIR)/phc_calibrate: src/phc_calibrate.c | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 clean:

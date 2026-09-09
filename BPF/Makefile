@@ -2,7 +2,9 @@
 # BPF/Makefile — BTF 생성부터 userspace loader 빌드까지의 파이프라인
 #
 # make가 수행하는 단계:
-#   vmlinux.h → xdp_kern.o → xdp_kern.skel.h → xdp_loader
+#   current kernel BTF → vmlinux.h → xdp_kern.o → skeleton → userspace tools
+
+.DELETE_ON_ERROR:
 
 # ===== 빌드 도구와 컴파일 옵션 =====
 # 필요하면 명령행에서 재정의할 수 있다(예: make CLANG=clang-19).
@@ -30,7 +32,7 @@ else ifeq ($(ARCH),x86_64)
 else
 endif
 
-all: xdp_loader
+all: xdp_loader afxdp_recv
 
 check-build-tools:
 	@command -v $(CC) >/dev/null 2>&1 || { echo "missing C compiler: $(CC)" >&2; exit 1; }
@@ -48,19 +50,26 @@ check-libbpf: check-build-tools
 check-libxdp: check-build-tools
 	@$(PKG_CONFIG) --exists libxdp || { echo "missing libxdp development package" >&2; exit 1; }
 
-vmlinux.h: | check-bpf-tools
-	@set -e; $(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@.tmp; mv $@.tmp $@
+# Re-dump on every build, but replace the file only when the running kernel's
+# BTF actually changed.  This prevents a stale checked-in vmlinux.h after a
+# kernel switch without forcing all BPF objects to rebuild unnecessarily.
+vmlinux.h: FORCE | check-bpf-tools
+	@set -e; $(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@.tmp; \
+		if test -r $@ && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
-xdp_kern.o: xdp_kern.c config.h vmlinux.h
+xdp_kern.o: xdp_kern.c config.h metadata.h ../include/ace_packet_abi.h vmlinux.h
 	$(CLANG) -target bpf $(BPF_TARGET_ARCH) $(BPF_CFLAGS) $(WARNINGS) -c $< -o $@
 
 xdp_kern.skel.h: xdp_kern.o | check-bpf-tools
 	@set -e; $(BPFTOOL) gen skeleton $< > $@.tmp; mv $@.tmp $@
 
-xdp_loader: xdp_loader.c xdp_kern.skel.h config.h | check-libbpf
+xdp_loader: xdp_loader.c xdp_kern.skel.h config.h metadata.h \
+		../include/ace_packet_abi.h ../include/ace_hwtstamp.h \
+		../include/ace_process.h | check-libbpf
 	$(CC) $(CFLAGS) $(WARNINGS) $(LIBBPF_CFLAGS) $< -o $@ $(LIBBPF_LIBS)
 
-afxdp_recv: afxdp_recv.c config.h | check-libbpf check-libxdp
+afxdp_recv: afxdp_recv.c config.h metadata.h ../include/ace_packet_abi.h \
+		../include/ace_process.h | check-libbpf check-libxdp
 	$(CC) $(CFLAGS) $(WARNINGS) $(LIBBPF_CFLAGS) $(LIBXDP_CFLAGS) $< -o $@ \
 		$(LIBXDP_LIBS) $(LIBBPF_LIBS)
 
@@ -70,4 +79,6 @@ clean:
 	rm -f xdp_kern.o xdp_kern.skel.h xdp_kern.skel.h.tmp \
 		xdp_loader afxdp_recv vmlinux.h vmlinux.h.tmp
 
-.PHONY: all clean afxdp check-build-tools check-bpf-tools check-libbpf check-libxdp
+FORCE:
+
+.PHONY: all clean afxdp FORCE check-build-tools check-bpf-tools check-libbpf check-libxdp

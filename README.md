@@ -1,5 +1,8 @@
 # Deterministic Packet Processing Architecture for Mixed-Criticality Traffic on Embedded Linux with PREEMPT_RT
 
+초기 macb 포팅부터 현재 드라이버 변경 및 RT 커널 설정을 재현하는 패치는
+[포팅 패치 묶음과 적용 안내](patches/macb-xdp-20260910/README.md)에 있다.
+
 ## 1. 프로젝트 개요
 
 본 프로젝트는 임베디드 Linux 환경에서 네트워크 패킷을 하나의 RX 경로로 수신한 뒤, XDP를 이용해 패킷의 특성에 따라 서로 다른 처리 경로로 분기하는 구조를 설계하고 성능을 분석한다.
@@ -49,8 +52,9 @@ UDP dst 9002  -> XSKMAP[RX queue] (AF_XDP socket 등록 시)
 그 외         -> XDP_PASS
 ```
 
-필요한 도구가 설치된 타깃에서 다음처럼 빌드한다. `vmlinux.h`는 실행 중인
-커널의 BTF에서 자동 생성되므로 커널 헤더를 별도로 지정할 필요가 없다.
+필요한 도구가 설치된 타깃에서 다음처럼 빌드한다. `vmlinux.h`는 빌드할 때마다
+실행 중인 커널의 BTF에서 다시 생성해 비교하고, 내용이 바뀐 경우에만 교체한다.
+따라서 패치한 커널로 부팅한 뒤 BPF 프로그램을 다시 빌드해야 한다.
 
 ```bash
 sudo apt install clang llvm bpftool libbpf-dev pkg-config
@@ -60,15 +64,82 @@ sudo apt install libxdp-dev
 ```
 
 ```bash
-make            # 루트에서 실행하면 BPF/ 하위 빌드를 자동 호출
-sudo ./BPF/xdp_loader eth0
+make            # BPF tools와 UDP sender/receiver/calibrator를 모두 빌드
+make test       # 외부 NIC/root 권한 없이 가능한 offline 회귀 test
+
+mkdir -p results/run01
+sudo ./BPF/xdp_loader \
+  --output-dir results/run01 \
+  --prefix xdp- \
+  eth0
 ```
 
-Generic XDP(SKB 모드)로 attach하며, `CAP_NET_ADMIN` 권한(일반적으로 root)이 필요하다.
-`xdp_loader`는 `/sys/fs/bpf/ace_xdp`에 `cpu_map`, `xsk_map`, `stats`를 pin한다.
-따라서 `/sys/fs/bpf`가 bpffs로 마운트되어 있어야 한다.
-1초마다 per-CPU 통계를 합산해 `stat[0]`(PASS), `stat[1]`(CPUMAP),
-`stat[2]`(XSK), `stat[3]`(TOTAL) 순서로 출력한다. 종료 시 XDP를 detach하고 map pin을 제거한다.
+Loader는 `XDP_FLAGS_DRV_MODE`로 Native XDP만 attach하며, 기존 프로그램을
+덮어쓰지 않는다. 또한 프로그램을 해당 interface에 device-bound 상태로 load한다.
+Native attach가 netdev를 close/open한 **뒤에** RX hardware timestamp filter를
+활성화하며, detach 뒤에는 저장했던 설정을 명시적으로 다시 적용한다.
+`CAP_NET_ADMIN` 등 BPF/XDP 작업에 필요한 권한이 있어야 한다.
+
+`xdp_loader`는 `/sys/fs/bpf/ace_xdp`에 `cpu_map`, `xsk_map`, `xsk_owners`,
+`stats`, `ingress_records`, `cpumap_records`, `runtime_config`를 pin한다. 따라서
+`/sys/fs/bpf`가 bpffs로 마운트되어 있어야 하며, pin 디렉터리가 비어 있지 않으면
+다른 run의 상태를 덮어쓰지 않고 실패한다.
+
+기본 측정 record 용량은 262,144개이며 `--records`로 1~1,048,576 범위에서
+변경할 수 있다. Loader는 기본 quiet mode이고 `--verbose`를 지정할 때만 1초마다
+통계를 출력한다. SIGINT/SIGTERM으로 종료하면 자신이 붙인 프로그램인지 확인한
+뒤 detach한다. 그 다음 최대 5초 동안 10 ms 간격으로 CPUMAP counter를 확인한다.
+Requested 수와 terminal record/error 수가 같으면 최소 100 ms grace와 10회 연속
+안정 snapshot 뒤 export한다. 5초가 지나도 안정된 차이가 남으면, 마지막 1초 이상
+counter 변화가 없고 10회 연속 안정됐을 때만 redirect/enqueue loss 가능성을 뜻하는
+`unobserved`로 기록하고 export한다. 그 외 timeout은 불완전한 측정으로 보고 pin을
+보존한다.
+
+```text
+xdp-ingress_records.csv
+xdp-cpumap_records.csv
+xdp-stats.csv
+```
+
+출력 파일은 기존 파일을 덮어쓰지 않는다. 정상 종료는 detach → drain/export →
+기존 HWTSTAMP 설정의 명시적 재적용 → unpin 순서로 끝난다. Detach, drain/export,
+HWTSTAMP 복구 중 하나라도 실패하면 복구를 위해 pin을 남긴다. `--prefix`는
+`run_id` 자체가 아니라 결과 디렉터리 안의 안전한 파일명 접두사다.
+
+비정상 종료나 `SIGKILL` 뒤에는 다음처럼 복구한다. 소유 프로그램이 아직 붙어
+있어도 아래 조건을 모두 만족하면 recovery가 직접 안전하게 detach한다.
+
+```bash
+mkdir -p results/run01-recovery
+sudo ./BPF/xdp_loader --recover --output-dir results/run01-recovery eth0
+
+# 또는 CSV를 별도 보존하면서 성공 후 pin까지 제거하려는 경우
+mkdir -p results/run01-final-recovery
+sudo ./BPF/xdp_loader \
+  --recover --cleanup-pins \
+  --output-dir results/run01-final-recovery \
+  eth0
+```
+
+Loader는 attach 전에 고정 map 7개를 pin하고, 56-byte runtime ABI v4에 interface와
+record capacity 외에도 XDP program ID, owner PID와 process start ticks(PID 재사용
+구분), 저장/적용 HWTSTAMP 설정과 `APPLYING`/`APPLIED`/`STOPPING` 상태를 남긴다.
+HWTSTAMP 적용 예정 상태를 ioctl 전에 publish하므로 ioctl과 map update 사이에
+강제 종료되어도 saved/effective 둘 중 현재 상태를 판별해 복구할 수 있다.
+
+XSKMAP은 userspace에서 실제 점유 여부를 lookup할 수 없으므로, AF receiver는
+별도 `xsk_owners` HASH에 PID+process start ticks로 queue를 먼저 claim한 뒤 runtime을
+재검증하고 XSKMAP에 socket을 등록한다. Loader/recovery는 `STOPPING`을 먼저
+publish하고 살아 있는 claim이 있으면 detach를 거부하며, 죽은 receiver의 stale
+claim만 제거한다. Owner가 죽었을 때 현재 Native XDP ID가 저장된 ID와 정확히 같으면 그
+program만 자동 detach하고, 다른 program이 붙어 있으면 foreign XDP로 보고
+거부한다. 이어서 저장된 HWTSTAMP를 복구하고 위의 최대 5초 CPUMAP drain 정책을
+통과한 뒤 CSV를 export한다.
+
+기본 recovery는 pin을 유지한다. `--cleanup-pins`도 export와 HWTSTAMP 복구가 모두
+성공한 경우에만 고정 pin을 제거하며, 상태 복구 실패는 pin 보존과 exit 1로
+남긴다. 기존 CSV는 덮어쓰지 않는다. 정상 종료와 recovery 모두 AF_XDP
+receiver를 먼저 종료해 socket을 닫고 `xsk_owners` claim을 해제해야 한다.
 
 `UDP/9002` 경로는 AF_XDP 소켓의 파일 디스크립터를 `xsk_map`의 RX queue key에
 등록해야 활성화된다. socket이 없는 queue에서는 XDP가 안전하게 `XDP_PASS`로 fallback한다.
@@ -83,21 +154,125 @@ AF_XDP socket API는 현재 libbpf에서 분리되어 libxdp로 제공되므로,
 
 ```bash
 sudo apt install -y libxdp-dev
-make afxdp
-sudo ./BPF/afxdp_recv eth0 0
+make
 ```
 
 먼저 loader를 별도 터미널에서 실행해 XDP와 pinned map을 유지한다.
 
 ```bash
-sudo ./BPF/xdp_loader eth0
+mkdir -p results/run01
+sudo ./BPF/xdp_loader --output-dir results/run01 --prefix xdp- eth0
 ```
 
 그 다음 receiver를 실행한다. receiver는 BPF object를 load하거나 XDP를 attach하지
-않고, loader가 pin한 `xsk_map`과 `stats`만 열어 사용한다. 두 번째 인자는 AF_XDP를
-연결할 RX queue 번호이며 기본값은 `0`이다. 실행 중에는 UDP/9002 패킷의 길이와
-destination port를 출력하고, 종료 시 `received packets`와 `STAT_XSK`를 포함한
-BPF 통계를 출력한다.
+않고, loader가 pin한 `xsk_map`, `xsk_owners`, `stats`, `runtime_config`를
+열어 schema/owner/program 상태를 검증한다. 두 번째 인자는 AF_XDP를
+연결할 RX queue 번호이며 기본값은 `0`이다.
+
+```bash
+sudo ./BPF/afxdp_recv \
+  --output results/run01/xsk-user-records.csv \
+  --records 262144 \
+  eth0 0
+```
+
+Receiver는 packet별 출력이나 hot-path 파일 I/O를 하지 않는다. UMEM packet 바로
+앞의 56-byte XDP metadata와 32-byte experiment header를 검증하고, 미리 할당한
+record 배열에 userspace 관측 시각을 저장한다. 종료하면
+`xsk-user-records.csv`를 `fsync()`하고 BPF/AF_XDP/receiver 통계를 한 번 출력한다.
+각 RX batch에서는 4,096개 UMEM frame의 userspace 소유 상태를 추적해 descriptor
+중복과 recycle 누락을 치명적 invariant 오류로 처리한다.
+출력 파일은 기존 파일을 덮어쓰지 않으며 record 배열이 가득 차면 partial CSV를
+보존한 뒤 run을 실패 처리한다. 현재 AF_XDP 경로는 `XDP_COPY` mode다.
+
+### 확정한 실험 packet 정책
+
+- 실험용 wire header는 [`include/ace_packet_abi.h`](include/ace_packet_abi.h)의
+  32-byte `struct ace_experiment_header` 하나를 UDP/BPF가 공유한다.
+- 한 run 안의 packet key는 `flow_id + sequence`다. `run_id`는 packet이나 BPF
+  map key에 넣지 않고 결과 디렉터리와 별도 manifest로 관리한다.
+- UDP sender/receiver의 `--flow-id`는 필수다. 한 loader run에서 동시에 실행하는
+  각 flow/path에는 서로 다른 flow ID를 배정하고 manifest에 기록한다.
+- 실험 범위는 Ethernet II/IPv4/UDP, VLAN 없음, fragmentation 없음,
+  single-descriptor packet이다.
+- IPv4 MTU는 1500, UDP payload는 최대 1472 bytes로 제한한다. Sender는 DF를
+  설정한다.
+- Native XDP가 활성화된 동안 multi-descriptor RX frame은 전체 chain을
+  drain/recycle하고 DROP한다. XDP multi-buffer/frags는 논문 범위가 아니며,
+  drop 수는 driver의 `rx_xdp_multidesc_drops` 통계로 확인한다.
+
+### Run manifest와 controller
+
+`monitor/controller.sh`는 timestamp와 PID를 조합한 고유 `run_id` 디렉터리를
+만들고, `ACE_RESULT_ROOT`와 `ACE_INTERFACE` 환경변수로 결과 root/interface를
+받는다. 실행 시작 시 `monitor/capture_manifest.py`가 `manifest.json`, source
+tree 상태와 dirty patch, kernel/BPF/userspace artifact hash, boot/CPU/NIC/PTP/tool
+정보를 기록한다. 기본 `rpi-6.18.y` merge-base와 이후 커밋 목록/메일형 patch
+series, `git diff --binary`와 untracked source의 raw binary patch/hash, 실제 boot
+config·선택 kernel image·DTB,
+overlay와 설치 module tree의 결합 SHA-256도 함께 남긴다. 기준 branch 이름이
+다르면 `capture_manifest.py --kernel-base-ref REF`로 지정한다. 기존 파일은
+덮어쓰지 않는다.
+
+```bash
+ACE_INTERFACE=eth0 \
+ACE_RESULT_ROOT="$PWD/results" \
+./monitor/controller.sh 50 1 60 0,1,2
+```
+
+현재 controller는 CPU/network 부하와 monitoring 및 manifest capture까지
+담당한다. XDP loader, receiver, sender, calibration을 하나의 완전 자동화된
+lifecycle로 묶는 작업은 아직 남아 있다.
+
+### Offline record join
+
+한 run의 record는 `analysis/join_results.py`로 `flow_id + sequence` full outer
+join한다. CPUMAP/AF_XDP/UDP 입력은 해당 경로를 측정했을 때만 지정한다.
+
+```bash
+python3 analysis/join_results.py \
+  --manifest results/run01/manifest.json \
+  --ingress results/run01/xdp-ingress_records.csv \
+  --cpumap results/run01/xdp-cpumap_records.csv \
+  --afxdp results/run01/xsk-user-records.csv \
+  --udp-native results/run01/udp-samples.bin \
+  --phc-calibration results/run01/phc-monotonic-before.csv \
+  --phc-calibration results/run01/phc-monotonic-after.csv \
+  --output-csv results/run01/joined.csv \
+  --summary-json results/run01/summary.json
+```
+
+`--manifest`는 필수다. Analyzer는 manifest의 version/`run_id`와 모든
+입출력이 같은 resolved run directory에 속하는지 먼저 검증한다. 또한
+requested path, metadata/validation flag, timestamp/error 조합, ingress와
+CPUMAP/AF_XDP/UDP sink의 일치를 검사한다. 의미적으로 모순된 raw row는
+`inconsistency_flags`로 보존하되 해당 metric에서 제외한다.
+
+`--phc-calibration`은 전/후 파일처럼 반복 지정할 수 있고, 선택된 PHC
+calibration 표본 사이 offset을 선형 보간한다. 기본
+정책에서는 calibration 범위 밖 timestamp의 clock-crossing metric을 제외하고
+out-of-range로 집계한다. `--allow-endpoint-clamp`는 가까운 endpoint offset을
+사용하는 탐색적 분석에서만 명시한다. 최종 run은 직전/직후 calibration이 측정
+구간을 bracket해야 한다. `xdp-hw`, `cpumap-xdp`, `user-cpumap`, `user-xdp`, `user-hw` 지연과
+누락·중복·충돌·음수/out-of-range, 각 metric의
+count/min/mean/median/p95/p99/observed maximum을 summary JSON에 남긴다. 출력 두
+파일은 `O_EXCL`과 `fsync()`를 사용해 기존 결과를 덮어쓰지 않는다. 모든
+입력과 두 출력의 크기/SHA-256을 묶은 `summary.json.complete`를 마지막에
+만들어 완결된 run만 후속
+분석에 들어가게 한다. UDP binary는 capture host와 같은 native C
+ABI/byte order의 환경에서 분석해야 한다.
+
+여러 독립 run은 completion marker만 입력으로 받는
+`analysis/aggregate_runs.py`로 묶어 pooled percentile·명시적 deadline miss와,
+독립 run에 동일 가중치를 둔 p50/p95/p99·miss rate 평균의 양측 95%
+Student-t 신뢰구간을 계산한다. Pooled packet 통계에는 CI를 붙이지 않는다.
+자세한 사용법과 통계 단위는
+[`analysis/README.md`](analysis/README.md)에 있다.
+
+```bash
+python3 -m unittest analysis.tests.test_join_results \
+  analysis.tests.test_aggregate_runs tests.test_capture_manifest
+```
 
 ---
 
@@ -336,9 +511,10 @@ Different execution paths
 
 높은 workload에서 발생하는 latency spike를 비교한다.
 
-### Worst-case latency
+### Observed maximum latency
 
-측정 구간에서 관찰된 최대 latency를 확인한다.
+측정 구간에서 관찰된 최대 latency를 확인한다. 유한한 실험에서 얻은 값이므로
+수학적으로 보장된 worst-case 또는 WCET로 표현하지 않는다.
 
 ### Jitter
 
