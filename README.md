@@ -3,6 +3,9 @@
 초기 macb 포팅부터 현재 드라이버 변경 및 RT 커널 설정을 재현하는 패치는
 [포팅 패치 묶음과 적용 안내](patches/macb-xdp-20260910/README.md)에 있다.
 
+실물 수신 검증 결과와 개별 경로·동시 부하 측정의 진행 순서는
+[측정 돌리는 법](측정돌리는법.md)에 정리했다.
+
 ### 코드를 처음 읽을 때
 
 `드라이버 포팅한 그 모든것을 담아.md`는 초기 포팅의 배경과 당시 검증 기록이다.
@@ -169,6 +172,33 @@ receiver를 먼저 종료해 socket을 닫고 `xsk_owners` claim을 해제해야
 등록해야 활성화된다. socket이 없는 queue에서는 XDP가 안전하게 `XDP_PASS`로 fallback한다.
 
 생성 파일을 정리하려면 `make clean`을 실행한다.
+
+### 새 커널 부팅 후 최소 런타임 확인 (2026-09-10)
+
+Pi 5의 `6.18.46-thesis-test-rt+`에서 BTF에 맞춰 BPF를 다시 빌드했다.
+최초 로드에서는 UDP parser의 packet 범위 검증이 거부됐다. IP/UDP 길이 검사는
+정수 비교로 유지하고, 메모리 접근은 `data_end`와 직접 비교하도록 수정해 해결했다.
+커널 재빌드는 필요하지 않았다.
+
+수정 후 BPF load와 `eth0` Native XDP attach, RX timestamp filter `all` 설정,
+종료 시 detach·CSV 저장·기존 filter `none` 복원·pin 정리를 확인했다.
+오프라인 테스트도 통과했다. 이 확인은 케이블 없이 수행해 실제 RX 표본은 0개이며,
+AF_XDP 수신·CPUMAP 패킷 전달·HW timestamp 값·multi-descriptor DROP의 실제
+패킷 검증을 완료했다는 뜻은 아니다.
+
+### 외부 Ethernet 수신 검증 (2026-09-10)
+
+이후 다른 Linux Pi에서 각 경로에 1 ms 주기로 1,000개씩 송신했다.
+PASS·CPUMAP·AF_XDP 모두 최초 XDP 기록과 사용자 수신이 1,000개씩 일치했으며,
+CPUMAP의 목적 CPU 기록도 1,000개였다. Packet ID에 누락·중복이 없었고,
+최초 XDP의 HW timestamp는 세 경로 모두 1,000개에서 유효했다.
+PASS socket 및 AF_XDP metadata로 전달된 HW timestamp도 원본과 일치했다.
+
+CPUMAP UDP의 ancillary HW timestamp 누락은 새 SKB에 그 값을 채우지 않는
+현재 구조의 예상 동작이며, 최초 XDP 기록과 packet ID로 연결해서 분석한다.
+이 테스트는 기능 확인으로, 전후 PHC 보정·CPU 격리 조건을 갖춘 성능 측정이나
+동시 부하·jumbo DROP 검증까지 완료한 것은 아니다.
+자세한 결과와 남은 실험 범위는 [측정 돌리는 법](측정돌리는법.md)을 참고한다.
 
 ### AF_XDP 수신기
 

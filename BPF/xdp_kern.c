@@ -117,8 +117,6 @@ static __always_inline int parse_experiment_packet(struct xdp_md *ctx,
 	struct ethhdr *eth = data;
 	struct iphdr *iph;
 	struct udphdr *udp;
-	void *ip_end;
-	void *udp_end;
 	void *payload;
 	__u32 ihl_len;
 	__u32 ip_len;
@@ -148,7 +146,6 @@ static __always_inline int parse_experiment_packet(struct xdp_md *ctx,
 		count_stat(ACE_XDP_STAT_IPV4_INVALID);
 		return 0;
 	}
-	ip_end = (void *)iph + ip_len;
 
 	frag_off = bpf_ntohs(iph->frag_off);
 	if (frag_off & ACE_IPV4_FRAGMENT_MASK) {
@@ -163,18 +160,22 @@ static __always_inline int parse_experiment_packet(struct xdp_md *ctx,
 	}
 
 	udp = (void *)iph + ihl_len;
-	if ((void *)(udp + 1) > data_end || (void *)(udp + 1) > ip_end) {
+	/* IP/UDP 내부 길이는 위아래의 정수 비교로 확인하고, 실제 메모리 접근은
+	 * 반드시 data_end와 직접 비교한다. ip_end 같은 중간 포인터와 함께
+	 * 비교하면 LLVM이 data_end 검사를 중복으로 제거할 수 있는데, verifier는
+	 * 두 packet 포인터 사이의 비교만으로는 읽을 수 있는 범위를 인정하지 않는다.
+	 */
+	if ((void *)(udp + 1) > data_end) {
 		count_stat(ACE_XDP_STAT_IPV4_INVALID);
 		return 0;
 	}
 
 	udp_len = (__u32)bpf_ntohs(udp->len);
 	if (udp_len < sizeof(*udp) || udp_len > ip_len - ihl_len ||
-	    (void *)udp + udp_len > data_end || (void *)udp + udp_len > ip_end) {
+	    (void *)udp + udp_len > data_end) {
 		count_stat(ACE_XDP_STAT_IPV4_INVALID);
 		return 0;
 	}
-	udp_end = (void *)udp + udp_len;
 
 	dest = bpf_ntohs(udp->dest);
 	if (dest == ACE_XDP_PASS_PORT)
@@ -188,8 +189,7 @@ static __always_inline int parse_experiment_packet(struct xdp_md *ctx,
 
 	payload = (void *)(udp + 1);
 	if (udp_len < sizeof(*udp) + sizeof(wire) ||
-	    payload + sizeof(wire) > data_end ||
-	    payload + sizeof(wire) > udp_end) {
+	    payload + sizeof(wire) > data_end) {
 		count_stat(ACE_XDP_STAT_PACKET_HEADER_INVALID);
 		return -1;
 	}
