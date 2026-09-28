@@ -11,6 +11,13 @@
 - 실험 설정 및 로그 자동 저장
 - 실험 종료 또는 `Ctrl+C` 입력 시 실행한 프로세스 정리
 
+실험 환경 검증에는 다음 두 스크립트를 사용한다.
+
+- `verify_cyclictest.sh`
+  - Case 1과 Case 2의 scheduling latency 비교
+- `verify_irq_affinity.sh`
+  - Case 2에서 NIC IRQ affinity가 실제 기대 CPU에서 동작하는지 검증
+
 `controller.sh`는 시스템 부하와 상태를 관리·관찰하기 위한 스크립트이며, **애플리케이션의 OWD/latency 자체를 측정하는 도구는 아니다.** 핵심 latency 결과와 함께 시스템 로그를 비교하여 Case별 성능 차이와 이상 결과의 원인을 분석하는 용도로 사용한다.
 
 ---
@@ -32,24 +39,58 @@
 
 ## 2. 디렉터리 구조
 
-실험을 실행하면 `results/` 아래에 실행 시각을 기준으로 결과 디렉터리가 자동 생성된다.
+주요 실험 및 검증 스크립트는 다음과 같이 구성된다.
 
 ```text
 .
 ├── controller.sh
+├── verify_cyclictest.sh
+├── verify_irq_affinity.sh
+├── LOG_GUIDE.md
 ├── README.md
 └── results/
-    └── YYYYMMDD_HHMMSS/
-        ├── config.txt
-        ├── iperf3.log
-        ├── mpstat.log
-        ├── network.log
-        └── stress_cpuN.log
+```
+
+### controller.sh 결과
+
+`controller.sh`를 실행하면 `results/` 아래에 실행 시각을 기준으로 결과 디렉터리가 자동 생성된다.
+
+```text
+results/
+└── YYYYMMDD_HHMMSS/
+    ├── config.txt
+    ├── iperf3.log
+    ├── mpstat.log
+    ├── network.log
+    └── stress_cpuN.log
 ```
 
 CPU 부하를 여러 코어에 적용하면 `stress_cpu0.log`, `stress_cpu1.log`처럼 CPU별 로그가 각각 생성된다.
 
-> `RESULT_ROOT`가 `./results`이므로 가급적 이 디렉터리에서 `controller.sh`를 실행한다. 다른 작업 디렉터리에서 실행하면 `results/`도 현재 작업 디렉터리를 기준으로 생성된다.
+### verify_cyclictest.sh 결과
+
+```text
+results/
+└── cyclictest_<case>_<timestamp>/
+    ├── system_info.txt
+    ├── cyclictest.txt
+    └── summary.txt
+```
+
+### verify_irq_affinity.sh 결과
+
+```text
+results/
+└── irq_affinity_<interface>_cpu<CPU>_<timestamp>/
+    ├── system_info.txt
+    ├── affinity.txt
+    ├── interrupts_before.txt
+    ├── interrupts_after.txt
+    ├── irq_delta.txt
+    └── mpstat_irq.log
+```
+
+> 각 스크립트의 `RESULT_ROOT`가 `./results`이므로 가급적 이 디렉터리에서 실행한다. 다른 작업 디렉터리에서 실행하면 `results/`도 현재 작업 디렉터리를 기준으로 생성된다.
 
 ---
 
@@ -82,6 +123,8 @@ stress-ng CPU 부하 시작
       ↓
 모든 프로세스 종료 및 로그 저장
 ```
+
+본 실험 및 실험 환경 검증 동안 `controller.sh`를 실행하여 동일한 CPU/network 부하와 시스템 모니터링 조건을 유지한다.
 
 ### 3.2 실행 형식
 
@@ -122,6 +165,8 @@ stress-ng CPU 부하 시작
 
 ```bash
 chmod +x controller.sh
+chmod +x verify_cyclictest.sh
+chmod +x verify_irq_affinity.sh
 ```
 
 ---
@@ -142,7 +187,7 @@ chmod +x controller.sh
 
 ---
 
-## 5. 결과 파일
+## 5. controller.sh 결과 파일
 
 ### 5.1 config.txt
 
@@ -229,52 +274,110 @@ tail -f results/<timestamp>/mpstat.log
 tail -f results/<timestamp>/network.log
 ```
 
+각 로그 및 검증 결과 파일의 상세한 해석 방법은 `LOG_GUIDE.md`를 참고한다.
+
 ---
 
 ## 7. 실험 환경 검증
 
-각 Case의 실험 환경이 의도한 대로 실제 적용되었는지 확인하기 위해 다음 검증을 수행한다. 이 단계는 이상 결과가 발생했을 때만 수행하는 선택적 분석이 아니라, **각 Case의 구성을 검증하기 위한 필수 절차**이다.
+각 Case의 실험 환경이 의도한 대로 실제 적용되었는지 확인하기 위해 다음 검증을 수행한다.
+
+이 단계는 이상 결과가 발생했을 때만 수행하는 선택적 분석이 아니라, **Case 구성을 검증하기 위한 필수 절차**이다.
 
 | 검증 대상 | 확인하려는 것 | 도구 / 방법 | 의미 |
 |---|---|---|---|
-| Case 1 ↔ Case 2 | PREEMPT_RT 적용 효과 | `cyclictest` | scheduling latency가 실제로 감소했는지 확인 |
-| Case 2 | 실제 IRQ 처리 CPU | `mpstat -I CPU` | 실제 트래픽에서 어느 CPU가 IRQ를 처리했는지 확인 |
-| Case 3 | XDP CPUMAP steering | `xdp_cpumap_enqueue`, `xdp_cpumap_kthread` tracepoint + `trace-cmd` | 패킷이 실제 목표 CPU로 redirect됐는지 확인 |
+| Case 1 ↔ Case 2 | PREEMPT_RT 적용에 따른 scheduling latency 차이 | `verify_cyclictest.sh` + `cyclictest` | Vanilla와 PREEMPT_RT의 scheduling latency 차이를 확인 |
+| Case 2 | 실제 IRQ 처리 CPU | `verify_irq_affinity.sh` + `/proc/interrupts` + `mpstat -I CPU` | IRQ affinity가 실제 트래픽에서도 기대 CPU에 적용되는지 확인 |
 
-### Case 1 ↔ Case 2: cyclictest
+### 7.1 Case 1 ↔ Case 2: verify_cyclictest.sh
 
 목적은 Vanilla와 PREEMPT_RT 환경의 **scheduling latency 차이**를 확인하는 것이다.
 
 논문의 네트워크 latency 결과와 별도로 PREEMPT_RT가 시스템 스케줄링 지연에 실제 영향을 주었는지 확인하는 보조 근거로 사용한다.
 
-### Case 2: mpstat -I CPU
+`verify_cyclictest.sh`는 자체적으로 `stress-ng` 부하를 생성하지 않는다. 실험 부하는 `controller.sh`가 담당하며, 검증 스크립트는 현재 실험 조건에서 `cyclictest`를 한 번 수행하여 scheduling latency를 기록한다.
+
+실행 형식:
 
 ```bash
-mpstat -I CPU <INTERVAL>
+sudo ./verify_cyclictest.sh <case> [duration_sec]
 ```
 
-IRQ affinity를 설정한 뒤, 실제 실험 트래픽에서도 IRQ가 기대한 CPU에서 처리되는지 확인한다.
+예시:
 
-단순히 affinity 설정값만 확인하는 것보다 **실제 동작 결과를 함께 확인**하는 용도이다.
+```bash
+sudo ./verify_cyclictest.sh case1 300
+sudo ./verify_cyclictest.sh case2 300
+```
 
-### Case 3: XDP CPUMAP tracepoint + trace-cmd
+`case1`, `case2` 인자는 결과를 구분하기 위한 라벨이며 스크립트가 커널을 자동으로 변경하지는 않는다.
 
-확인 대상:
+결과 파일:
 
 ```text
-xdp_cpumap_enqueue
-xdp_cpumap_kthread
+system_info.txt
+cyclictest.txt
+summary.txt
 ```
 
-CPUMAP redirect가 실제로 발생하고 목표 CPU 쪽 kthread에서 처리되는지 tracepoint를 통해 확인한다.
+주요 확인 항목:
 
-커널에 따라 사용 가능한 tracepoint가 다를 수 있으므로 실제 측정 전에 현재 커널에서 해당 이벤트가 존재하는지 확인한다.
+- CPU별 Min scheduling latency
+- CPU별 Avg scheduling latency
+- CPU별 Max scheduling latency
+- 전체 최대 latency
+- latency histogram
+- histogram overflow 여부
+
+Case 1과 Case 2를 비교할 때 CPU governor와 `controller.sh`의 부하 조건을 동일하게 유지해야 한다.
+
+### 7.2 Case 2: verify_irq_affinity.sh
+
+Case 2에서는 IRQ affinity 설정값만 확인하는 것이 아니라 **실제 네트워크 트래픽이 들어오는 동안 해당 IRQ가 기대 CPU에서 처리되는지 직접 확인**한다.
+
+`verify_irq_affinity.sh`는 다음 항목을 확인한다.
+
+- `smp_affinity_list`
+- `effective_affinity_list`
+- `/proc/interrupts` 측정 전/후 값
+- 대상 IRQ의 CPU별 증가량
+- `mpstat -I CPU` 기반 시간별 IRQ 처리 위치
+- 측정 구간 동안의 NIC RX/TX activity
+
+실행 형식:
 
 ```bash
-trace-cmd list -e | grep xdp_cpumap
+sudo ./verify_irq_affinity.sh <interface> <expected_cpu> [duration_sec] [irq]
 ```
 
-※ 이 항목은 CPUMAP 구현 담당 파트에서 별도로 검증한다.
+예시:
+
+```bash
+sudo ./verify_irq_affinity.sh eth0 2 60 106
+```
+
+스크립트는 IRQ affinity를 직접 설정하거나 변경하지 않는다. 실험 전에 사용자가 원하는 CPU로 affinity를 설정해야 한다.
+
+예를 들어 IRQ 106을 CPU2에 고정하려면:
+
+```bash
+echo 2 | sudo tee /proc/irq/106/smp_affinity_list
+```
+
+설정 확인:
+
+```bash
+cat /proc/irq/106/smp_affinity_list
+cat /proc/irq/106/effective_affinity_list
+```
+
+실제 동작 판정의 주 근거는 `/proc/interrupts`의 측정 전/후 CPU별 IRQ counter delta이다.
+
+`mpstat -I CPU` 결과는 측정 시간 동안 대상 IRQ가 어느 CPU에서 처리되었는지 시간축으로 확인하는 보조 근거로 사용한다.
+
+`controller.sh`와 송신기 트래픽이 이미 실행 중이라면 별도의 트래픽을 추가로 생성할 필요가 없다.
+
+테스트 후 affinity를 원래 상태로 복구해야 하는 경우 사용자가 직접 기존 값을 다시 설정한다.
 
 ---
 
@@ -310,17 +413,21 @@ Packet Loss가 애플리케이션 성능 한계 때문인지, NIC/driver/kernel 
 
 ## 9. 권장 실험 순서
 
+`controller.sh`는 본 실험과 실험 환경 검증 동안 계속 실행하여 동일한 CPU/network 부하와 시스템 모니터링 조건을 유지한다.
+
 ```text
 1. 실험 Case 구성
    ↓
-2. 실험 환경 검증
-   - Case 1 ↔ Case 2: cyclictest
-   - Case 2: mpstat -I CPU
-   - Case 3: XDP CPUMAP tracepoint + trace-cmd
+2. controller.sh 실행
+   - CPU load
+   - CPU/network monitoring
+   - iperf3 server
    ↓
-3. controller.sh 실행
+3. 송신기 트래픽 / 실험 애플리케이션 실행
    ↓
-4. 송신기 트래픽 / 실험 애플리케이션 실행
+4. 필요한 실험 환경 검증 수행
+   - Case 1 ↔ Case 2: verify_cyclictest.sh
+   - Case 2: verify_irq_affinity.sh
    ↓
 5. latency, loss, goodput 등 핵심 결과 수집
    ↓
@@ -329,7 +436,11 @@ Packet Loss가 애플리케이션 성능 한계 때문인지, NIC/driver/kernel 
 7. 결과가 이상하면 '이상 결과 원인 분석' 표에 따라 추가 분석
 ```
 
-**실험 환경 검증은 각 Case가 의도한 설정대로 실제 동작하는지 확인하기 위해 반드시 수행한다.** 반면 `perf`, `ftrace`, `rtla`, `dropwatch` 등 이상 결과 원인 분석용 도구는 기본적으로 항상 실행하지 않고, 결과에 이상이 있을 때 필요한 도구를 선택적으로 추가한다. 이렇게 하면 상세 tracing에 따른 observer effect를 줄일 수 있다.
+**실험 환경 검증은 해당 Case의 핵심 구성이 의도대로 실제 동작하는지 확인하기 위해 수행한다.**
+
+반면 `perf`, `ftrace`, `rtla`, `dropwatch` 등 이상 결과 원인 분석용 도구는 기본적으로 항상 실행하지 않고, 결과에 이상이 있을 때 필요한 도구를 선택적으로 추가한다.
+
+이렇게 하면 상세 tracing에 따른 observer effect를 줄일 수 있다.
 
 ---
 
@@ -340,6 +451,26 @@ Packet Loss가 애플리케이션 성능 한계 때문인지, NIC/driver/kernel 
 `controller.sh`는 `iperf3` client의 접속을 기다린 뒤 타이머를 시작하지 않는다. 모니터링과 CPU 부하를 시작한 뒤 바로 `DURATION` 카운트가 진행된다.
 
 따라서 송신기 시작이 늦으면 실제 트래픽이 흐른 시간과 controller의 측정 시간이 달라질 수 있다. 반복 실험에서는 **송신기와 수신기의 시작 순서를 동일하게 유지하고 실험 구간을 맞추는 것**이 중요하다.
+
+### controller.sh는 실험 및 검증 동안 계속 실행
+
+`controller.sh`는 CPU/network 부하와 시스템 상태 측정을 담당한다.
+
+`verify_cyclictest.sh`와 `verify_irq_affinity.sh`는 별도의 부하 환경을 만드는 스크립트가 아니라 **현재 실험 환경이 의도대로 동작하는지 검증하는 도구**이다.
+
+따라서 환경 검증 시에도 `controller.sh`가 제공하는 기존 실험 조건을 그대로 사용한다.
+
+### verify_cyclictest.sh는 별도 CPU 부하를 생성하지 않음
+
+CPU 부하는 `controller.sh`가 담당한다.
+
+`verify_cyclictest.sh`는 현재 조건에서 `cyclictest`만 수행하고 scheduling latency 결과를 저장한다.
+
+### verify_irq_affinity.sh는 affinity를 변경하지 않음
+
+`verify_irq_affinity.sh`는 현재 affinity 설정을 읽고 실제 IRQ 처리 CPU를 검증한다.
+
+실험 전 affinity 설정과 실험 후 원상복구는 사용자가 직접 수행한다.
 
 ### network.log는 eth0만 측정
 
@@ -357,26 +488,44 @@ Packet Loss가 애플리케이션 성능 한계 때문인지, NIC/driver/kernel 
 
 ### 추가 분석 도구는 필요할 때만 사용
 
-`controller.sh`에 포함되지 않은 도구는 목적에 따라 별도로 실행한다. `cyclictest`, `mpstat -I CPU`, XDP CPUMAP tracepoint + `trace-cmd`는 **Case 구성을 확인하기 위한 필수 실험 환경 검증**에 사용하고, `perf`, `rtla`, `ethtool`, `dropwatch`, `ftrace` 등은 **이상 결과의 원인을 분석할 때 선택적으로 사용**한다.
+`verify_cyclictest.sh`와 `verify_irq_affinity.sh`는 **실험 환경 검증**에 사용한다.
+
+`perf`, `rtla`, `ethtool`, `dropwatch`, `ftrace`, `trace-cmd` 등은 **이상 결과의 원인을 분석할 때 선택적으로 사용**한다.
 
 ---
 
 ## 11. 요약
 
-이 디렉터리의 도구는 **필수 실험 절차와 필요 시 수행하는 추가 분석 절차**로 구분한다.
+이 디렉터리의 도구는 **기본 실험**, **실험 환경 검증**, **필요 시 수행하는 추가 분석**으로 구분한다.
 
 ```text
 [기본 실험]
-controller.sh
-    └─ CPU load + CPU/network monitoring + iperf3 server
 
-[환경 검증 - 필수]
-cyclictest / mpstat -I CPU / XDP CPUMAP tracepoint
-    └─ 각 Case가 실제로 의도한 구성대로 동작하는지 확인
+controller.sh
+└─ CPU load
+   + CPU/network monitoring
+   + iperf3 server
+
+
+[실험 환경 검증]
+
+Case 1 ↔ Case 2
+└─ verify_cyclictest.sh
+   └─ scheduling latency 확인
+
+Case 2
+└─ verify_irq_affinity.sh
+   └─ 실제 IRQ 처리 CPU 확인
+
 
 [이상 결과 분석 - 필요 시]
+
 perf / rtla / ethtool / ip / dropwatch / ftrace / trace-cmd
-    └─ latency, loss, CPU 이상, 재현성 문제의 원인 추적
+└─ latency, loss, CPU 이상, 재현성 문제의 원인 추적
 ```
 
-각 Case에서는 동일한 controller 조건을 유지하면서 실험 환경 검증을 반드시 수행한다. 이후 상세 원인 분석 도구는 이상 결과가 발생한 경우에만 추가하여 실험의 재현성과 observer effect를 함께 관리한다.
+각 Case에서는 동일한 `controller.sh` 조건을 유지하면서 필요한 실험 환경 검증을 수행한다.
+
+`verify_cyclictest.sh`는 Vanilla와 PREEMPT_RT의 scheduling latency 차이를 확인하고, `verify_irq_affinity.sh`는 Case 2에서 IRQ affinity가 실제 트래픽 처리에도 적용되었는지 확인한다.
+
+이후 상세 원인 분석 도구는 이상 결과가 발생한 경우에만 추가하여 실험의 재현성과 observer effect를 함께 관리한다.
