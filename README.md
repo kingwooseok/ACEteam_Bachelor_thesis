@@ -1,20 +1,32 @@
 # Deterministic Mixed-Criticality Packet Processing on Embedded PREEMPT_RT Linux with Driver-Level BPF
 
-Raspberry Pi 5의 PREEMPT_RT Linux에서 macb Native XDP로 UDP 패킷을 분류하고,
-PASS·CPUMAP·AF_XDP 경로의 수신 지연을 측정하는 프로젝트다.
+Raspberry Pi 5의 PREEMPT_RT Linux에서 macb Native XDP를 분류기로 사용하여,
+트래픽의 중요도와 커널 네트워크 기능 요구에 따라 PASS·CPUMAP·AF_XDP를 함께
+운용하는 혼합 중요도 패킷 처리 아키텍처를 연구한다. 기존 Linux의 범용성과
+호환성을 유지하면서 필요한 트래픽에 CPU 격리와 스택 우회를 선택적으로 적용해,
+제한된 자원에서 중요 트래픽의 결정성을 확보하는 것이 목표다.
 드라이버 패치, 송수신 프로그램, 시계 보정 및 결과 분석 도구를 포함한다.
 
-## 구현
+## 연구 목표
+
+세 경로의 역할을 함께 살리는 것이 연구의 중심이다. 개별 경로 측정으로 각
+구성요소의 비용과 특성을 파악하고, 동시 혼합 트래픽 실험으로 분류·격리가
+중요도별 tail latency와 deadline miss, 일반 트래픽 처리량 및 CPU 사용률에
+미치는 영향을 평가한다. 같은 총 부하의 all-PASS 구성과 비교해 경로 분리의 효과를 분석한다.
+
+## 경로 역할과 구현
 
 프로젝트 송신기가 만드는 실험 패킷은 다음 경로로 전달된다.
 포트·대상 CPU·인터페이스 기본값은 [BPF/config.h](BPF/config.h)에서 설정한다.
 
-| UDP 목적지 포트 | 수신 경로 |
-| --- | --- |
-| 9000 | XDP_PASS → Linux UDP socket |
-| 9001 | CPUMAP → CPU 3 → Linux UDP socket |
-| 9002 | AF_XDP → 사용자 프로그램 (`XDP_COPY` 모드) |
+| 경로와 역할 | UDP 목적지 포트 | 현재 수신 경로 |
+| --- | --- | --- |
+| PASS: 일반 트래픽의 범용 처리와 기존 네트워크 기능 유지 | 9000 | XDP_PASS → Linux UDP socket |
+| CPUMAP: 커널 기능이 필요한 중요 트래픽을 전용 CPU로 분리 | 9001 | CPUMAP → CPU 3 → Linux UDP socket |
+| AF_XDP: 스택 기능이 불필요한 중요 트래픽의 저지연 처리 | 9002 | AF_XDP → 사용자 프로그램 (`XDP_COPY` 모드) |
 
+현재 실험에서는 UDP 포트로 트래픽 종류를 지정한다. CPUMAP의 전용 CPU 격리는
+CPU affinity·IRQ·스케줄링 설정과 함께 구성한다.
 그 외 트래픽은 XDP_PASS로 전달하며, AF_XDP 소켓이 없는 RX queue도 PASS로 처리한다.
 
 - [BPF/](BPF/): XDP 분류·기록, loader, AF_XDP 수신기.

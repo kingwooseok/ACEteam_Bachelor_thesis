@@ -818,21 +818,31 @@ perf/ftrace/telemetry를 main run과 diagnostic run으로 분리
 
 # 1. 연구 목적
 
-Resource-constrained ARM Embedded Linux에서 critical UDP traffic을 대상으로,
-CPU/network interference가 tail latency와 결정성에 미치는 영향을 측정하고,
-XDP + CPUMAP을 이용한 packet-processing CPU steering/isolation이 일반 Linux stack 대비 얼마나 효과적인지 평가함.
+Resource-constrained ARM Embedded PREEMPT_RT Linux에서 Native XDP를
+packet classifier / dispatcher로 사용하고, 트래픽 중요도와 kernel networking
+기능 요구에 따라 세 execution path를 함께 운용하는 구조를 평가함.
+
+| 트래픽 요구 | 경로 | 역할 |
+|---|---|---|
+| Best-effort / low-criticality | XDP_PASS | 기존 kernel stack과 socket API의 범용성·호환성 유지 |
+| Critical + kernel 기능 필요 | CPUMAP + PREEMPT_RT | 전용 CPU로 처리 분리, kernel stack/API 유지 |
+| Critical + kernel 기능 불필요 | AF_XDP | kernel stack을 우회하는 저지연 userspace 처리 |
+
+필요한 트래픽에만 격리와 스택 우회를 적용하여, 제한된 CPU 자원에서 각 경로의
+장점을 살리면서 중요 트래픽의 결정성을 확보하는 것이 연구 목표임.
 
 핵심 질문:
 
-> PREEMPT_RT 환경에서 kernel stack을 완전히 bypass하지 않고도,
-> XDP + CPUMAP으로 packet-processing workload를 특정 CPU로 steering했을 때
-> 일반 Linux network stack 대비 tail latency와 결정성이 개선되는가?
+> 세 경로가 공존하는 mixed-criticality architecture가 동일한 총 부하의 all-PASS
+> 구성에 비해 중요 트래픽의 tail latency와 deadline miss를 어떻게 바꾸며,
+> 일반 트래픽 처리와 CPU 자원 사용에는 어떤 영향을 주는가?
 
-부가 질문:
+이를 뒷받침하는 구성요소별 질문:
 
-1. XDP hook 자체의 overhead는 어느 정도인가?
-2. CPUMAP steering이 실제 tail 개선에 기여하는가?
-3. AF_XDP kernel bypass와 비교하면 XDP + CPUMAP은 어느 정도 수준인가?
+1. XDP hook과 계측 자체의 overhead는 어느 정도인가?
+2. CPUMAP의 CPU steering과 실행 환경 격리는 kernel 기능이 필요한 중요 트래픽에 어떤 효과를 주는가?
+3. AF_XDP는 kernel 기능이 불필요한 중요 트래픽에서 어떤 latency·CPU 비용 특성을 보이는가?
+4. 세 경로를 동시에 운용할 때 공유 NIC/RX 처리 구간의 간섭과 경로별 요구 충족은 어떻게 달라지는가?
 
 ---
 
@@ -852,32 +862,41 @@ Raspberry Pi (Receiver / DUT)
 
 ---
 
-# Multi-queue는 메인 구조에 사용하지 않음
+# Single RX 기반의 세 경로 공존
 
-참고 논문처럼 dedicated NIC queue 여러 개를 구성하는 것이 메인 목표가 아님.
-
-본 연구는:
+현재 구조는 하나의 RX ingress에서 Native XDP로 패킷을 분류함.
 
 ```text
-software packet-processing placement
-=
-XDP + CPUMAP
+Single RX ingress
+    → Native XDP classifier
+        → XDP_PASS: 일반 kernel networking
+        → CPUMAP: 전용 CPU + kernel networking
+        → AF_XDP: userspace 저지연 처리
 ```
 
-에 집중함.
+Dedicated NIC queue를 여러 개 두는 대신 software 분류와 경로별 처리 배치를
+사용함. CPUMAP steering은 이 아키텍처의 CPU 분리 수단이며, AF_XDP와 PASS도
+서로 다른 기능 요구를 담당하는 구성요소임.
 
-따라서 contribution은:
-
-> resource-constrained ARM Embedded Linux에서 XDP + CPUMAP의
-> packet-processing steering 효과를 CPU/network interference 조건에서 실험적으로 분석
-
-으로 잡음.
+단일 RX ingress에서 공유하는 NIC/driver 처리와 분류 이후의 경로별 처리를
+함께 고려하여, 혼합 부하에서 중요 트래픽의 결정성과 일반 트래픽 처리,
+CPU 자원 사용을 평가함.
 
 ---
 
 # Traffic
 
-Main critical traffic:
+동시에 운용할 트래픽은 세 종류로 구성함.
+
+- Best-effort / low-criticality → PASS
+- Critical + kernel 기능 필요 → CPUMAP
+- Critical + kernel 기능 불필요 → AF_XDP
+
+현재 UDP 포트는 이 요구사항을 표현하는 실험용 class 식별자로 사용함.
+각 flow의 PPS·packet size·deadline과 전체 flow 비율은 측정 전에 정하고,
+mixed 구성과 all-PASS 대조군에 같은 offered load를 적용함.
+
+아래는 critical flow의 pilot 조건 예시임.
 
 ```text
 Protocol : UDP
@@ -1167,6 +1186,19 @@ Main OWD run에서 perf/ftrace/rtla를 상시 켜지 않는 이유:
 
 # 26. ★ perf stat 경험용
 
+이 부록의 C1~C4는 구성요소별 진단 case를 뜻함.
+구현 명세의 case 번호와 혼용하지 않고 run manifest에 실제 구성을 기록함.
+
+| 진단 case | 구성 |
+|---|---|
+| C1 | PREEMPT_RT + 일반 UDP socket, XDP 미부착 |
+| C2 | 동일 RT 환경 + XDP_PASS |
+| C3 | 동일 RT 환경 + CPUMAP → 전용 CPU → kernel stack |
+| C4 | 동일 RT 환경 + AF_XDP userspace |
+
+아키텍처의 주 평가는 아래 §39의 동시 혼합 트래픽 비교로 수행하고,
+이 개별 case들은 hook 비용·steering·bypass 효과를 설명하는 근거로 사용함.
+
 대표 counter:
 
 ```text
@@ -1403,6 +1435,11 @@ copy mode
 
 # 38. 결과 figure
 
+Main figure는 all-PASS와 세 경로 공존 구성을 같은 offered load에서 비교하고,
+트래픽 class/flow별 결과를 나란히 표시함. 전체 평균에 중요 트래픽을 섞지 않음.
+CPU 사용률과 일반 트래픽 goodput도 함께 제시해 격리의 자원 비용을 평가함.
+개별 C1~C4와 단계별 시각 차이는 구성요소의 특성 및 원인 분석 figure로 사용함.
+
 최소 추천:
 
 - OWD CCDF
@@ -1419,64 +1456,44 @@ copy mode
 
 # 39. 가장 중요한 결과 비교
 
-본 연구의 핵심 figure:
+핵심 비교는 동일한 혼합 트래픽의 분류·분리 여부임.
 
-```text
-C1 Normal RT
-vs
-C2 XDP_PASS
-vs
-C3 XDP + CPUMAP
-```
+| 구성 | 트래픽 요구와 부하 | 처리 정책 |
+|---|---|---|
+| all-PASS 대조군 | 동일 flow, PPS, packet size, class 비율 | 모든 flow를 XDP_PASS로 전달 |
+| 세 경로 공존 | 대조군과 동일 | Best-effort→PASS, kernel 기능이 필요한 critical→CPUMAP, bypass 가능한 critical→AF_XDP |
 
-특히:
+이는 구현 명세의 mixed architecture 및 측정 안내의 동시 부하 비교에 해당함.
+현재 포트별 고정 정책에서 all-PASS를 실행하려면 정책 선택을 추가해야 함.
+Kernel/driver, 계측, CPU·IRQ 설정과 수신 프로그램 배치를 함께 기록하고,
+분류·분리 효과를 비교할 수 있도록 조건을 맞춤.
 
-```text
-Network interference
-Combined interference
-```
+Idle, CPU-only, Network-only, Combined 조건에서 다음을 평가함.
 
-조건에서:
+- Critical class별 p99/p99.9, observed max, deadline miss, loss, goodput
+- Best-effort traffic의 goodput와 loss
+- Per-core CPU utilization과 전용 CPU·userspace 처리의 자원 비용
 
-- p99
-- p99.9
-- Observed Max
-- loss
-
-비교.
-
-AF_XDP C4는 reference line으로 표시.
+AF_XDP는 공존 구조에서 bypass 가능한 중요 트래픽을 담당하는 실제 구성 경로임.
+개별 C1~C4 비교는 각 경로의 비용과 특성을 설명하며, 혼합 구성 평가를 보완함.
 
 ---
 
-# 40. 결과 해석 예시
+# 40. 결과 해석 기준
 
-가상 결과:
+결과는 경로별 요구사항을 기준으로 해석함.
 
-```text
-C1 Normal RT       p99.9 = 900 us
-C2 XDP_PASS        p99.9 = 870 us
-C3 XDP + CPUMAP    p99.9 = 350 us
-C4 AF_XDP          p99.9 = 240 us
-```
+1. CPUMAP class: kernel stack/API를 유지하면서 all-PASS보다 deadline miss와 tail latency가 감소하는가?
+2. AF_XDP class: bypass 가능한 중요 트래픽이 설정한 deadline을 충족하며, 필요한 CPU 비용은 얼마인가?
+3. PASS class: 일반 네트워크 기능을 계속 사용하면서 어느 수준의 goodput와 loss를 유지하는가?
+4. 공존 효과: 동시에 운용할 때 중요 트래픽의 간섭이 줄고, 일반 트래픽과 CPU 자원 비용이 함께 수용 가능한가?
 
-해석:
+C1↔C2는 XDP hook 비용, C2↔C3은 steering과 CPU 배치 효과,
+C3↔C4는 kernel 기능 유지와 bypass의 latency·CPU 특성을 설명함.
+이 차이는 main 결과의 원인을 설명하는 자료로 사용함.
 
-```text
-C1 → C2 변화 작음
-→ XDP hook 자체 overhead가 제한적
-
-C2 → C3 큰 개선
-→ CPUMAP packet-processing steering이 tail 감소에 기여
-
-C3 → C4 추가 개선
-→ kernel bypass가 추가적인 fast-path 이점 제공
-
-하지만 C3는 kernel stack을 유지하면서도
-C1보다 크게 개선
-```
-
-이 결과 구조가 본 연구의 가장 좋은 story.
+결론에서는 실험 전에 정한 class별 deadline·부하 조건과 측정 결과를 연결하고,
+어느 부하 범위에서 세 경로의 역할을 함께 유지할 수 있는지 제시함.
 
 ---
 
@@ -1488,7 +1505,8 @@ C1보다 크게 개선
 C2 ≈ C3
 ```
 
-이면 CPUMAP steering 자체가 bottleneck 해결에 충분하지 않은 것.
+이면 해당 개별 조건에서 CPUMAP의 tail latency 이점이 작았다는 결과임.
+혼합 부하에서 all-PASS와 세 경로 공존 구성의 class별 deadline miss와 CPU 사용도 함께 해석함.
 
 그때:
 
@@ -1503,7 +1521,7 @@ NIC driver
 
 로 원인을 분석.
 
-C4까지 크게 안 좋아지면:
+공존 구성에서도 중요 트래픽의 요구를 충족하지 못하거나 C4도 크게 개선되지 않으면:
 
 - NIC
 - driver
@@ -1532,7 +1550,8 @@ XDP mode
 CPUMAP target CPU
 AF_XDP copy/zero-copy
 NIC driver/ring/offload/coalescing/MTU
-critical PPS/payload/period
+flow/class별 PPS/payload/period/deadline
+class 비율과 경로 정책 (all-PASS / mixed)
 background offered rate
 actual throughput
 stress-ng parameters
@@ -1567,17 +1586,18 @@ Logging ON
 
 # 46. 최종 contribution framing
 
-안전한 표현:
+연구 목적과 구현의 중심은 다음과 같이 기술함.
 
-> PREEMPT_RT 기반 resource-constrained ARM Embedded Linux에서
-> XDP + CPUMAP을 이용한 packet-processing CPU steering이
-> 일반 Linux network stack 대비 CPU/network interference 상황의
-> critical UDP tail latency와 결정성에 미치는 영향을 실험적으로 분석하였다.
+> PREEMPT_RT 기반 resource-constrained ARM Embedded Linux에서 Native XDP로
+> 트래픽 중요도와 kernel networking 기능 요구에 따라 PASS·CPUMAP·AF_XDP를
+> 선택하는 혼합 중요도 패킷 처리 아키텍처를 설계·구현한다. 기존 네트워크
+> 기능을 유지하는 경로와 CPU 격리·스택 우회 경로를 공존시켜, 제한된 자원에서
+> 중요 트래픽의 결정성을 확보하는 것을 목표로 한다.
 
-결과가 좋다면:
-
-> CPUMAP steering이 kernel stack을 유지하면서도
-> critical UDP tail latency를 감소시키는 효과를 관찰하였다.
+실험 contribution은 동일한 혼합 부하의 all-PASS 대조군과 비교하여 class별
+tail latency·deadline miss, 일반 트래픽 처리량, CPU 자원 비용을 제시하는 것임.
+CPUMAP steering과 AF_XDP bypass의 개별 평가는 각 구성요소의 역할을 설명함.
+성능 개선 수치와 적용 가능한 부하 범위는 실제 반복 실험 결과로 채움.
 
 피해야 할 과장:
 
@@ -1586,56 +1606,52 @@ hard real-time 보장
 WCET 보장
 실제 자동차 ECU에서 검증 완료
 TSN 대체
-AF_XDP보다 우수
+어느 한 경로가 모든 요구에서 우수
 ```
 
 ---
 
-# 47. 선행연구와의 차별점
+# 47. 선행연구와 비교하여 제시할 초점
 
-가까운 mixed-criticality/SDV 연구들은:
+가까운 mixed-criticality/SDV 연구들은 PREEMPT_RT, XDP, AF_XDP,
+middleware scheduler, dedicated NIC queue 등 여러 mechanism을 함께 사용하는 경우가 있음.
+논문별 사실과 비교 범위는 앞의 원문 분석을 근거로 제시함.
 
-- PREEMPT_RT
-- XDP
-- AF_XDP
-- middleware scheduler
-- dedicated NIC queue
-
-등 여러 mechanism을 함께 사용하는 경우가 있음.
-
-본 연구는 오히려:
+본 연구는 resource-constrained ARM의 single RX ingress에서 다음 구조에 초점을 둠.
 
 ```text
-Normal
-→ XDP_PASS
-→ XDP + CPUMAP
+중요도 + kernel networking 기능 요구
+    → Native XDP 분류
+        → PASS: 범용 kernel networking
+        → CPUMAP: 전용 CPU + kernel networking
+        → AF_XDP: userspace 저지연 처리
 ```
 
-을 분리하여
+세 경로가 공존할 때의 class별 결정성, 일반 트래픽 처리와 CPU 자원 비용을
+동일 부하의 all-PASS 대조군으로 평가함. Native driver 포팅과 HW RX timestamp를
+연결한 계측을 통해 같은 ingress를 기준으로 각 경로의 결과를 분석함.
 
-> XDP hook 자체와 CPUMAP packet-processing steering의 효과를
-> resource-constrained ARM에서 직접 비교
-
-하는 데 초점을 둠.
+XDP hook, CPUMAP steering, AF_XDP bypass의 개별 비교는 각 mechanism이
+전체 아키텍처 결과에 기여한 이유를 설명하는 보조 실험으로 둠.
 
 ---
 
 # 48. 논문의 핵심 story
 
 ```text
-1. Vanilla baseline
+1. 중요도와 필요한 네트워크 기능이 다른 트래픽의 공존 요구
 
-2. PREEMPT_RT baseline
+2. Native XDP를 통한 요구별 분류와 PASS·CPUMAP·AF_XDP 역할 분담
 
-3. XDP_PASS로 XDP hook 비용 확인
+3. macb Native XDP 포팅, CPU 처리 분리, userspace 경로와 timestamp 계측 구현
 
-4. CPUMAP으로 packet-processing CPU steering
+4. 기능 검증과 개별 경로 측정으로 구성요소의 비용·특성 파악
 
-5. C2 vs C3에서 본 mechanism의 효과 분석
+5. 동일 혼합 부하의 all-PASS와 세 경로 공존 구성 비교
 
-6. AF_XDP는 kernel-bypass reference
+6. class별 deadline/tail latency, 일반 트래픽 처리, CPU 자원 사용 평가
 
-7. perf/ftrace/rtla로 tail 원인 보조 분석
+7. 단계별 계측과 perf/ftrace/rtla로 간섭 원인·적용 가능한 부하 범위 설명
 ```
 
 ---
