@@ -43,10 +43,13 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "../include/ace_process.h"
+#include "../include/ace_run_control.h"
+#include "afxdp_run_control.h"
 #include "config.h"
 #include "metadata.h"
 
@@ -61,6 +64,8 @@ enum {
 };
 
 static volatile sig_atomic_t stop;
+static volatile sig_atomic_t stop_signal;
+static volatile sig_atomic_t flush_requested;
 static unsigned long long received_packets;
 static unsigned long long received_udp_packets;
 static unsigned long long received_experiment_packets;
@@ -75,8 +80,51 @@ static unsigned long long umem_invariant_errors;
 
 static void on_signal(int signo)
 {
-	(void)signo;
+	if (!stop)
+		stop_signal = signo;
 	stop = 1;
+}
+
+static void on_flush_signal(int signo)
+{
+	(void)signo;
+	flush_requested = 1;
+}
+
+/* One byte on an inherited pipe announces capture completion without storage
+ * I/O. The coordinator releases every receiver only after all drains finish. */
+static int notify_completion(int *fd, bool failed)
+{
+	unsigned char status = failed ? 1 : 0;
+	ssize_t result;
+	int saved;
+	if (*fd < 0)
+		return 0;
+	do {
+		result = write(*fd, &status, 1);
+	} while (result < 0 && errno == EINTR);
+	saved = result == 1 ? 0 : (result < 0 ? errno : EIO);
+	close(*fd);
+	*fd = -1;
+	if (saved) {
+		errno = saved;
+		return -1;
+	}
+	return 0;
+}
+
+static int wait_flush_release(void)
+{
+	sigset_t blocked, previous, waiting;
+	sigemptyset(&blocked);
+	sigaddset(&blocked, SIGUSR1);
+	if (sigprocmask(SIG_BLOCK, &blocked, &previous))
+		return -1;
+	waiting = previous;
+	sigdelset(&waiting, SIGUSR1);
+	while (!flush_requested)
+		sigsuspend(&waiting);
+	return sigprocmask(SIG_SETMASK, &previous, NULL);
 }
 
 /* ===== AF_XDP 자료구조 ===== */
@@ -108,6 +156,11 @@ struct xsk_info {
 struct receiver_options {
 	const char *ifname;
 	const char *output_path;
+	const char *ready_path;
+	const char *stats_path;
+	__u32 drain_ms;
+	int completion_fd;
+	bool defer_flush;
 	__u32 queue_id;
 	__u32 record_capacity;
 	bool records_explicit;
@@ -641,7 +694,12 @@ static void usage(const char *program)
 	fprintf(stderr,
 		"usage: %s --output FILE [--records COUNT] [interface [rx_queue]]\n"
 		"  --output, -o FILE   create end-of-run AF_XDP record CSV\n"
-		"  --records, -n COUNT max records (default %u, max %u)\n",
+		"  --records, -n COUNT max records (default %u, max %u)\n"
+		"  --ready-file PATH  atomically publish readiness JSON (new file only)\n"
+		"  --stats-json FILE  create end-of-run receiver statistics JSON\n"
+		"  --drain-ms N       receive for at most N ms after INT/TERM (default 100, max 60000)\n"
+		"  --completion-fd N  inherited pipe: byte 0 capture complete, byte 1 error\n"
+		"  --defer-flush      wait for SIGUSR1 after capture before writing results\n",
 		program, ACE_XDP_RECORD_DEFAULT_ENTRIES,
 		ACE_XDP_RECORD_MAX_ENTRIES);
 }
@@ -651,6 +709,11 @@ static int parse_options(int argc, char **argv, struct receiver_options *options
 	static const struct option long_options[] = {
 		{ "output", required_argument, NULL, 'o' },
 		{ "records", required_argument, NULL, 'n' },
+		{ "ready-file", required_argument, NULL, 1000 },
+		{ "stats-json", required_argument, NULL, 1001 },
+		{ "drain-ms", required_argument, NULL, 1002 },
+		{ "completion-fd", required_argument, NULL, 1003 },
+		{ "defer-flush", no_argument, NULL, 1004 },
 		{ "help", no_argument, NULL, 'h' },
 		{},
 	};
@@ -659,6 +722,8 @@ static int parse_options(int argc, char **argv, struct receiver_options *options
 	options->ifname = ACE_XDP_DEFAULT_IFNAME;
 	options->queue_id = ACE_XSK_DEFAULT_QUEUE;
 	options->record_capacity = ACE_XDP_RECORD_DEFAULT_ENTRIES;
+	options->drain_ms = 100;
+	options->completion_fd = -1;
 
 	while ((option = getopt_long(argc, argv, "o:n:h",
 				 long_options, NULL)) != -1) {
@@ -670,6 +735,33 @@ static int parse_options(int argc, char **argv, struct receiver_options *options
 			if (parse_record_capacity(optarg, &options->record_capacity))
 				return -EINVAL;
 			options->records_explicit = true;
+			break;
+		case 1000:
+			if (!*optarg)
+				return -EINVAL;
+			options->ready_path = optarg;
+			break;
+		case 1001:
+			if (!*optarg)
+				return -EINVAL;
+			options->stats_path = optarg;
+			break;
+		case 1002: {
+			uint64_t value;
+			if (ace_parse_u64(optarg, 0, 60000, &value))
+				return -EINVAL;
+			options->drain_ms = (__u32)value;
+			break;
+		}
+		case 1003: {
+			uint64_t value;
+			if (ace_parse_u64(optarg, 3, INT_MAX, &value))
+				return -EINVAL;
+			options->completion_fd = (int)value;
+			break;
+		}
+		case 1004:
+			options->defer_flush = true;
 			break;
 		case 'h':
 			usage(argv[0]);
@@ -921,33 +1013,31 @@ static void print_stats(int stats_fd)
 	free(values);
 }
 
-static void print_xsk_stats(const struct xsk_info *xsk)
+static bool snapshot_xsk_stats(const struct xsk_info *xsk,
+		struct xdp_statistics *stats)
 {
-	struct xdp_statistics stats = {};
-	socklen_t stats_length = sizeof(stats);
+	socklen_t stats_length = sizeof(*stats);
+	return !getsockopt(xsk_socket__fd(xsk->socket), SOL_XDP,
+		XDP_STATISTICS, stats, &stats_length) &&
+		stats_length >= sizeof(*stats);
+}
 
-	if (getsockopt(xsk_socket__fd(xsk->socket), SOL_XDP, XDP_STATISTICS,
-			&stats, &stats_length) < 0) {
-		fprintf(stderr, "cannot read AF_XDP statistics: %s\n",
-			strerror(errno));
-		return;
-	}
-	if (stats_length < sizeof(stats)) {
-		fprintf(stderr,
-			"AF_XDP statistics response is too short: %u bytes (expected %zu)\n",
-			(unsigned int)stats_length, sizeof(stats));
+static void print_xsk_stats(const struct xdp_statistics *stats, bool valid)
+{
+	if (!valid) {
+		fprintf(stderr, "AF_XDP statistics snapshot unavailable\n");
 		return;
 	}
 
 	printf("AF_XDP stats: rx_dropped=%llu rx_invalid_descs=%llu "
 	       "rx_ring_full=%llu rx_fill_ring_empty_descs=%llu "
 	       "tx_invalid_descs=%llu tx_ring_empty_descs=%llu\n",
-		(unsigned long long)stats.rx_dropped,
-		(unsigned long long)stats.rx_invalid_descs,
-		(unsigned long long)stats.rx_ring_full,
-		(unsigned long long)stats.rx_fill_ring_empty_descs,
-		(unsigned long long)stats.tx_invalid_descs,
-		(unsigned long long)stats.tx_ring_empty_descs);
+		(unsigned long long)stats->rx_dropped,
+		(unsigned long long)stats->rx_invalid_descs,
+		(unsigned long long)stats->rx_ring_full,
+		(unsigned long long)stats->rx_fill_ring_empty_descs,
+		(unsigned long long)stats->tx_invalid_descs,
+		(unsigned long long)stats->tx_ring_empty_descs);
 }
 
 static void print_receiver_stats(const struct umem_info *umem)
@@ -982,6 +1072,16 @@ int main(int argc, char **argv)
 	int xsk_map_fd = -1, xsk_owner_fd = -1, stats_fd = -1;
 	int runtime_fd = -1;
 	int output_fd = -1;
+	FILE *stats_file = NULL;
+	struct ace_xsk_drain drain = {};
+	struct xdp_statistics final_xsk_stats = {};
+	bool xsk_stats_valid = false;
+	bool drain_complete = false;
+	bool ready = false;
+	bool completion_notified = false;
+	int64_t start_mono_ns = 0, end_mono_ns = 0;
+	unsigned long long received_at_stop = 0;
+	const char *termination_reason = "startup_error";
 	int parse_result, err = 1;
 	bool owner_claimed = false;
 
@@ -991,6 +1091,15 @@ int main(int argc, char **argv)
 	if (parse_result < 0) {
 		usage(argv[0]);
 		return 1;
+	}
+	if (options.completion_fd >= 0) {
+		struct stat fd_info;
+		int flags = fcntl(options.completion_fd, F_GETFL);
+		if (flags < 0 || (flags & O_ACCMODE) == O_RDONLY ||
+		    fstat(options.completion_fd, &fd_info) || !S_ISFIFO(fd_info.st_mode)) {
+			fprintf(stderr, "--completion-fd must be an inherited writable pipe\n");
+			return 1;
+		}
 	}
 	if (!options.ifname[0] || strlen(options.ifname) >= IFNAMSIZ) {
 		fprintf(stderr, "invalid interface name: %s\n", options.ifname);
@@ -1013,10 +1122,20 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	if (options.stats_path) {
+		stats_file = ace_open_exclusive_stream(options.stats_path);
+		if (!stats_file) {
+			fprintf(stderr, "cannot create statistics file %s: %s\n",
+				options.stats_path, strerror(errno));
+			return 1;
+		}
+	}
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	libbpf_set_print(NULL);
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
+	signal(SIGUSR1, on_flush_signal);
+	signal(SIGPIPE, SIG_IGN);
 	self_owner.pid = (__u32)getpid();
 	err = ace_process_start_ticks(getpid(), &self_owner.process_start_ticks);
 	if (err) {
@@ -1100,7 +1219,8 @@ int main(int argc, char **argv)
 	    (runtime.flags & ~(ACE_RUNTIME_F_HWTSTAMP_CAPTURED |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLYING |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLIED |
-			       ACE_RUNTIME_F_STOPPING)) ||
+			       ACE_RUNTIME_F_STOPPING |
+			       ACE_RUNTIME_F_ALL_PASS)) ||
 	    runtime.effective_hwtstamp_rx_filter != HWTSTAMP_FILTER_ALL) {
 		fprintf(stderr,
 			"runtime configuration mismatch: abi=%u ifindex=%u records=%u "
@@ -1109,6 +1229,11 @@ int main(int argc, char **argv)
 			runtime.record_capacity, runtime.xdp_program_id,
 			runtime.owner_pid, runtime.flags);
 		err = -EXDEV;
+		goto out;
+	}
+	if (runtime.flags & ACE_RUNTIME_F_ALL_PASS) {
+		fprintf(stderr, "all-pass mode uses UDP receivers; AF_XDP is disabled\n");
+		err = -EINVAL;
 		goto out;
 	}
 	if (!options.records_explicit)
@@ -1228,50 +1353,105 @@ int main(int argc, char **argv)
 	pollfd.events = POLLIN;
 	printf("AF_XDP ready: %s RX queue %u, XSKMAP[%u] registered; Ctrl-C to stop\n",
 		options.ifname, options.queue_id, options.queue_id);
+	if (stop) {
+		err = -EINTR;
+		goto out;
+	}
+	start_mono_ns = ace_mono_ns();
+	if (start_mono_ns < 0) {
+		err = -errno;
+		start_mono_ns = 0;
+		goto out;
+	}
+	if (ace_publish_ready(options.ready_path, "afxdp_recv")) {
+		err = -errno;
+		fprintf(stderr, "cannot publish AF_XDP readiness: %s\n", strerror(-err));
+		goto out;
+	}
+	ready = true;
+	termination_reason = "signal";
 	err = 0;
-	while (!stop) {
-		int poll_result = poll(&pollfd, 1, 1000);
-		if (poll_result < 0) {
-			if (errno == EINTR) {
-				if (stop)
-					break;
-				continue;
-			}
+	for (;;) {
+		int64_t now = ace_mono_ns();
+		int wait_ms, poll_result, received;
+
+		if (now < 0) {
 			err = -errno;
-			perror("poll");
+			termination_reason = "clock_error";
 			break;
 		}
-		if (!poll_result)
+		if (stop && !drain.active) {
+			received_at_stop = received_packets;
+			ace_xsk_drain_begin(&drain, now, options.drain_ms);
+		}
+		wait_ms = ace_xsk_drain_poll_ms(&drain, now);
+		if (wait_ms < 0) {
+			drain_complete = true;
+			break;
+		}
+		/* Peek before poll, including after a signal: entries already visible
+		 * in RX must be processed even when no new wakeup is generated. */
+		received = receive_batch(&xsk, &umem, options.queue_id, records,
+					 options.record_capacity, &record_count);
+		if (received < 0) {
+			err = received;
+			termination_reason = record_overflow_packets ?
+				"record_overflow" : "receive_error";
+			fprintf(stderr, "AF_XDP receive failed: %s\n", strerror(-err));
+			break;
+		}
+		if (received)
 			continue;
-		if (pollfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+		poll_result = poll(&pollfd, 1, wait_ms);
+		if (poll_result < 0) {
+			if (errno == EINTR)
+				continue;
+			err = -errno;
+			termination_reason = "poll_error";
+			break;
+		}
+		if (poll_result &&
+		    (pollfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
 			int socket_error = 0;
 			socklen_t error_length = sizeof(socket_error);
-
 			if (getsockopt(pollfd.fd, SOL_SOCKET, SO_ERROR, &socket_error,
 					&error_length) < 0)
 				socket_error = errno;
-			else if (!socket_error)
+			if (!socket_error)
 				socket_error = EIO;
-			fprintf(stderr, "AF_XDP poll failure: revents=%#x: %s\n",
-				pollfd.revents, strerror(socket_error));
 			err = -socket_error;
+			termination_reason = "socket_error";
 			break;
 		}
-		if (pollfd.revents & POLLIN) {
-			int received = receive_batch(&xsk, &umem,
-				options.queue_id, records, options.record_capacity,
-				&record_count);
-
-			if (received < 0) {
-				fprintf(stderr, "AF_XDP receive failed: %s\n",
-					strerror(-received));
-				err = received;
-				break;
+	}
+	end_mono_ns = ace_mono_ns();
+	if (end_mono_ns < 0) {
+		end_mono_ns = start_mono_ns;
+		if (!err) {
+			err = -errno;
+			termination_reason = "clock_error";
+		}
+	}
+	/* Freeze receive counters at capture end; flush coordination can wait. */
+	xsk_stats_valid = snapshot_xsk_stats(&xsk, &final_xsk_stats);
+	if (options.completion_fd >= 0) {
+		if (notify_completion(&options.completion_fd, err != 0)) {
+			if (!err) {
+				err = -errno;
+				termination_reason = "completion_error";
 			}
+		} else {
+			completion_notified = true;
+		}
+	}
+	if (options.defer_flush && wait_flush_release()) {
+		if (!err) {
+			err = -errno;
+			termination_reason = "flush_wait_error";
 		}
 	}
 	print_receiver_stats(&umem);
-	print_xsk_stats(&xsk);
+	print_xsk_stats(&final_xsk_stats, xsk_stats_valid);
 	print_stats(stats_fd);
 	/* 수신을 멈춘 뒤 한 번만 파일로 내보낸다. 다른 경로의 CSV와는
 	 * 출력 행 번호가 아닌 flow_id + sequence로 연결해야 한다. */
@@ -1281,6 +1461,7 @@ int main(int argc, char **argv)
 		/* save_user_records consumes the descriptor on every path. */
 		output_fd = -1;
 		if (save_err) {
+			termination_reason = "csv_write_error";
 			fprintf(stderr, "cannot save AF_XDP records to %s: %s\n",
 				options.output_path, strerror(errno));
 			if (!err)
@@ -1292,8 +1473,13 @@ int main(int argc, char **argv)
 	}
 
 out:
+	/* Setup failures also wake the coordinator. No capture was active here. */
+	if (options.completion_fd >= 0)
+		(void)notify_completion(&options.completion_fd, true);
 	if (output_fd >= 0)
 		close(output_fd);
+	if (xsk.socket && !ready)
+		xsk_stats_valid = snapshot_xsk_stats(&xsk, &final_xsk_stats);
 	if (xsk.socket)
 		/* The kernel removes this socket's own XSKMAP entries on close. */
 		xsk_socket__delete(xsk.socket);
@@ -1302,6 +1488,7 @@ out:
 			options.queue_id, &self_owner);
 
 		if (release_err) {
+			termination_reason = "cleanup_error";
 			fprintf(stderr, "cannot release RX queue %u ownership: %s\n",
 				options.queue_id, strerror(-release_err));
 			if (err >= 0)
@@ -1319,6 +1506,47 @@ out:
 		close(xsk_map_fd);
 	if (xsk_owner_fd >= 0)
 		close(xsk_owner_fd);
+	if (stats_file) {
+		int exit_code = err < 0 ? 1 : err;
+		if (ready && !end_mono_ns)
+			end_mono_ns = start_mono_ns;
+		fprintf(stats_file,
+			"{\n  \"schema_version\": 1, \"role\": \"afxdp_recv\",\n"
+			"  \"ready\": %s, \"exit_code\": %d, \"error_number\": %d,\n"
+			"  \"termination_reason\": \"%s\", \"stop_signal\": %d,\n"
+			"  \"start_mono_ns\": %" PRId64 ", \"end_mono_ns\": %" PRId64 ", \"elapsed_ns\": %" PRId64 ",\n"
+			"  \"queue_id\": %u, \"bind_mode\": \"copy\", \"record_capacity\": %u,\n"
+			"  \"received_packets\": %llu, \"received_udp_packets\": %llu, \"received_experiment_packets\": %llu,\n"
+			"  \"recorded_packets\": %u, \"overflow_packets\": %llu,\n"
+			"  \"malformed_packets\": %llu, \"unexpected_port_packets\": %llu, \"metadata_invalid_packets\": %llu,\n"
+			"  \"recycled_frames\": %llu, \"umem_invariant_errors\": %llu,\n"
+			"  \"drain_ms\": %u, \"drain_completed\": %s, \"received_during_drain\": %llu,\n"
+			"  \"defer_flush\": %s, \"completion_notified\": %s,\n"
+			"  \"kernel_stats_available\": %s, \"rx_dropped\": %llu, \"rx_invalid_descs\": %llu,\n"
+			"  \"rx_ring_full\": %llu, \"rx_fill_ring_empty_descs\": %llu\n}\n",
+			ready ? "true" : "false", exit_code, err < 0 ? -err : 0,
+			termination_reason, (int)stop_signal,
+			start_mono_ns, end_mono_ns,
+			end_mono_ns >= start_mono_ns ? end_mono_ns - start_mono_ns : 0,
+			options.queue_id, options.record_capacity,
+			received_packets, received_udp_packets, received_experiment_packets,
+			record_count, record_overflow_packets, malformed_packets,
+			unexpected_port_packets, metadata_invalid_packets,
+			recycled_frames, umem_invariant_errors, options.drain_ms,
+			drain_complete ? "true" : "false",
+			drain.active ? received_packets - received_at_stop : 0,
+			options.defer_flush ? "true" : "false",
+			completion_notified ? "true" : "false",
+			xsk_stats_valid ? "true" : "false",
+			(unsigned long long)final_xsk_stats.rx_dropped,
+			(unsigned long long)final_xsk_stats.rx_invalid_descs,
+			(unsigned long long)final_xsk_stats.rx_ring_full,
+			(unsigned long long)final_xsk_stats.rx_fill_ring_empty_descs);
+		if (ace_finish_stream(stats_file)) {
+			fprintf(stderr, "cannot save AF_XDP statistics: %s\n", strerror(errno));
+			err = -EIO;
+		}
+	}
 	free(records);
 	munlockall();
 	return err < 0 ? 1 : err;

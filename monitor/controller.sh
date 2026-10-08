@@ -25,6 +25,9 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
+if [ "${ACE_SKIP_MANIFEST:-0}" = 1 ]; then
+    exec bash "${SCRIPT_DIR}/run_load.sh" "$@"
+fi
 RESULT_ROOT=${ACE_RESULT_ROOT:-"${PROJECT_DIR}/results"}
 INTERFACE=${ACE_INTERFACE:-eth0}
 

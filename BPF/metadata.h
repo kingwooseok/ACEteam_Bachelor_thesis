@@ -37,6 +37,17 @@ enum ace_requested_path {
 	ACE_PATH_XSK = 2,
 };
 
+/* Per-run forwarding policy; packet identity and measurement stay unchanged. */
+enum ace_forwarding_mode {
+	ACE_FORWARD_MIXED = 0,
+	ACE_FORWARD_ALL_PASS = 1,
+};
+
+static __inline __u16 ace_effective_requested_path(__u32 mode, __u16 classified)
+{
+	return mode == ACE_FORWARD_ALL_PASS ? ACE_PATH_PASS : classified;
+}
+
 enum ace_rx_meta_flags {
 	ACE_META_F_HWTS_VALID       = 1U << 0,
 	ACE_META_F_PACKET_ID_VALID  = 1U << 1,
@@ -122,6 +133,7 @@ enum ace_runtime_flags {
 	ACE_RUNTIME_F_HWTSTAMP_APPLYING = 1U << 1,
 	ACE_RUNTIME_F_HWTSTAMP_APPLIED = 1U << 2,
 	ACE_RUNTIME_F_STOPPING = 1U << 3,
+	ACE_RUNTIME_F_ALL_PASS = 1U << 4,
 };
 
 /* Userspace lifecycle claim for one XSKMAP queue.  A separate HASH is needed

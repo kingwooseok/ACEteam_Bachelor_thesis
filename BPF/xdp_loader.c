@@ -40,6 +40,7 @@
 
 #include "../include/ace_hwtstamp.h"
 #include "../include/ace_process.h"
+#include "../include/ace_run_control.h"
 #include "xdp_kern.skel.h"
 #include "config.h"
 #include "metadata.h"
@@ -74,6 +75,8 @@ struct loader_options {
 	const char *ifname;
 	const char *output_dir;
 	const char *output_prefix;
+	const char *ready_path;
+	__u32 mode;
 	__u32 record_capacity;
 	bool quiet;
 	bool recover;
@@ -108,6 +111,8 @@ static void usage(const char *program)
 		"  --quiet, -q          print counters only at shutdown\n"
 		"  --verbose, -v        print counters once per second\n"
 		"  --records, -n COUNT set HASH capacity (default %u, max %u)\n"
+		"  --mode MODE          mixed (default) or all-pass, with identical measurement\n"
+		"  --ready-file PATH    atomically publish readiness JSON (new file only)\n"
 		"  --recover, -r        export an inactive run from pinned maps\n"
 		"  --cleanup-pins, -c   after successful recovery, remove its pins\n",
 		program, ACE_XDP_RECORD_DEFAULT_ENTRIES,
@@ -141,6 +146,8 @@ static int parse_options(int argc, char **argv, struct loader_options *options)
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "records", required_argument, NULL, 'n' },
+		{ "mode", required_argument, NULL, 1000 },
+		{ "ready-file", required_argument, NULL, 1001 },
 		{ "recover", no_argument, NULL, 'r' },
 		{ "cleanup-pins", no_argument, NULL, 'c' },
 		{ "help", no_argument, NULL, 'h' },
@@ -175,6 +182,21 @@ static int parse_options(int argc, char **argv, struct loader_options *options)
 				return -EINVAL;
 			}
 			break;
+		case 1000:
+			if (!strcmp(optarg, "mixed"))
+				options->mode = ACE_FORWARD_MIXED;
+			else if (!strcmp(optarg, "all-pass"))
+				options->mode = ACE_FORWARD_ALL_PASS;
+			else {
+				fprintf(stderr, "invalid --mode: %s (mixed or all-pass)\n", optarg);
+				return -EINVAL;
+			}
+			break;
+		case 1001:
+			if (!*optarg)
+				return -EINVAL;
+			options->ready_path = optarg;
+			break;
 		case 'r':
 			options->recover = true;
 			break;
@@ -199,6 +221,10 @@ static int parse_options(int argc, char **argv, struct loader_options *options)
 	if (!options->output_dir) {
 		fprintf(stderr, "--output-dir is required so measurement records are not lost\n");
 		usage(argv[0]);
+		return -EINVAL;
+	}
+	if (options->recover && options->ready_path) {
+		fprintf(stderr, "--ready-file is not valid with --recover\n");
 		return -EINVAL;
 	}
 	if (options->cleanup_pins && !options->recover) {
@@ -311,6 +337,42 @@ static int ensure_empty_pin_dir(void)
 	}
 	closedir(directory);
 	return 0;
+}
+
+/* Pin only the public measurement/lifecycle maps. Internal .rodata is
+ * retained by the loaded program and needs no recovery pin. Keeping this list
+ * aligned with cleanup_recovery_pins prevents stale policy pins after a crash. */
+static int pin_measurement_maps(struct xdp_kern *skel, bool pin)
+{
+	struct bpf_map *maps[] = {
+		skel->maps.cpu_map, skel->maps.xsk_map, skel->maps.xsk_owners,
+		skel->maps.stats, skel->maps.ingress_records,
+		skel->maps.cpumap_records, skel->maps.runtime_config,
+	};
+	const char *paths[] = {
+		ACE_XDP_CPU_MAP_PIN, ACE_XDP_XSK_MAP_PIN, ACE_XDP_XSK_OWNER_MAP_PIN,
+		ACE_XDP_STATS_MAP_PIN, ACE_XDP_INGRESS_MAP_PIN,
+		ACE_XDP_CPUMAP_MAP_PIN, ACE_XDP_RUNTIME_MAP_PIN,
+	};
+	int result = 0;
+
+	for (size_t i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
+		int err = pin ? bpf_map__pin(maps[i], paths[i]) :
+			bpf_map__unpin(maps[i], paths[i]);
+		if (!err)
+			continue;
+		if (!result)
+			result = err;
+		if (pin) {
+			/* The directory was empty; remove only successfully created pins. */
+			while (i > 0) {
+				i--;
+				bpf_map__unpin(maps[i], paths[i]);
+			}
+			break;
+		}
+	}
+	return result;
 }
 
 static int validate_map(int fd, const char *name, __u32 type,
@@ -960,7 +1022,8 @@ static int recover_pinned_measurement(const struct loader_options *options)
 	    (runtime.flags & ~(ACE_RUNTIME_F_HWTSTAMP_CAPTURED |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLYING |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLIED |
-			       ACE_RUNTIME_F_STOPPING))) {
+			       ACE_RUNTIME_F_STOPPING |
+			       ACE_RUNTIME_F_ALL_PASS))) {
 		fprintf(stderr,
 			"pinned runtime mismatch: abi=%u ifindex=%u records=%u "
 			"program=%u owner=%u flags=%#x\n",
@@ -1261,6 +1324,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "failed to open BPF object\n");
 		goto out;
 	}
+	skel->rodata->forwarding_mode = options.mode;
 	if (bpf_map__set_max_entries(skel->maps.ingress_records,
 				     options.record_capacity) ||
 	    bpf_map__set_max_entries(skel->maps.cpumap_records,
@@ -1302,6 +1366,8 @@ int main(int argc, char **argv)
 		goto out;
 	}
 	runtime.abi_version = ACE_XDP_RUNTIME_ABI_VERSION;
+	if (options.mode == ACE_FORWARD_ALL_PASS)
+		runtime.flags |= ACE_RUNTIME_F_ALL_PASS;
 	runtime.ifindex = (__u32)ifindex;
 	runtime.record_capacity = options.record_capacity;
 	runtime.xdp_program_id = owned_id;
@@ -1322,7 +1388,7 @@ int main(int argc, char **argv)
 	/* map 내용과 실행 주체를 먼저 pin한 다음 패킷 유입을 시작한다.
 	 * AF_XDP 수신기는 이 map들을 열어 같은 실험에 연결하고, loader가
 	 * 비정상 종료되어도 남은 기록과 프로그램 ID로 --recover가 가능하다. */
-	err = bpf_object__pin_maps(skel->obj, ACE_XDP_PIN_DIR);
+	err = pin_measurement_maps(skel, true);
 	if (err) {
 		fprintf(stderr, "BPF map pin failed at %s: %s\n",
 			ACE_XDP_PIN_DIR, strerror(-err));
@@ -1400,9 +1466,15 @@ int main(int argc, char **argv)
 	}
 
 	printf("attached native xdp_dispatch id=%u to %s; records=%u; "
-	       "RX HWTSTAMP filter=%d; Ctrl-C to stop\n",
+	       "RX HWTSTAMP filter=%d; mode=%s; Ctrl-C to stop\n",
 	       owned_id, options.ifname, options.record_capacity,
-	       hwtstamp.effective.rx_filter);
+	       hwtstamp.effective.rx_filter,
+	       options.mode == ACE_FORWARD_ALL_PASS ? "all-pass" : "mixed");
+	if (ace_publish_ready(options.ready_path, "xdp_loader")) {
+		err = -errno;
+		fprintf(stderr, "cannot publish loader readiness: %s\n", strerror(-err));
+		goto out;
+	}
 	/* 이 준비 완료 메시지 뒤에 수신기와 송신기를 시작한다. loader의 대기
 	 * 루프는 패킷당 작업을 하지 않으며 기본 quiet 모드로 출력 부하를 줄인다. */
 	while (!stop) {
@@ -1511,7 +1583,7 @@ out:
 			"warning: RX HWTSTAMP remains enabled because owned XDP is still attached\n");
 	}
 	if (maps_pinned && !preserve_pins) {
-		err = bpf_object__unpin_maps(skel->obj, ACE_XDP_PIN_DIR);
+		err = pin_measurement_maps(skel, false);
 		if (err) {
 			fprintf(stderr, "map unpin failed: %s\n", strerror(-err));
 			result = 1;

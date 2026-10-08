@@ -361,6 +361,25 @@ def load_udp_records(path: Path) -> SourceTable:
     return SourceTable(records, rows, duplicates, conflicts)
 
 
+def load_udp_sources(paths: Path | Sequence[Path] | None) -> SourceTable:
+    """Merge disjoint receiver files without hiding duplicate packet ownership."""
+    if paths is None:
+        return empty_table()
+    files = [paths] if isinstance(paths, Path) else list(paths)
+    records: dict[Key, dict[str, int]] = {}
+    rows = duplicates = conflicts = 0
+    for path in files:
+        table = load_udp_records(path)
+        overlap = records.keys() & table.records.keys()
+        if overlap:
+            raise InputError(f"UDP inputs overlap on flow_id+sequence: {min(overlap)}")
+        records.update(table.records)
+        rows += table.rows
+        duplicates += table.duplicate_rows
+        conflicts += table.conflicting_duplicate_rows
+    return SourceTable(records, rows, duplicates, conflicts)
+
+
 CALIBRATION_FIELDS = {
     "iteration",
     "sample",
@@ -1074,6 +1093,18 @@ def build_summary(
             name: summarize_metric(values, joined_count)
             for name, values in metric_values.items()
         },
+        "flows": {
+            str(flow_id): {
+                "joined_rows": sum(row["flow_id"] == flow_id for row in rows),
+                "metrics": {
+                    name: summarize_metric(
+                        [cast(int, row[field]) for row in rows
+                         if row["flow_id"] == flow_id and row[field] is not None],
+                        sum(row["flow_id"] == flow_id for row in rows),
+                    ) for name, field in METRIC_FIELDS.items()
+                },
+            } for flow_id in sorted({cast(int, row["flow_id"]) for row in rows})
+        },
     }
 
 
@@ -1159,11 +1190,21 @@ def validate_arguments(args: argparse.Namespace) -> Manifest:
     for attribute, label in (
         ("cpumap", "CPUMAP input"),
         ("afxdp", "AF_XDP input"),
-        ("udp_native", "UDP input"),
     ):
         path = getattr(args, attribute)
         if path is not None:
             setattr(args, attribute, resolve_input(path, label, manifest.run_directory))
+
+    udp_paths = args.udp_native
+    if udp_paths is not None:
+        if isinstance(udp_paths, Path):
+            udp_paths = [udp_paths]
+        resolved = [resolve_input(path, "UDP input", manifest.run_directory)
+                    for path in udp_paths]
+        if len(set(resolved)) != len(resolved):
+            raise InputError("duplicate UDP input path")
+        # Preserve the original single-input marker representation.
+        args.udp_native = resolved[0] if len(resolved) == 1 else resolved
 
     args.phc_calibration = [
         resolve_input(path, "PHC calibration input", manifest.run_directory)
@@ -1232,7 +1273,7 @@ def analyze(
         load_csv_table(args.afxdp, columns["afxdp"])
         if args.afxdp is not None else empty_table()
     )
-    udp = load_udp_records(args.udp_native) if args.udp_native else empty_table()
+    udp = load_udp_sources(args.udp_native)
     calibration = load_calibration(args.phc_calibration)
 
     sources = {
@@ -1465,8 +1506,8 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cpumap", type=Path, help="optional CPUMAP CSV")
     parser.add_argument("--afxdp", type=Path, help="optional AF_XDP CSV")
     parser.add_argument(
-        "--udp-native", "--udp", dest="udp_native", type=Path,
-        help="optional native-endian 56-byte UDP samples",
+        "--udp-native", "--udp", dest="udp_native", type=Path, action="append",
+        help="repeatable native-endian 56-byte UDP receiver files",
     )
     parser.add_argument(
         "--phc-calibration", required=True, action="append", type=Path,

@@ -33,6 +33,7 @@ CPU affinity·IRQ·스케줄링 설정과 함께 구성한다.
 - [udp_socket/](udp_socket/): UDP 송수신기와 PHC 시계 보정 도구.
 - [monitor/](monitor/): 부하 생성, 시스템 모니터링, 실행 환경 기록.
 - [analysis/](analysis/): 패킷별 기록 결합과 반복 실험 집계.
+- [experiment/](experiment/): 두 파이에서 직접 실행하는 C 시험 제어기와 설정 파일.
 - [patches/macb-xdp-20260910/](patches/macb-xdp-20260910/): macb 포팅 및 RT 커널 설정 패치.
 
 2026-09-10에 세 경로의 외부 Ethernet 수신을 검증했다.
@@ -48,10 +49,14 @@ sudo apt install build-essential clang llvm bpftool libbpf-dev libxdp-dev pkg-co
 make
 ```
 
-`make`는 XDP loader, AF_XDP 수신기, UDP 송수신기와 PHC 보정 도구를 빌드한다.
+`make`는 XDP loader, AF_XDP 수신기, UDP 송수신기, PHC 보정 도구와 C 시험 제어기를 빌드한다.
 커널을 바꾼 뒤에는 새 커널의 BTF에 맞춰 다시 빌드한다.
 UDP 도구만 빌드하려면 `make udp`, 오프라인 회귀 검사는 `make test`,
 생성 파일 정리는 `make clean`을 사용한다.
+
+CPU·메모리·I/O 부하에는 `stress-ng`, 네트워크 부하에는 `iperf3`,
+CPU·NIC 관측에는 `sysstat` 패키지의 `mpstat`·`sar`를 사용한다.
+Python은 개발용 회귀 검사와 측정 종료 후 분석에 사용한다.
 
 ## 최소 실행: AF_XDP 수신
 
@@ -112,3 +117,20 @@ sudo ./BPF/xdp_loader --recover --cleanup-pins \
 - [UDP 송수신·시계 보정](udp_socket/README.md)
 - [부하 생성과 모니터링](monitor/README.md)
 - [기록 결합과 반복 실험 분석](analysis/README.md)
+- [설정 파일 기반 직접 실행·결과 회수](experiment/README.md)
+
+## 시험 자동화
+
+두 파이에서 같은 설정 파일을 사용하고, 수신 파이와 송신 파이에서 각각
+`experiment/ace-run receiver --config FILE`과
+`experiment/ace-run sender --config FILE`을 직접 실행한다.
+수신 준비, 공통 송신 시작, 부하, 종료 후 drain·flush와 반복 실행을 C 제어기가
+관리한다. 파이 사이의 단계 제어는 준비와 종료 시점에만 이루어지며,
+측정 중 제어기는 대기 상태를 유지한다. VMware나 SSH는 측정 실행에 필요하지 않다.
+
+실험 조건은 [config.example.conf](experiment/config.example.conf)의 빈 항목에
+넣는다. 기존 패킷 크기·점보 드롭·세 경로 정책을 유지하며,
+`ace-run plan --config FILE`로 실행 조건과 기록 용량을 먼저 볼 수 있다.
+측정 후 양쪽 결과를 VMware 등 분석용 컴퓨터로 옮기고,
+`analysis/analyze_experiment.py collect`로 합친 뒤 HTML 보고서를 생성한다.
+빠른 기능 검증용 `socket-smoke.conf`는 UDP loopback 실행 예제다.
