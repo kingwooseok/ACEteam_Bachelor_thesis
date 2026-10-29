@@ -787,6 +787,172 @@ class MatrixRunnerTest(unittest.TestCase):
                         self.assertEqual(indices, sorted(indices))
                         self.assertTrue(next(Path(tmp).glob("*/run.complete.json")).is_file())
 
+    def test_top_pps_boundaries_and_unique_aliases(self) -> None:
+        template = (self.root / "experiment/config.example.conf").read_text()
+        for top, conditions in ((9000, 18), (9001, 20), (15476, 20)):
+            with self.subTest(top=top), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "config.conf"
+                path.write_text(template.replace("top_pass_pps =", f"top_pass_pps = {top}"))
+                c = self.runner.config(path)
+                c.update(network_medium_bps=10, network_high_bps=100)
+                rows = self.runner.matrix(c)
+                self.assertEqual(len(rows), conditions)
+                aliases = [a for r in rows for a in r["aliases"]]
+                self.assertEqual(len(aliases), len(set(aliases)))
+                for cpu in (0, 100):
+                    self.assertEqual(aliases.count(f"B-9000-{cpu}"), 1)
+        for top in (8999, 15477):
+            with self.subTest(top=top), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "config.conf"
+                path.write_text(template.replace("top_pass_pps =", f"top_pass_pps = {top}"))
+                with self.assertRaisesRegex(ValueError, "9000..15476"):
+                    self.runner.config(path)
+
+    def test_tx_worker_applies_and_records_each_flow_policy(self) -> None:
+        from unittest.mock import patch
+        runner = self.runner
+        for pass_policy, critical_policy in (("other", "fifo"), ("rr", "other")):
+            with self.subTest(policies=(pass_policy, critical_policy)), tempfile.TemporaryDirectory() as tmp:
+                c = self.configuration()
+                c.update(tx_repo=tmp, pass_policy=pass_policy, critical_policy=critical_policy,
+                         pass_priority=0 if pass_policy == "other" else 20,
+                         critical_priority=0 if critical_policy == "other" else 80)
+                sender = Path(tmp) / "udp_socket/bin/sender"
+                sender.parent.mkdir(parents=True)
+                sender.write_bytes(b"fixture")
+                jobs = []
+                class FakeJob:
+                    def __init__(self, argv, log):
+                        self.argv, self.log = list(map(str, argv)), Path(log)
+                        self.was_ready = False
+                        self.log.write_text("completed: sent=60000 errors=0\n")
+                        jobs.append(self)
+                    def ready(self, *args):
+                        self.was_ready = True
+                    def alive(self):
+                        pass
+                    def stop(self, *args):
+                        return 0
+                    def evidence(self, expected=None):
+                        if "--flow-id" in self.argv:
+                            assert self.was_ready, "snapshot before sender readiness"
+                            flow = int(self.argv[self.argv.index("--flow-id") + 1])
+                            prefix = "pass" if flow == 1 else "critical"
+                            assert self.argv[:6] == runner.placement(
+                                flow - 1, c[prefix + "_policy"], c[prefix + "_priority"])
+                            assert expected == {"cpus": [flow - 1],
+                                "policy": {"other": 0, "fifo": 1, "rr": 2}[c[prefix + "_policy"]],
+                                "priority": c[prefix + "_priority"]}
+                        return {"actual_placement": expected, "argv": self.argv}
+                replies = iter([{"config": c, "row": {"pps": [1000]*3, "network_bps": 0}},
+                                {"send": True}, {"stop": True}])
+                stream = io.StringIO()
+                with patch.object(runner, "Job", FakeJob), \
+                     patch.object(runner, "command", return_value="head"), \
+                     patch.object(runner, "receive_line", side_effect=lambda *_: next(replies)), \
+                     patch.object(runner.os, "sched_setaffinity"), \
+                     patch.object(runner.signal, "signal"), patch.object(runner.signal, "alarm"), \
+                     patch.object(runner.time, "monotonic", side_effect=range(0, 1000, 100)), \
+                     contextlib.redirect_stdout(stream):
+                    runner.tx_worker()
+                result = json.loads(stream.getvalue().splitlines()[1])
+                self.assertEqual([e["flow_id"] for e in result["placement"]], [1, 2, 3])
+                self.assertEqual([e["actual_placement"]["cpus"] for e in result["placement"]], [[0], [1], [2]])
+                self.assertEqual(len(jobs), 4)
+
+    def test_actual_linux_placement_evidence_and_mismatch(self) -> None:
+        import os
+        import sys
+        cpu = min(os.sched_getaffinity(0))
+        with tempfile.TemporaryDirectory() as tmp:
+            job = self.runner.Job(self.runner.placement(cpu) + [sys.executable, "-u", "-c",
+                "import time; print('ready'); time.sleep(30)"], Path(tmp) / "policy.log")
+            try:
+                job.ready("ready", 3)
+                expected = {"cpus": [cpu], "policy": os.SCHED_OTHER, "priority": 0}
+                self.assertEqual(job.evidence(expected)["actual_placement"], expected)
+                with self.assertRaisesRegex(RuntimeError, "placement mismatch"):
+                    job.evidence({**expected, "priority": 1})
+            finally:
+                job.stop(3)
+
+    def test_analysis_sink_routing_for_both_modes(self) -> None:
+        from unittest.mock import patch
+        for mode in ("all-pass", "mixed"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                self.runner.dump(d / "manifest.json", {
+                    "run_id": "test", "parameters": {"delivery_mode": mode}})
+                with patch.object(self.runner, "command") as command:
+                    markers = self.runner.analyze_run(self.configuration(),
+                        {"pps": [1000]*3}, mode, d,
+                        {"sent": {str(f): {"sent": 59990} for f in (1, 2, 3)}})
+                self.assertEqual(len(markers), 3)
+                for flow, call in enumerate(command.call_args_list, 1):
+                    args = list(map(str, call.args[0]))
+                    sink = "--afxdp" if flow == 3 and mode == "mixed" else "--udp-native"
+                    self.assertIn(sink, args)
+                    self.assertNotIn("--udp-native" if sink == "--afxdp" else "--afxdp", args)
+                    self.assertEqual(args[args.index("--flow-id") + 1], str(flow))
+                    self.assertEqual(args[args.index("--sent-count") + 1], "59990")
+                    self.assertEqual(args[args.index("--target-count") + 1], "60000")
+                    manifest = json.loads((d / f"flow-{flow}.manifest.json").read_text())
+                    self.assertEqual(manifest["parameters"]["delivery_mode"], mode)
+
+    def test_control_channel_partial_line_timeout_and_read_ahead(self) -> None:
+        import os
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd, "r") as reader, os.fdopen(write_fd, "wb", buffering=0) as writer:
+            writer.write(b'{"send":true}\n{"stop":true}\n')
+            self.assertEqual(self.runner.receive_line(reader, .1), {"send": True})
+            self.assertEqual(self.runner.receive_line(reader, .1), {"stop": True})
+            writer.write(b'{"incomplete":')
+            with self.assertRaisesRegex(RuntimeError, "timeout"):
+                self.runner.receive_line(reader, .05)
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with os.fdopen(read_fd, "r") as reader:
+            with self.assertRaisesRegex(RuntimeError, "closed"):
+                self.runner.receive_line(reader, .1)
+
+    def test_full_plan_aggregates_five_runs_per_mode_and_flow(self) -> None:
+        from unittest.mock import patch
+        import sys
+        runner = self.runner
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self.configuration()
+            c.update(top_pass_pps=9000, output_root=tmp)
+            def run_one(c, row, mode, repetition, root, source):
+                return {str(flow): str(root / f'{row["id"]}-{mode}-{repetition}-f{flow}.complete')
+                        for flow, pps in enumerate(row["pps"], 1) if pps}
+            with patch.object(sys, "argv", ["-", str(self.root / "experiment/run_matrix.sh"),
+                 "--config", "unused", "--run", "--session", "test"]), \
+                 patch.object(runner, "config", return_value=c), \
+                 patch.object(runner.os, "geteuid", return_value=0), \
+                 patch.object(runner.os, "sched_setaffinity"), \
+                 patch.object(runner.os, "sched_setscheduler"), \
+                 patch.object(runner.os, "access", return_value=True), \
+                 patch.object(runner.shutil, "which", return_value="tool"), \
+                 patch.object(runner, "irq_check", return_value={}), \
+                 patch.object(runner, "run_one", side_effect=run_one) as run, \
+                 patch.object(runner, "command") as command, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                runner.main()
+            self.assertEqual(run.call_count, 180)
+            plan = json.loads((Path(tmp) / "test/plan.json").read_text())
+            self.assertEqual(len(plan["conditions"]), 18)
+            for call in command.call_args_list:
+                argv = list(map(str, call.args[0]))
+                markers = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--run"]
+                self.assertEqual(len(markers), 5)
+                self.assertEqual(len(set(markers)), 5)
+                output = argv[argv.index("--output-csv") + 1]
+                condition_mode, flow_suffix = Path(output).name.split("-flow-")
+                flow = flow_suffix.split(".")[0]
+                self.assertTrue(all(Path(m).name.startswith(condition_mode + "-") for m in markers))
+                self.assertTrue(all(m.endswith(f"-f{flow}.complete") for m in markers))
+            self.assertTrue((Path(tmp) / "test/matrix.complete.json").exists())
+
     def test_job_timeout_kills_only_owned_process_group(self) -> None:
         import sys
         with tempfile.TemporaryDirectory() as tmp:

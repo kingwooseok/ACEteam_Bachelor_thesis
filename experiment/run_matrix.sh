@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import weakref
 
 DURATION = 60
 REPEATS = 5
@@ -76,22 +77,40 @@ class Job:
             self.file.close()
         return rc
 
-    def evidence(self):
+    def evidence(self, expected=None):
         self.alive()
         pid = self.p.pid
-        return {'argv': self.argv, 'pid': pid,
+        actual = {'cpus': sorted(os.sched_getaffinity(pid)),
+                  'policy': os.sched_getscheduler(pid),
+                  'priority': os.sched_getparam(pid).sched_priority}
+        if expected is not None and actual != expected:
+            raise RuntimeError(f'placement mismatch: expected={expected}, actual={actual}')
+        return {'argv': self.argv, 'pid': pid, 'actual_placement': actual,
                 'status': Path(f'/proc/{pid}/status').read_text(),
                 'scheduling': command(['chrt', '-p', pid]),
                 'threads': command(['ps', '-L', '-p', pid, '-o',
                                     'pid,tid,psr,cls,rtprio,comm'])}
 
 
+# Read raw pipe bytes: TextIO.readline() can block past a select timeout
+# when the peer has sent a partial JSON line. Keep read-ahead for the next call.
+CONTROL_BUFFERS = weakref.WeakKeyDictionary()
+
+
 def receive_line(stream, timeout):
-    if not select.select([stream], [], [], timeout)[0]:
-        raise RuntimeError('control channel timeout')
-    line = stream.readline()
-    if not line:
-        raise RuntimeError('control channel closed')
+    pending = CONTROL_BUFFERS.pop(stream, b'')
+    deadline = time.monotonic() + timeout
+    while b'\n' not in pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([stream], [], [], remaining)[0]:
+            raise RuntimeError('control channel timeout')
+        chunk = os.read(stream.fileno(), 65536)
+        if not chunk:
+            raise RuntimeError('control channel closed')
+        pending += chunk
+    line, tail = pending.split(b'\n', 1)
+    if tail:
+        CONTROL_BUFFERS[stream] = tail
     return json.loads(line)
 
 
@@ -136,13 +155,27 @@ def tx_worker():
             for flow, pps in enumerate(row['pps'], 1):
                 if not pps:
                     continue
-                j = Job(placement(flow - 1) + [repo / 'udp_socket/bin/sender',
+                prefix = 'pass' if flow == 1 else 'critical'
+                j = Job(placement(flow - 1, c[prefix + '_policy'],
+                                  c[prefix + '_priority']) + ['stdbuf', '-oL',
+                    repo / 'udp_socket/bin/sender',
                     '--port', 8999 + flow, '--flow-id', flow,
                     '--count', pps * DURATION, '--period-ns', 1000000000 // pps,
                     '--payload-size', c['payload_size'], c['rx_address']], tmp / f'sender-{flow}.log')
                 jobs.append(j)
                 senders.append((flow, j, time.monotonic()))
-            evidence = [j.evidence() for _, j, _ in senders]
+            evidence = []
+            for flow, j, _ in senders:
+                # Wait until taskset/chrt have exec'd sender and it has installed
+                # its handlers. A snapshot immediately after Popen can see the wrapper.
+                j.ready('clock: CLOCK_REALTIME (TX), CLOCK_MONOTONIC (pacing)',
+                        c['ready_timeout_seconds'])
+                prefix = 'pass' if flow == 1 else 'critical'
+                policy = {'other': os.SCHED_OTHER, 'fifo': os.SCHED_FIFO,
+                          'rr': os.SCHED_RR}[c[prefix + '_policy']]
+                evidence.append({'flow_id': flow, **j.evidence({
+                    'cpus': [flow - 1], 'policy': policy,
+                    'priority': c[prefix + '_priority']})})
             # Enforce the 60-second window even when the sender cannot keep up.
             while time.monotonic() - start < DURATION:
                 if select.select([sys.stdin], [], [], .1)[0]:
@@ -204,8 +237,8 @@ def config(path):
         if policy not in ('other', 'fifo', 'rr') or not (
                 priority == 0 if policy == 'other' else 1 <= priority <= 99):
             raise ValueError(f'invalid {prefix} scheduling policy/priority')
-    if c['top_pass_pps'] and not 9000 < c['top_pass_pps'] <= 15476:
-        raise ValueError('top_pass_pps must be 9001..15476 (record capacity)')
+    if c['top_pass_pps'] and not 9000 <= c['top_pass_pps'] <= 15476:
+        raise ValueError('top_pass_pps must be 9000..15476 (record capacity)')
     if not 1 <= c['iperf_port'] <= 65535 or c['iperf_port'] in (9000, 9001, 9002):
         raise ValueError('invalid iperf_port')
     if not 0 <= c['payload_size'] <= 1440:
@@ -242,9 +275,7 @@ def matrix(c):
         # Keep unresolved network levels distinct in offline plans.
         label = f'A-{index}'
         add(label, [1000]*3, cpu, net)
-    for pps in (0, 1000, 3000, 9000, c['top_pass_pps']):
-        if pps == c['top_pass_pps'] == 0 and any(r['id'] == 'B-0-0' for r in rows):
-            continue
+    for pps in dict.fromkeys((0, 1000, 3000, 9000, c['top_pass_pps'])):
         for cpu in (0, 100):
             add(f'B-{pps}-{cpu}', [pps, 1000, 1000], cpu)
     for sharing in ('base', 'load3', 'pass3'):
