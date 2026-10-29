@@ -289,6 +289,26 @@ static int calibrate(struct context *x,const char *phase)
 	int child=spawn(x,name,NULL,-1,SCHED_OTHER,0,0,args); if (child<0) return -1;
 	return wait_child(x,child,x->c.ready_ms,0);
 }
+/* 상태 수집은 캡처 준비/완료 경계 밖에서만 실행한다. 두 Pi 모두 파일을
+ * 남기되 패킷마다 센서를 읽거나 Python/SSH로 관측하지 않는다. */
+static int capture_state(struct context *x,const char *phase)
+{
+	char name[32],output[4096];
+	if (pathf(name,sizeof(name),"system-%s",phase) ||
+	    pathf(output,sizeof(output),"%s/%s.txt",x->run_dir,name)) return -1;
+	char *args[]={"bash","./monitor/capture_state.sh",x->c.interface,output,NULL};
+	int child=spawn(x,name,NULL,-1,SCHED_OTHER,0,0,args); if (child<0) return -1;
+	return wait_child(x,child,x->c.ready_ms,0);
+}
+static int prepare_environment(struct context *x)
+{
+	if (!strcmp(x->mode,"socket-only")) return 0;
+	char cpu[16]; snprintf(cpu,sizeof(cpu),"%u",x->c.rx_irq_cpu);
+	char *args[]={"bash","./monitor/prepare_env.sh",x->receiver?"receiver":"sender",
+	              x->c.interface,x->c.governor,cpu,NULL};
+	int child=spawn(x,"environment-prepare",NULL,-1,SCHED_OTHER,0,0,args); if (child<0) return -1;
+	return wait_child(x,child,x->c.ready_ms,0);
+}
 static int receiver_process(struct context *x,unsigned i)
 {
 	char name[32],ready[4096],stats[4096],output[4096],stage[4096],count[32],flow[16],port[16],drain[16];
@@ -331,6 +351,7 @@ static int receiver_run(struct context *x)
 {
 	int loader=-1, receivers[3]={-1,-1,-1}, monitor=-1;
 	int smoke=!strcmp(x->mode,"socket-only");
+	if (prepare_environment(x) || capture_state(x,"before")) return -1;
 	if (!smoke) {
 		uint64_t capacity=0; for (unsigned i=0;i<3;i++) if (x->c.flows[i].enabled) capacity+=flow_count(&x->c.flows[i],x->c.duration_ms);
 		char records[32],ready[4096]; snprintf(records,sizeof(records),"%llu",(unsigned long long)capacity); pathf(ready,sizeof(ready),"%s/loader.ready",x->run_dir);
@@ -355,7 +376,7 @@ static int receiver_run(struct context *x)
 	/* DONE releases sender flush; ACK confirms its network client has stopped. */
 	if (message(x,DONE,1,x->c.stop_ms) || message(x,ACK,0,x->c.stop_ms)) return -1;
 	/* Keep the iperf server alive until the peer has shut down its client. */
-	if (stop_child(x,monitor) || write_run(x,"completed")) return -1;
+	if (stop_child(x,monitor) || capture_state(x,"after") || write_run(x,"completed")) return -1;
 	return marker(x,".complete");
 }
 static int network_process(struct context *x)
@@ -405,7 +426,9 @@ static int wait_completions(struct context *x,const int children[3],unsigned tim
 }
 static int sender_run(struct context *x)
 {
+	if (prepare_environment(x)) return -1;
 	if (message(x,RX_READY,0,x->c.ready_ms)) return -1;
+	if (capture_state(x,"before")) return -1;
 	int senders[3]={-1,-1,-1}; char start[4096]; pathf(start,sizeof(start),"%s/start.ns",x->run_dir);
 	for (unsigned i=0;i<3;i++) {
 		struct run_flow *f=&x->c.flows[i]; if (!f->enabled) continue;
@@ -430,13 +453,15 @@ static int sender_run(struct context *x)
 	if (message(x,STOP,1,x->c.stop_ms) || message(x,DONE,0,x->c.stop_ms*3+x->c.settle_ms+x->c.drain_ms)) return -1;
 	for (unsigned i=0;i<3;i++) if (senders[i]>=0) kill(x->child[senders[i]].pid,SIGUSR1);
 	for (unsigned i=0;i<3;i++) if (senders[i]>=0 && wait_child(x,senders[i],x->c.stop_ms,0)) return -1;
-	if (stop_child(x,network) || write_run(x,"completed") || message(x,ACK,1,x->c.stop_ms)) return -1;
+	if (stop_child(x,network) || capture_state(x,"after") || write_run(x,"completed") || message(x,ACK,1,x->c.stop_ms)) return -1;
 	return marker(x,".complete");
 }
 static int preflight(struct context *x)
 {
 	const char *required[]={"udp_socket/bin/sender","udp_socket/bin/receiver","udp_socket/bin/ace_clock",NULL};
 	for (unsigned i=0;required[i];i++) if (access(required[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",required[i]); return -1; }
+	if (access("monitor/capture_state.sh",R_OK)) { perror("missing state collector"); return -1; }
+	if (access("monitor/prepare_env.sh",R_OK) || access("monitor/set_irq_affinity.sh",R_OK)) { perror("missing environment helpers"); return -1; }
 	if (x->receiver) for (unsigned m=0;m<x->c.mode_count;m++) if (strcmp(x->c.modes[m],"socket-only")) {
 		const char *bpf[]={"BPF/xdp_loader","udp_socket/bin/phc_calibrate",NULL};
 		for (unsigned i=0;bpf[i];i++) if (access(bpf[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",bpf[i]); return -1; }

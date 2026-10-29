@@ -53,6 +53,7 @@ static int allowed(const char *key)
 	static const char *keys[] = {"run_id","receiver_address","control_port","repo","output_root","interface",
 		"modes","repeats","duration_ms","warmup_ms","ready_timeout_ms","stop_timeout_ms",
 		"start_delay_ms","drain_ms","settle_ms","supervisor_cpu","monitor",
+		"environment.governor","environment.rx_irq_cpu",
 		"load.cpu_percent","load.cpu_cpus","load.cpu_method","load.memory_workers","load.memory_bytes",
 		"load.io_workers","load.io_path","load.network_bps","load.network_protocol","load.network_direction",
 		"load.network_port","load.network_parallel","load.on_sec","load.off_sec"};
@@ -136,6 +137,10 @@ int read_run_config(const char *file, struct run_config *c)
 	if (c->stop_ms<c->drain_ms+100) { fprintf(stderr,"stop_timeout_ms must exceed drain_ms by at least 100 ms\n"); p.error=1; }
 	c->settle_ms=number(&p,"settle_ms",NULL,0,60000);
 	c->supervisor_cpu=cpu(&p,"supervisor_cpu","inherit");
+	/* C08/C10은 실제 측정 준비에서 적용한다. socket-only 검증은 장치를 바꾸지 않는다. */
+	string(&p,"environment.governor","performance",c->governor,sizeof(c->governor));
+	for (const char *q=c->governor;*q;q++) if (!isalnum((unsigned char)*q) && *q!='_' && *q!='-') p.error=1;
+	c->rx_irq_cpu=number(&p,"environment.rx_irq_cpu","2",0,CPU_SETSIZE-1);
 	c->monitor=number(&p,"monitor",NULL,0,1);
 	c->cpu_percent=number(&p,"load.cpu_percent",NULL,0,100);
 	const char *cpus=lookup(&p,"load.cpu_cpus",c->cpu_percent ? NULL : "");
@@ -203,5 +208,7 @@ void write_condition(FILE *out,const struct run_config *c,const char *mode,uint6
 	}
 	fprintf(out,"],\"load\":{\"cpu_percent\":%u,\"cpu_cpus\":",c->cpu_percent); json_string(out,c->cpu_cpus);
 	fprintf(out,",\"memory_workers\":%u,\"memory_bytes\":",c->memory_workers); json_string(out,c->memory_bytes);
-	fprintf(out,",\"io_workers\":%u,\"network_bps\":%llu,\"network_protocol\":\"%s\",\"network_direction\":\"%s\",\"network_parallel\":%u,\"on_sec\":%u,\"off_sec\":%u},\"config\":{\"sha256\":\"%s\",\"warmup_ms\":%llu,\"settle_ms\":%u,\"drain_ms\":%u,\"monitor\":%u}}",c->io_workers,(unsigned long long)c->network_bps,c->network_protocol,c->network_direction,c->network_parallel,c->load_on_sec,c->load_off_sec,c->digest,(unsigned long long)c->warmup_ms,c->settle_ms,c->drain_ms,c->monitor);
+	fprintf(out,",\"io_workers\":%u,\"network_bps\":%llu,\"network_protocol\":\"%s\",\"network_direction\":\"%s\",\"network_parallel\":%u,\"on_sec\":%u,\"off_sec\":%u},\"environment\":{\"governor\":",c->io_workers,(unsigned long long)c->network_bps,c->network_protocol,c->network_direction,c->network_parallel,c->load_on_sec,c->load_off_sec);
+	json_string(out,c->governor);
+	fprintf(out,",\"rx_irq_cpu\":%u},\"config\":{\"sha256\":\"%s\",\"warmup_ms\":%llu,\"settle_ms\":%u,\"drain_ms\":%u,\"monitor\":%u}}",c->rx_irq_cpu,c->digest,(unsigned long long)c->warmup_ms,c->settle_ms,c->drain_ms,c->monitor);
 }

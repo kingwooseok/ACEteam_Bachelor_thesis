@@ -11,9 +11,11 @@ struct run_config {
 	char run_id[65], address[64], interface[16], repo[4096], output[4096];
 	char digest[65], modes[3][16], cpu_cpus[256], cpu_method[64];
 	char memory_bytes[64], io_path[4096], network_protocol[8], network_direction[16];
+	char governor[32];
 	unsigned mode_count, repeats, control_port, ready_ms, stop_ms, start_delay_ms;
 	unsigned drain_ms, settle_ms, monitor, cpu_percent, memory_workers, io_workers;
 	unsigned network_port, network_parallel, load_on_sec, load_off_sec;
+	unsigned rx_irq_cpu;
 	int supervisor_cpu;
 	uint64_t duration_ms, warmup_ms, network_bps;
 	struct run_flow flows[3];

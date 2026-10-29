@@ -71,6 +71,12 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertEqual(len(data["flows"]), 3)
                 self.assertTrue((run / ".complete").exists())
                 self.assertFalse((run / ".failed").exists())
+                # socket-only도 상태 파일을 남기지만 governor/IRQ를 적용하지 않는다.
+                for phase in ('before', 'after'):
+                    self.assertIn('capture_complete=1', (run / f'system-{phase}.txt').read_text())
+                self.assertFalse((run / 'environment-prepare.log').exists())
+                self.assertEqual(data['environment']['governor'], 'performance')
+                self.assertEqual(data['environment']['rx_irq_cpu'], 2)
                 manifest = json.loads((run / "manifest.json").read_text())
                 self.assertEqual(manifest["run_id"], data["run_id"])
                 for flow in data["flows"]:
@@ -161,7 +167,9 @@ class NativeRunnerTests(unittest.TestCase):
     def test_plan_rejects_unknown_duplicate_and_capacity(self):
         for text in (self.base + "unknown=1\n", self.base + "repeats=1\n",
                      self.base.replace("run_id=socket-smoke", "run_id=_bad"),
-                     self.base.replace("flow1.period_ns=2000000", "flow1.period_ns=1")):
+                     self.base.replace("flow1.period_ns=2000000", "flow1.period_ns=1"),
+                     self.base + "environment.governor=bad/value\n",
+                     self.base + "environment.rx_irq_cpu=-1\n"):
             self.config.write_text(text)
             self.complete(self.launch("plan"), False)
 
