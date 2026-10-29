@@ -109,6 +109,7 @@ class RunData:
     parameters: Mapping[str, object]
     cohort_identity: Mapping[str, object]
     analysis_policy: Mapping[str, object]
+    delivery: Mapping[str, object] | None = None
 
 
 def reject_duplicate_json_keys(
@@ -592,6 +593,8 @@ def analysis_policy(summary: Mapping[str, object]) -> dict[str, object]:
         "inside_range_policy": inside,
         "percentile_method": "nearest-rank",
         "sources_provided": source_presence(summary),
+        "flow_id": summary.get("flow_id"),
+        "delivery_counts_provided": "delivery" in summary,
     }
 
 
@@ -604,6 +607,30 @@ def source_presence(summary: Mapping[str, object]) -> dict[str, bool]:
             raise InputError(f"summary sources.{name}.provided must be boolean")
         presence[name] = cast(bool, source["provided"])
     return presence
+
+
+def validate_delivery(summary: Mapping[str, object], joined: Path) -> Mapping[str, object] | None:
+    delivery = summary.get("delivery")
+    if delivery is None:
+        return None
+    if not isinstance(delivery, dict):
+        raise InputError("delivery must be an object")
+    fields = ("target_sent", "actual_sent", "sender_shortfall", "unique_received", "lost")
+    counts = {key: integer_field(delivery.get(key), f"delivery.{key}") for key in fields}
+    if any(value < 0 for value in counts.values()) or not (
+        counts["target_sent"] - counts["actual_sent"] == counts["sender_shortfall"]
+        and counts["actual_sent"] - counts["unique_received"] == counts["lost"]
+    ):
+        raise InputError("inconsistent delivery counts")
+    received = 0
+    with joined.open(newline="", encoding="utf-8") as file:
+        for row in csv.DictReader(file):
+            if int(row["flow_id"]) != summary.get("flow_id"):
+                raise InputError("delivery flow scope disagrees with joined CSV")
+            received += row.get("udp_present") == "1" or row.get("afxdp_present") == "1"
+    if received != counts["unique_received"]:
+        raise InputError("delivery received count disagrees with joined CSV")
+    return counts
 
 
 def load_run(marker_path: Path) -> RunData:
@@ -743,6 +770,7 @@ def load_run(marker_path: Path) -> RunData:
         parameters=parameters,
         cohort_identity=manifest_cohort_identity(manifest),
         analysis_policy=analysis_policy(summary),
+        delivery=validate_delivery(summary, joined),
     )
 
 
@@ -815,6 +843,7 @@ def aggregate_runs(
                 "input_artifacts": run.input_artifacts,
                 "joined_rows": run.joined_rows,
                 "metrics": metric_map,
+                "delivery": run.delivery,
             }
         )
 
@@ -942,6 +971,19 @@ def aggregate_runs(
         "runs": run_summaries,
         "metrics": aggregated_metrics,
     }
+    if all(run.delivery is not None for run in runs):
+        totals = {field: sum(cast(int, run.delivery[field]) for run in runs
+                             if run.delivery is not None)
+                  for field in ("target_sent", "actual_sent", "sender_shortfall",
+                                "unique_received", "lost")}
+        summary["delivery"] = {
+            **totals,
+            "loss_rate": totals["lost"] / totals["actual_sent"] if totals["actual_sent"] else None,
+            "run_loss_rate_estimate": mean_confidence_interval_95([
+                cast(int, run.delivery["lost"]) / cast(int, run.delivery["actual_sent"])
+                for run in runs if run.delivery is not None and run.delivery["actual_sent"]
+            ]),
+        }
     return metric_rows, summary
 
 

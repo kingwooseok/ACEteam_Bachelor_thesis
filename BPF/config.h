@@ -39,7 +39,7 @@ enum {
 	ACE_XDP_RUNTIME_ABI_VERSION = 4,
 };
 
-/* runtime_config.flags: preserve the measured path while forcing delivery to
+/* runtime_config.flags: preserve the requested traffic class while forcing delivery to
  * the ordinary Linux stack for the all-PASS control configuration. */
 #define ACE_RUNTIME_F_ALL_PASS (1U << 4)
 

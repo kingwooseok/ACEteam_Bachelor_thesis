@@ -567,5 +567,240 @@ class JoinResultsTest(unittest.TestCase):
                 join_results.load_calibration(bad_calibration)
 
 
+    def delivery_fixture(self, root: Path, run_id: str, mode: str = "all-pass") -> tuple[Path, list[str]]:
+        root.mkdir()
+        run = self.make_run(str(root), run_id)
+        self.write_text(run / "manifest.json", json.dumps({
+            "manifest_version": 1, "run_id": run_id,
+            "parameters": {"delivery_mode": mode, "flow_id": "3"},
+        }))
+        self.write_text(run / "ingress.csv", INGRESS_HEADER +
+                        "3,0,0,1100,1000,19,2,0\n1,0,0,1100,1000,19,0,0\n")
+        (run / "udp.bin").write_bytes(join_results.UDP_RECORD.pack(
+            0, 10, 1100, 20, 1100, 3, 96, 1, 0, 0))
+        self.write_calibration(run / "phc.csv", [(500, 100), (2000, 100)])
+        args = self.arguments(run, run / "ingress.csv", [run / "phc.csv"],
+                              udp=run / "udp.bin")
+        args += ["--flow-id", "3", "--sent-count", "2", "--target-count", "3"]
+        return run, args
+
+    def test_all_pass_flow_scope_loss_and_aggregate_compatibility(self) -> None:
+        from analysis import aggregate_runs
+        with tempfile.TemporaryDirectory() as tmp:
+            markers = []
+            for index in range(2):
+                run, args = self.delivery_fixture(Path(tmp) / str(index), f"run-{index}")
+                self.assertEqual(self.run_ok(args), 0)
+                rows = self.read_rows(run / "result.csv")
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["requested_path"], "2")
+                self.assertEqual(rows[0]["delivery_mode"], "all-pass")
+                self.assertEqual(rows[0]["user_source"], "udp")
+                self.assertEqual(rows[0]["user_hw_ns"], "100")
+                self.assertEqual(rows[0]["inconsistency_flags"], "0")
+                summary = json.loads((run / "result.json").read_text())
+                self.assertEqual(summary["delivery"]["actual_sent"], 2)
+                self.assertEqual(summary["delivery"]["sender_shortfall"], 1)
+                self.assertEqual(summary["delivery"]["lost"], 1)
+                markers.append(aggregate_runs.load_run(run / "result.json.complete"))
+            _, aggregate = aggregate_runs.aggregate_runs(aggregate_runs.validate_runs(markers), 100000)
+            self.assertEqual(aggregate["delivery"]["actual_sent"], 4)
+            self.assertEqual(aggregate["delivery"]["lost"], 2)
+            self.assertEqual(aggregate["delivery"]["loss_rate"], .5)
+            self.assertEqual(aggregate["metrics"]["user-hw"]["packet_level"]["count"], 2)
+
+    def test_mixed_xsk_to_udp_is_not_a_valid_latency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run, args = self.delivery_fixture(Path(tmp) / "fixture", "mixed-run", "mixed")
+            self.run_ok(args)
+            row = self.read_rows(run / "result.csv")[0]
+            self.assertEqual(row["user_hw_ns"], "")
+            self.assertTrue(int(row["inconsistency_flags"]) & join_results.INCONSISTENT_UDP_PATH)
+
+    def test_all_pass_rejects_cpumap_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run, args = self.delivery_fixture(Path(tmp) / "fixture", "bad-cpumap")
+            self.write_text(run / "ingress.csv", INGRESS_HEADER + "3,0,0,1100,1000,19,1,0\n")
+            self.write_text(run / "cpumap.csv", CPUMAP_HEADER + "3,0,3,1050,23,1\n")
+            self.run_ok(args + ["--cpumap", str(run / "cpumap.csv")])
+            row = self.read_rows(run / "result.csv")[0]
+            self.assertTrue(int(row["inconsistency_flags"]) & join_results.INCONSISTENT_DELIVERY_MODE)
+            for metric in ("cpumap_xdp_ns", "user_cpumap_ns", "user_hw_ns"):
+                self.assertEqual(row[metric], "")
+
+    def test_all_pass_rejects_afxdp_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run, args = self.delivery_fixture(Path(tmp) / "fixture", "bad-xsk")
+            pos = args.index("--udp-native")
+            del args[pos:pos + 2]
+            self.write_text(run / "afxdp.csv", AFXDP_HEADER +
+                "3,0,0,10,1100,20,1100,1000,19,2,0,96,7\n")
+            self.run_ok(args + ["--afxdp", str(run / "afxdp.csv")])
+            row = self.read_rows(run / "result.csv")[0]
+            self.assertTrue(int(row["inconsistency_flags"]) & join_results.INCONSISTENT_DELIVERY_MODE)
+            self.assertEqual(row["user_hw_ns"], "")
+
+    def test_complete_loss_and_zero_sends_are_distinct(self) -> None:
+        for sent in (0, 2):
+            with self.subTest(sent=sent), tempfile.TemporaryDirectory() as tmp:
+                run, args = self.delivery_fixture(Path(tmp) / "fixture", "empty")
+                self.write_text(run / "ingress.csv", INGRESS_HEADER)
+                (run / "udp.bin").write_bytes(b"")
+                args[args.index("--sent-count") + 1] = str(sent)
+                self.run_ok(args)
+                delivery = json.loads((run / "result.json").read_text())["delivery"]
+                self.assertEqual(delivery["lost"], sent)
+                self.assertEqual(delivery["unique_received"], 0)
+                self.assertEqual(delivery["sender_shortfall"], 3 - sent)
+                self.assertEqual(delivery["loss_rate"], 1 if sent else None)
+
+    def test_invalid_delivery_mode_and_impossible_counts_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run, args = self.delivery_fixture(Path(tmp) / "fixture", "invalid")
+            args[args.index("--sent-count") + 1] = "0"
+            self.assert_run_fails(args, "exceed successful sends")
+            args[args.index("--sent-count") + 1] = "4"
+            self.assert_run_fails(args, "0 <= sent-count <= target-count")
+            payload = json.loads((run / "manifest.json").read_text())
+            payload["parameters"]["delivery_mode"] = "unknown"
+            self.write_text(run / "manifest.json", json.dumps(payload))
+            self.assert_run_fails(args, "unsupported delivery_mode")
+
+
+
+class MatrixRunnerTest(unittest.TestCase):
+    """Exercise the two-file runner without SSH, NIC configuration or root."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import types
+        cls.root = Path(__file__).resolve().parents[2]
+        text = (cls.root / "experiment/run_matrix.sh").read_text()
+        source = text.split("<<'PYTHON'\n", 1)[1].rsplit("\nPYTHON", 1)[0]
+        cls.runner = types.ModuleType("matrix_runner_test")
+        exec(compile(source, "run_matrix.sh:python", "exec"), cls.runner.__dict__)
+
+    def configuration(self) -> dict:
+        c = self.runner.config(self.root / "experiment/config.example.conf")
+        c.update(top_pass_pps=12000, network_medium_bps=10000000,
+                 network_high_bps=100000000, nic_irqs=[1], staging_root="/tmp")
+        return c
+
+    def test_complete_matrix_and_condition_reuse(self) -> None:
+        rows = self.runner.matrix(self.configuration())
+        self.assertEqual(len(rows), 20)
+        self.assertEqual([r["id"] for r in rows[:3]],
+                         ["solo-PASS", "solo-CPUMAP", "solo-AF_XDP"])
+        aliases = {alias: row for row in rows for alias in row["aliases"]}
+        self.assertEqual(len(aliases), 23)
+        self.assertIs(aliases["A-1"], aliases["B-1000-0"])
+        self.assertIs(aliases["A-2"], aliases["C-base"])
+        self.assertEqual(aliases["B-0-100"]["pps"], [0, 1000, 1000])
+        self.assertEqual(aliases["B-12000-0"]["pps"], [12000, 1000, 1000])
+        self.assertEqual(aliases["C-load3"]["load_cpus"], [0, 1, 2, 3])
+        self.assertEqual(aliases["C-pass3"]["load_cpus"], [0, 1, 2])
+        self.assertEqual(aliases["C-pass3"]["pass_cpu"], 3)
+
+    def test_plan_is_offline_and_alternates_modes(self) -> None:
+        from unittest.mock import patch
+        import sys
+        stream = io.StringIO()
+        with patch.object(sys, "argv", ["-", "experiment/run_matrix.sh", "--config",
+                                       str(self.root / "experiment/config.example.conf")]), \
+             patch.object(self.runner.subprocess, "Popen", side_effect=AssertionError("device access")), \
+             contextlib.redirect_stdout(stream):
+            self.runner.main()
+        plan = json.loads(stream.getvalue())
+        self.assertTrue(plan["top_pass_pps_pending"])
+        pairs = plan["runs"][:10]
+        self.assertEqual([x["mode"] for x in pairs],
+            ["all-pass", "mixed", "mixed", "all-pass", "all-pass", "mixed",
+             "mixed", "all-pass", "all-pass", "mixed"])
+
+    def test_run_sequence_and_failure_cleanup_without_devices(self) -> None:
+        from unittest.mock import patch
+        runner = self.runner
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as tmp:
+                events = []
+                class FakeJob:
+                    def __init__(self, argv, log):
+                        self.argv, self.log = argv, Path(log)
+                        self.name = self.log.stem
+                        events.append("start:" + self.name)
+                    def ready(self, needle, timeout):
+                        events.append("ready:" + self.name)
+                        if fail and self.name == "receiver-3":
+                            raise RuntimeError("injected readiness failure")
+                    def alive(self):
+                        pass
+                    def evidence(self):
+                        return {"argv": [str(x) for x in self.argv]}
+                    def stop(self, *args):
+                        events.append("stop:" + self.name)
+                        return 0
+                class Pipe(io.StringIO):
+                    def write(self, value):
+                        if value in ('{"send": true}\n', '{"stop": true}\n'):
+                            events.append(value.strip())
+                        return super().write(value)
+                class Remote:
+                    stdin = Pipe()
+                    stdout = io.StringIO()
+                    def wait(self, **kwargs):
+                        return 0
+                def command(argv, **kwargs):
+                    argv = [str(x) for x in argv]
+                    if "capture_manifest.py" in argv[1]:
+                        runner.dump(Path(argv[2]) / "manifest.json", {
+                            "manifest_version": 1, "run_id": "fixture", "parameters": {}})
+                    if "--samples" in argv:
+                        events.append("calibrate:" + Path(argv[-1]).stem)
+                    return ""
+                replies = iter([
+                    {"ready": True, "host": "tx", "sender_sha256": "hash",
+                     "git_head": "head", "git_diff": ""},
+                    {"sent": {"1": {"sent": 60000, "errors": 0},
+                              "2": {"sent": 60000, "errors": 0},
+                              "3": {"sent": 60000, "errors": 0}}}, {"logs": {}}])
+                c = self.configuration()
+                row = runner.matrix(c)[3]
+                with patch.object(runner, "Job", FakeJob), \
+                     patch.object(runner, "command", command), \
+                     patch.object(runner, "irq_check", return_value={}), \
+                     patch.object(runner, "receive_line", side_effect=lambda *_: next(replies)), \
+                     patch.object(runner.subprocess, "Popen", return_value=Remote()), \
+                     patch.object(runner.time, "sleep", side_effect=lambda x: events.append(f"sleep:{x}")), \
+                     patch.object(runner, "analyze_run", return_value={"1": "marker"}):
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, "injected"):
+                            runner.run_one(c, row, "mixed", 1, Path(tmp), "source")
+                        self.assertTrue(next(Path(tmp).glob("*/FAILED.json")).is_file())
+                        self.assertLess(events.index("stop:receiver-3"), events.index("stop:loader"))
+                        self.assertNotIn('{"send": true}', events)
+                    else:
+                        runner.run_one(c, row, "mixed", 1, Path(tmp), "source")
+                        order = ["ready:receiver-3", "sleep:5", "calibrate:phc-before",
+                                 '{"send": true}', "sleep:2", "stop:receiver-3",
+                                 "calibrate:phc-after", "stop:loader"]
+                        indices = [events.index(event) for event in order]
+                        self.assertEqual(indices, sorted(indices))
+                        self.assertTrue(next(Path(tmp).glob("*/run.complete.json")).is_file())
+
+    def test_job_timeout_kills_only_owned_process_group(self) -> None:
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            job = self.runner.Job([sys.executable, "-u", "-c",
+                "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print('ready'); time.sleep(30)"], Path(tmp) / "job.log")
+            try:
+                job.ready("ready", 3)
+                with self.assertRaisesRegex(RuntimeError, "forced kill"):
+                    job.stop(.1)
+                self.assertIsNotNone(job.p.poll())
+            finally:
+                job.stop(.1)
+
+
 if __name__ == "__main__":
     unittest.main()

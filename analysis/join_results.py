@@ -74,6 +74,7 @@ INCONSISTENT_AF_XDP_METADATA = 1 << 6
 INCONSISTENT_AMBIGUOUS_USER = 1 << 7
 INCONSISTENT_INGRESS_FLAGS = 1 << 8
 INCONSISTENT_UDP_FLAGS = 1 << 9
+INCONSISTENT_DELIVERY_MODE = 1 << 10
 
 INCONSISTENCY_BITS = {
     "ingress_path": INCONSISTENT_INGRESS_PATH,
@@ -86,6 +87,7 @@ INCONSISTENCY_BITS = {
     "ambiguous_user": INCONSISTENT_AMBIGUOUS_USER,
     "ingress_flags": INCONSISTENT_INGRESS_FLAGS,
     "udp_flags": INCONSISTENT_UDP_FLAGS,
+    "delivery_mode": INCONSISTENT_DELIVERY_MODE,
 }
 
 
@@ -605,7 +607,11 @@ def joined_row(
         user_source = ""
         user = None
 
+    if delivery_mode not in {"mixed", "all-pass"}:
+        raise InputError(f"unsupported delivery mode: {delivery_mode!r}")
     inconsistencies = 0
+    if delivery_mode == "all-pass" and (cpumap is not None or afxdp is not None):
+        inconsistencies |= INCONSISTENT_DELIVERY_MODE
     ingress_path = value(ingress, "requested_path")
     cpumap_path = value(cpumap, "requested_path")
     afxdp_path = value(afxdp, "requested_path")
@@ -733,6 +739,12 @@ def joined_row(
     if user_source == "ambiguous":
         inconsistencies |= INCONSISTENT_AMBIGUOUS_USER
 
+    if inconsistencies & INCONSISTENT_DELIVERY_MODE:
+        cpumap_valid = False
+        afxdp_core_valid = False
+        afxdp_metadata_consistent = False
+        afxdp_hw_valid = False
+
     raw_xdp_mono = positive_u64_value(ingress, "initial_xdp_ns")
     if ingress is None:
         raw_xdp_mono = positive_u64_value(afxdp, "initial_xdp_ns")
@@ -791,6 +803,9 @@ def joined_row(
             user_hw = positive_value(udp, "hw_rx_ns")
         elif ingress_hw_valid:
             user_hw = positive_value(ingress, "hw_rx_ns")
+
+    if inconsistencies & INCONSISTENT_DELIVERY_MODE:
+        user_semantically_valid = False
 
     # HW RX는 PHC, XDP/CPUMAP/user_mono는 같은 Pi의 MONOTONIC 계열이다.
     # 서로 다른 기준 시각끼리 바로 빼면 시계 offset이 지연에 섞여 들어간다.
@@ -1264,6 +1279,11 @@ def analyze(
     for table, _ in sources.values():
         keys.update(table.records)
 
+    flow_id = getattr(args, "flow_id", None)
+    if flow_id is not None:
+        if not 0 <= flow_id <= 0xFFFFFFFF:
+            raise InputError("flow-id must fit uint32")
+        keys = {key for key in keys if key[0] == flow_id}
     rows: list[dict[str, int | str | None]] = []
     for key in sorted(keys):
         rows.append(joined_row(
@@ -1278,6 +1298,32 @@ def analyze(
         rows, sources, calibration, input_paths, input_artifacts, manifest,
         args.allow_endpoint_clamp, args.completion_marker,
     )
+    summary["flow_id"] = flow_id
+    summary["source_counts_scope"] = "complete-input-files"
+    sent = getattr(args, "sent_count", None)
+    target = getattr(args, "target_count", None)
+    if sent is not None or target is not None:
+        if flow_id is None or sent is None or target is None or not 0 <= sent <= target:
+            raise InputError("counts require flow-id and 0 <= sent-count <= target-count")
+        if any(key[1] >= target for key in keys):
+            raise InputError("observed sequence outside target send range")
+        received = sum(bool(row["udp_present"] or row["afxdp_present"]) for row in rows)
+        if received > sent:
+            raise InputError("unique received packets exceed successful sends")
+        latencies = [cast(int, row["user_hw_ns"]) for row in rows
+                     if row["user_hw_ns"] is not None]
+        summary["delivery"] = {
+            "target_sent": target, "actual_sent": sent,
+            "sender_shortfall": target - sent, "unique_received": received,
+            "lost": sent - received,
+            "loss_rate": (sent - received) / sent if sent else None,
+            "deadline_ns": 100000,
+            "valid_nic_to_user_samples": len(latencies),
+            "deadline_misses": sum(value > 100000 for value in latencies),
+            "deadline_miss_rate": (sum(value > 100000 for value in latencies)
+                                   / len(latencies)) if latencies else None,
+            "latency_unavailable_received": received - len(latencies),
+        }
     return rows, summary
 
 
@@ -1479,6 +1525,12 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ingress", required=True, type=Path, help="xdp_loader ingress CSV"
     )
+    parser.add_argument("--flow-id", type=int,
+                        help="analyze only this flow; raw input hashes remain complete")
+    parser.add_argument("--sent-count", type=int,
+                        help="successful sendto count from sender log, requires target-count")
+    parser.add_argument("--target-count", type=int,
+                        help="planned send count; report loss separately from sender shortfall")
     parser.add_argument("--cpumap", type=Path, help="optional CPUMAP CSV")
     parser.add_argument("--afxdp", type=Path, help="optional AF_XDP CSV")
     parser.add_argument(
