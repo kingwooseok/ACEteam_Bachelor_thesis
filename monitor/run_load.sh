@@ -87,6 +87,7 @@ INTERFACE=${ACE_INTERFACE:-eth0}
 MONITOR_ENABLED=${ACE_MONITOR_ENABLED:-1}
 IPERF_ENABLED=${ACE_IPERF_ENABLED:-0}
 IPERF_PORT=${ACE_IPERF_PORT:-5201}
+IPERF_CPU=${ACE_IPERF_CPU:-inherit}
 CPU_METHOD=${ACE_CPU_METHOD:-}
 MEMORY_WORKERS=${ACE_MEMORY_WORKERS:-0}
 MEMORY_BYTES=${ACE_MEMORY_BYTES:-}
@@ -123,12 +124,19 @@ for command in mktemp stat cat sync; do require "$command"; done
 if ((CPU_LOAD || MEMORY_WORKERS || IO_WORKERS)); then require stress-ng; fi
 if ((CPU_LOAD)); then require taskset; fi
 if ((MONITOR_ENABLED)); then require mpstat; require sar; require stdbuf; fi
-if ((IPERF_ENABLED)); then require iperf3; fi
+if ((IPERF_ENABLED)); then
+    require iperf3
+    if [[ $IPERF_CPU != inherit ]]; then
+        uint "$IPERF_CPU" && ((10#$IPERF_CPU < $(nproc --all))) || die 'invalid iperf CPU'
+        require taskset
+    fi
+fi
 mkdir -p "$RESULT_DIR"
 (
     set -o noclobber
     printf 'run_id=%s\ncpu_load=%s\nload_cpus=%s\nmeasurement_interval=%s\nduration=%s\ninterface=%s\nmemory_workers=%s\nmemory_bytes=%s\nio_workers=%s\nload_on_s=%s\nload_off_s=%s\n' "$RUN_ID" "$CPU_LOAD" "$LOAD_CPUS" "$INTERVAL" "$DURATION" "$INTERFACE" "$MEMORY_WORKERS" "$MEMORY_BYTES" "$IO_WORKERS" "$ON_SEC" "$OFF_SEC" > "$RESULT_DIR/config.txt"
 ) || die 'result directory already has config.txt'
+printf 'iperf_cpu=%s\n' "$IPERF_CPU" >> "$RESULT_DIR/config.txt"
 STAGING_DIR=$(mktemp -d "/dev/shm/ace-monitor.$RUN_ID.XXXXXX") || die 'cannot create log staging directory'
 launch() {
     local type=$1 log=$2
@@ -140,7 +148,11 @@ launch() {
     PIDS+=("$pid")
     if [[ $type == load ]]; then LOAD_PIDS+=("$pid"); fi
 }
-if ((IPERF_ENABLED)); then launch observe iperf3.log iperf3 -s -p "$IPERF_PORT" -i 0; fi
+if ((IPERF_ENABLED)); then
+    iperf_args=(iperf3 -s -p "$IPERF_PORT" -i 0)
+    [[ $IPERF_CPU == inherit ]] || iperf_args=(taskset -c "$IPERF_CPU" "${iperf_args[@]}")
+    launch observe iperf3.log "${iperf_args[@]}"
+fi
 if ((MONITOR_ENABLED)); then
     launch observe mpstat.log stdbuf -oL mpstat -P ALL "$INTERVAL"
     launch observe network.log stdbuf -oL sar -n DEV --iface="$INTERFACE" "$INTERVAL"

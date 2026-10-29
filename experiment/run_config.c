@@ -51,9 +51,10 @@ static int policy(struct parser *p, const char *key)
 static int allowed(const char *key)
 {
 	static const char *keys[] = {"run_id","receiver_address","control_port","repo","output_root","interface",
-		"modes","repeats","duration_ms","warmup_ms","ready_timeout_ms","stop_timeout_ms",
+		"modes","repeats","alternate_mode_order","duration_ms","warmup_ms","ready_timeout_ms","stop_timeout_ms",
 		"start_delay_ms","drain_ms","settle_ms","supervisor_cpu","monitor",
 		"environment.governor","environment.rx_irq_cpu",
+		"receiver.supervisor_cpu","sender.supervisor_cpu","receiver.network_cpu","sender.network_cpu",
 		"load.cpu_percent","load.cpu_cpus","load.cpu_method","load.memory_workers","load.memory_bytes",
 		"load.io_workers","load.io_path","load.network_bps","load.network_protocol","load.network_direction",
 		"load.network_port","load.network_parallel","load.on_sec","load.off_sec"};
@@ -128,6 +129,7 @@ int read_run_config(const char *file, struct run_config *c)
 	string(&p,"output_root","results/experiment",c->output,sizeof(c->output));
 	c->control_port=number(&p,"control_port","49090",1024,65535);
 	c->repeats=number(&p,"repeats",NULL,1,10000);
+	c->alternate_mode_order=number(&p,"alternate_mode_order","0",0,1);
 	c->duration_ms=number(&p,"duration_ms",NULL,1,86400000);
 	c->warmup_ms=number(&p,"warmup_ms",NULL,0,3600000);
 	c->ready_ms=number(&p,"ready_timeout_ms","60000",100,600000);
@@ -137,6 +139,12 @@ int read_run_config(const char *file, struct run_config *c)
 	if (c->stop_ms<c->drain_ms+100) { fprintf(stderr,"stop_timeout_ms must exceed drain_ms by at least 100 ms\n"); p.error=1; }
 	c->settle_ms=number(&p,"settle_ms",NULL,0,60000);
 	c->supervisor_cpu=cpu(&p,"supervisor_cpu","inherit");
+	/* 역할별 값이 없으면 기존 공통 CPU 설정을 유지한다. */
+	const char *common=lookup(&p,"supervisor_cpu","inherit");
+	c->receiver_supervisor_cpu=cpu(&p,"receiver.supervisor_cpu",common);
+	c->sender_supervisor_cpu=cpu(&p,"sender.supervisor_cpu",common);
+	c->receiver_network_cpu=cpu(&p,"receiver.network_cpu","inherit");
+	c->sender_network_cpu=cpu(&p,"sender.network_cpu","inherit");
 	/* C08/C10은 실제 측정 준비에서 적용한다. socket-only 검증은 장치를 바꾸지 않는다. */
 	string(&p,"environment.governor","performance",c->governor,sizeof(c->governor));
 	for (const char *q=c->governor;*q;q++) if (!isalnum((unsigned char)*q) && *q!='_' && *q!='-') p.error=1;
@@ -210,5 +218,7 @@ void write_condition(FILE *out,const struct run_config *c,const char *mode,uint6
 	fprintf(out,",\"memory_workers\":%u,\"memory_bytes\":",c->memory_workers); json_string(out,c->memory_bytes);
 	fprintf(out,",\"io_workers\":%u,\"network_bps\":%llu,\"network_protocol\":\"%s\",\"network_direction\":\"%s\",\"network_parallel\":%u,\"on_sec\":%u,\"off_sec\":%u},\"environment\":{\"governor\":",c->io_workers,(unsigned long long)c->network_bps,c->network_protocol,c->network_direction,c->network_parallel,c->load_on_sec,c->load_off_sec);
 	json_string(out,c->governor);
+	fprintf(out,",\"alternate_mode_order\":%u",c->alternate_mode_order);
+	fprintf(out,",\"receiver_supervisor_cpu\":%d,\"sender_supervisor_cpu\":%d,\"receiver_network_cpu\":%d,\"sender_network_cpu\":%d",c->receiver_supervisor_cpu,c->sender_supervisor_cpu,c->receiver_network_cpu,c->sender_network_cpu);
 	fprintf(out,",\"rx_irq_cpu\":%u},\"config\":{\"sha256\":\"%s\",\"warmup_ms\":%llu,\"settle_ms\":%u,\"drain_ms\":%u,\"monitor\":%u}}",c->rx_irq_cpu,c->digest,(unsigned long long)c->warmup_ms,c->settle_ms,c->drain_ms,c->monitor);
 }

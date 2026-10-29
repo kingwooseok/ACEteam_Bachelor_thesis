@@ -1,0 +1,15 @@
+{
+  "receiver_address": "192.168.10.10",
+  "receiver_cpus": [null, 3, null],
+  "receiver_policies": [null, null, null],
+  "receiver_priorities": [null, null, null],
+  "sender_policies": [null, null, null],
+  "sender_priorities": [null, null, null],
+  "receiver_supervisor_cpu": null,
+  "sender_supervisor_cpu": null,
+  "receiver_network_cpu": null,
+  "network_high_bps": null,
+  "network_middle_bps": null,
+  "pass_high_pps": null,
+  "settle_ms": null
+}

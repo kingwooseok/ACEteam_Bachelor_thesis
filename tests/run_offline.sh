@@ -254,7 +254,8 @@ python3 -m unittest -v \
 	analysis.tests.test_aggregate_runs \
 	analysis.tests.test_experiment \
 	tests.test_capture_manifest \
-	tests.test_environment
+	tests.test_environment \
+	tests.test_design_plan
 
 step 10 "native experiment runner, readiness, drain and load lifecycle"
 make -C "$project_dir/experiment"

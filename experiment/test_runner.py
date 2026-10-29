@@ -1,5 +1,6 @@
 """End-to-end native runner smoke and failure checks; Linux loopback only."""
 import json
+import os
 from pathlib import Path
 import shutil
 import signal
@@ -91,6 +92,40 @@ class NativeRunnerTests(unittest.TestCase):
         self.complete(receiver, False)
         self.assertEqual(before, {file: file.read_bytes() for file in files})
 
+    def test_role_specific_supervisor_affinity(self):
+        # 실행 호스트가 허용한 CPU에서 두 역할의 독립 affinity를 실제 확인한다.
+        cpus = sorted(os.sched_getaffinity(0))
+        self.config.write_text(self.base.replace("duration_ms=100", "duration_ms=1000") +
+                               f"receiver.supervisor_cpu={cpus[0]}\n" +
+                               f"sender.supervisor_cpu={cpus[-1]}\n" +
+                               "alternate_mode_order=1\n")
+        receiver = self.launch("receiver")
+        sender = self.launch("sender")
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if list((self.directory / "result").rglob("start.ns")):
+                break
+            if receiver.poll() is not None or sender.poll() is not None:
+                self.fail("runner exited before affinity check")
+            time.sleep(0.01)
+        else:
+            self.fail("no start barrier")
+        self.assertEqual(os.sched_getaffinity(receiver.pid), {cpus[0]})
+        self.assertEqual(os.sched_getaffinity(sender.pid), {cpus[-1]})
+        self.complete(sender)
+        self.complete(receiver)
+
+    def test_generated_design_configs_are_accepted_by_native_parser(self):
+        from tests.test_design_plan import DesignPlanTests, plan
+        profile = DesignPlanTests().profile()
+        for index, row in enumerate(plan.rows()):
+            self.config.write_text(plan.config(profile, row, index))
+            output = self.complete(self.launch("plan"))
+            conditions = [json.loads(line) for line in output.splitlines()[1:]]
+            self.assertTrue(conditions)
+            self.assertEqual(conditions[0]['environment']['sender_network_cpu'], 3)
+            self.assertEqual(conditions[0]['environment']['receiver_supervisor_cpu'], 0)
+
     def test_mismatched_configuration_is_rejected(self):
         other = self.directory / "other.conf"
         other.write_text(self.base.replace("duration_ms=100", "duration_ms=101"))
@@ -120,9 +155,40 @@ class NativeRunnerTests(unittest.TestCase):
         config = config.replace("warmup_ms=0", "warmup_ms=100")
         config = config.replace("monitor=0", "monitor=1")
         config = config.replace("load.network_bps=0", "load.network_bps=1000000")
-        self.config.write_text(config + f"load.network_port={port}\n")
+        cpus = sorted(os.sched_getaffinity(0))
+        self.config.write_text(config + f"load.network_port={port}\n" +
+                               f"receiver.network_cpu={cpus[0]}\n" +
+                               f"sender.network_cpu={cpus[-1]}\n")
         receiver = self.launch("receiver")
         sender = self.launch("sender")
+        def descendants(pid):
+            try:
+                children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+            except FileNotFoundError:
+                return []
+            result = []
+            for child in children:
+                child = int(child)
+                try:
+                    command = Path(f"/proc/{child}/cmdline").read_bytes().replace(b"\0", b" ")
+                except FileNotFoundError:
+                    continue
+                result.append((child, command))
+                result.extend(descendants(child))
+            return result
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            server = [pid for pid, command in descendants(receiver.pid)
+                      if b"iperf3 -s" in command]
+            client = [pid for pid, command in descendants(sender.pid)
+                      if b"iperf3 -c" in command]
+            if server and client:
+                self.assertEqual(os.sched_getaffinity(server[0]), {cpus[0]})
+                self.assertEqual(os.sched_getaffinity(client[0]), {cpus[-1]})
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("no real iperf server/client for affinity check")
         self.complete(sender)
         self.complete(receiver)
         root = self.directory / "result" / "socket-smoke"
@@ -169,7 +235,10 @@ class NativeRunnerTests(unittest.TestCase):
                      self.base.replace("run_id=socket-smoke", "run_id=_bad"),
                      self.base.replace("flow1.period_ns=2000000", "flow1.period_ns=1"),
                      self.base + "environment.governor=bad/value\n",
-                     self.base + "environment.rx_irq_cpu=-1\n"):
+                     self.base + "environment.rx_irq_cpu=-1\n",
+                     self.base + "receiver.supervisor_cpu=-2\n",
+                     self.base + "sender.network_cpu=bad\n",
+                     self.base + "alternate_mode_order=2\n"):
             self.config.write_text(text)
             self.complete(self.launch("plan"), False)
 

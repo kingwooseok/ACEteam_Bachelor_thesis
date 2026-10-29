@@ -338,6 +338,8 @@ static int monitor_process(struct context *x)
 	if (!x->c.monitor && !x->c.cpu_percent && !x->c.memory_workers && !x->c.io_workers && !x->c.network_bps) return -2;
 	char directory[4096],ready[4096],cpu[16],duration[32]; pathf(directory,sizeof(directory),"%s/monitor",x->run_dir); pathf(ready,sizeof(ready),"%s/monitor.ready",x->run_dir);
 	setenv("ACE_RUN_DIR",directory,1); setenv("ACE_RUN_ID",x->run_id,1); setenv("ACE_SKIP_MANIFEST","1",1); setenv("ACE_INTERFACE",x->c.interface,1); setenv("ACE_READY_FILE",ready,1);
+	if (x->c.receiver_network_cpu<0) setenv("ACE_IPERF_CPU","inherit",1);
+	else envnum("ACE_IPERF_CPU",(unsigned)x->c.receiver_network_cpu);
 	envnum("ACE_MONITOR_ENABLED",x->c.monitor); envnum("ACE_IPERF_ENABLED",!!x->c.network_bps); envnum("ACE_IPERF_PORT",x->c.network_port); setenv("ACE_CPU_METHOD",x->c.cpu_method,1);
 	envnum("ACE_MEMORY_WORKERS",x->c.memory_workers); setenv("ACE_MEMORY_BYTES",x->c.memory_bytes,1); envnum("ACE_IO_WORKERS",x->c.io_workers); setenv("ACE_IO_PATH",x->c.io_path,1);
 	if (x->c.load_on_sec) { envnum("ACE_LOAD_ON_SEC",x->c.load_on_sec); envnum("ACE_LOAD_OFF_SEC",x->c.load_off_sec); } else { unsetenv("ACE_LOAD_ON_SEC"); unsetenv("ACE_LOAD_OFF_SEC"); }
@@ -387,7 +389,7 @@ static int network_process(struct context *x)
 	snprintf(duration,sizeof(duration),"%llu",(unsigned long long)((x->c.duration_ms+x->c.warmup_ms+x->c.start_delay_ms+x->c.ready_ms+x->c.stop_ms+999)/1000+5));
 	if (x->c.load_on_sec) { envnum("ACE_LOAD_ON_SEC",x->c.load_on_sec); envnum("ACE_LOAD_OFF_SEC",x->c.load_off_sec); } else { unsetenv("ACE_LOAD_ON_SEC"); unsetenv("ACE_LOAD_OFF_SEC"); }
 	char *args[]={"bash","./monitor/network_load.sh",x->c.address,rate,parallel,x->c.network_protocol,x->c.network_direction,port,duration,NULL};
-	return spawn(x,"network-load",NULL,-1,SCHED_OTHER,0,1,args);
+	return spawn(x,"network-load",NULL,x->c.sender_network_cpu,SCHED_OTHER,0,1,args);
 }
 static int wait_completions(struct context *x,const int children[3],unsigned timeout_ms)
 {
@@ -487,7 +489,7 @@ int main(int argc,char **argv)
 	sigaction(SIGINT,&stop_action,NULL); sigaction(SIGTERM,&stop_action,NULL); sigaction(SIGCHLD,&child_action,NULL); signal(SIGPIPE,SIG_IGN);
 	if (prctl(PR_SET_CHILD_SUBREAPER,1)) { perror("child subreaper"); return 1; }
 	char output[4096]; if (!realpath(x.c.repo,output)) { perror("repository path"); return 1; } strcpy(x.c.repo,output);
-	if (chdir(x.c.repo) || scheduler(x.c.supervisor_cpu,SCHED_OTHER,0)) { perror("runner environment"); return 1; }
+	if (chdir(x.c.repo) || scheduler(x.receiver?x.c.receiver_supervisor_cpu:x.c.sender_supervisor_cpu,SCHED_OTHER,0)) { perror("runner environment"); return 1; }
 	if (preflight(&x)) { perror("preflight"); return 1; }
 	if (x.c.output[0]!='/') { if (pathf(output,sizeof(output),"%s/%s",x.c.repo,x.c.output)) return 1; strcpy(x.c.output,output); }
 	if (pathf(x.suite,sizeof(x.suite),"%s/%s/%s",x.c.output,x.c.run_id,argv[1])) return 1;
@@ -495,7 +497,9 @@ int main(int argc,char **argv)
 	if (connect_peer(&x)) { perror("control handshake"); if (x.fd>=0) close(x.fd); return 1; }
 	int failed=0;
 	for (unsigned r=1;r<=x.c.repeats && !failed;r++) for (unsigned m=0;m<x.c.mode_count && !failed;m++) {
-		x.repeat=r; x.index++; strcpy(x.mode,x.c.modes[m]);
+		/* 반복마다 시작 모드를 뒤집어 항상 같은 모드가 먼저인 편향을 줄인다. */
+		unsigned mode_index=x.c.alternate_mode_order && !(r%2)?x.c.mode_count-1-m:m;
+		x.repeat=r; x.index++; strcpy(x.mode,x.c.modes[mode_index]);
 		if (begin_run(&x)) { perror("prepare run"); failed=1; }
 		else { printf("%s: %s\n",argv[1],x.run_id); fflush(stdout); if (x.receiver?receiver_run(&x):sender_run(&x)) { perror("run failed"); failed=1; } }
 		if (failed) {
