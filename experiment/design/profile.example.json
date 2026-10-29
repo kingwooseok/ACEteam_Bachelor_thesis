@@ -1,0 +1,35 @@
+{
+  "receiver_address": "192.168.10.10",
+  "receiver_cpus": [
+    0,
+    3,
+    1
+  ],
+  "receiver_policies": [
+    "other",
+    "fifo",
+    "fifo"
+  ],
+  "receiver_priorities": [
+    0,
+    80,
+    80
+  ],
+  "sender_policies": [
+    "other",
+    "fifo",
+    "fifo"
+  ],
+  "sender_priorities": [
+    0,
+    80,
+    80
+  ],
+  "receiver_supervisor_cpu": 0,
+  "sender_supervisor_cpu": 3,
+  "receiver_network_cpu": 0,
+  "network_high_bps": null,
+  "network_middle_bps": null,
+  "pass_high_pps": null,
+  "settle_ms": null
+}
