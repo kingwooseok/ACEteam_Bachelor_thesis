@@ -28,6 +28,8 @@ set -euo pipefail
 #
 # 사용자가 실험 전에 직접 원하는 CPU에 affinity를
 # 설정해야 한다.
+# 자동 탐지·설정은 set_irq_affinity.sh를 사용하며 부팅 자동 적용은
+# install_irq_service.sh로 수신 Pi에서 명시적으로 등록한다.
 #
 # 예: IRQ 106을 CPU2에 고정
 #

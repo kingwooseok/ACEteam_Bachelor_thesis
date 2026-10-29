@@ -1,0 +1,1493 @@
+{
+  "plan": {
+    "started_kst": "2026-10-29T16:18:53.042556+09:00",
+    "duration_sec": 10,
+    "repeats": 3,
+    "cases": [
+      {
+        "name": "udp1472_400M",
+        "payload": 1472,
+        "bps": 400000000,
+        "cpu_load": false
+      },
+      {
+        "name": "udp1472_800M",
+        "payload": 1472,
+        "bps": 800000000,
+        "cpu_load": false
+      },
+      {
+        "name": "udp1472_950M",
+        "payload": 1472,
+        "bps": 950000000,
+        "cpu_load": false
+      },
+      {
+        "name": "udp96_3000pps",
+        "payload": 96,
+        "bps": 2304000,
+        "cpu_load": false
+      },
+      {
+        "name": "udp96_11000pps",
+        "payload": 96,
+        "bps": 8448000,
+        "cpu_load": false
+      },
+      {
+        "name": "udp96_100000pps",
+        "payload": 96,
+        "bps": 76800000,
+        "cpu_load": false
+      },
+      {
+        "name": "udp1472_800M_cpu100",
+        "payload": 1472,
+        "bps": 800000000,
+        "cpu_load": true
+      },
+      {
+        "name": "udp96_11000pps_cpu100",
+        "payload": 96,
+        "bps": 8448000,
+        "cpu_load": true
+      }
+    ],
+    "rx_ip": "192.168.10.10",
+    "tx_ip": "192.168.10.11",
+    "tx_cpu": 3,
+    "rx_iperf_cpu": 0,
+    "cpu_load_cpus": [
+      0,
+      1,
+      2
+    ],
+    "governor_or_irq_changes": false,
+    "xdp_changes": false,
+    "git_changes": false,
+    "notes": "UDP iperf payload sizes; not ACE wire envelopes. Concurrent ICMP ping measures RTT, not NIC-HW-to-user latency.",
+    "completed_kst": "2026-10-29T16:23:21.107976+09:00"
+  },
+  "condition_summary": [
+    {
+      "case": "udp1472_400M",
+      "payload_bytes": 1472,
+      "cpu_load": false,
+      "target_mbps": 400.0,
+      "rx_mbps_mean": 399.96157123744825,
+      "rx_mbps_min": 399.9598511414443,
+      "rx_mbps_max": 399.9626680312024,
+      "tx_mbps_mean": 399.98687284898006,
+      "rx_pps_mean": 33964.127992310474,
+      "lost_packets": 0,
+      "total_datagrams": 1019094,
+      "lost_percent_pooled": 0.0,
+      "lost_percent_min": 0,
+      "lost_percent_max": 0,
+      "ping_rtt_mean_ms": 0.13533333333333333,
+      "ping_rtt_p99_ms": 0.215069999999999,
+      "ping_rtt_max_ms": 0.867,
+      "rx_cpu0_mean_percent": 7.7062455812334525,
+      "rx_cpu_mean_percent": {
+        "cpu0": 7.7062455812334525,
+        "cpu1": 6.216757704715122,
+        "cpu2": 1.4850678042827485,
+        "cpu3": 4.381624980187971
+      }
+    },
+    {
+      "case": "udp1472_800M",
+      "payload_bytes": 1472,
+      "cpu_load": false,
+      "target_mbps": 800.0,
+      "rx_mbps_mean": 799.924939640733,
+      "rx_mbps_min": 799.9233812027517,
+      "rx_mbps_max": 799.9257594645364,
+      "tx_mbps_mean": 799.9746505064635,
+      "rx_pps_mean": 67928.40859720898,
+      "lost_packets": 0,
+      "total_datagrams": 2038226,
+      "lost_percent_pooled": 0.0,
+      "lost_percent_min": 0,
+      "lost_percent_max": 0,
+      "ping_rtt_mean_ms": 0.14837666666666666,
+      "ping_rtt_p99_ms": 0.2625799999999995,
+      "ping_rtt_max_ms": 1.34,
+      "rx_cpu0_mean_percent": 16.589448354154236,
+      "rx_cpu_mean_percent": {
+        "cpu0": 16.589448354154236,
+        "cpu1": 7.625819650260779,
+        "cpu2": 4.033353131114708,
+        "cpu3": 4.579925131061375
+      }
+    },
+    {
+      "case": "udp1472_950M",
+      "payload_bytes": 1472,
+      "cpu_load": false,
+      "target_mbps": 950.0,
+      "rx_mbps_mean": 949.9125523709135,
+      "rx_mbps_min": 949.910349869385,
+      "rx_mbps_max": 949.9154196817113,
+      "tx_mbps_mean": 949.9721675229683,
+      "rx_pps_mean": 80665.12842823654,
+      "lost_packets": 0,
+      "total_datagrams": 2420418,
+      "lost_percent_pooled": 0.0,
+      "lost_percent_min": 0,
+      "lost_percent_max": 0,
+      "ping_rtt_mean_ms": 0.16602,
+      "ping_rtt_p99_ms": 0.3191299999999999,
+      "ping_rtt_max_ms": 2.31,
+      "rx_cpu0_mean_percent": 15.85915291418665,
+      "rx_cpu_mean_percent": {
+        "cpu0": 15.85915291418665,
+        "cpu1": 5.728351782794358,
+        "cpu2": 8.496144707072775,
+        "cpu3": 8.108464470792146
+      }
+    },
+    {
+      "case": "udp96_3000pps",
+      "payload_bytes": 96,
+      "cpu_load": false,
+      "target_mbps": 2.304,
+      "rx_mbps_mean": 2.303767112438034,
+      "rx_mbps_min": 2.303764118142488,
+      "rx_mbps_max": 2.303771488719447,
+      "tx_mbps_mean": 2.303913458307484,
+      "rx_pps_mean": 2999.696760987024,
+      "lost_packets": 0,
+      "total_datagrams": 90009,
+      "lost_percent_pooled": 0.0,
+      "lost_percent_min": 0,
+      "lost_percent_max": 0,
+      "ping_rtt_mean_ms": 0.15620333333333333,
+      "ping_rtt_p99_ms": 0.21601999999999907,
+      "ping_rtt_max_ms": 2.37,
+      "rx_cpu0_mean_percent": 1.798905158880132,
+      "rx_cpu_mean_percent": {
+        "cpu0": 1.798905158880132,
+        "cpu1": 0.8929693124056529,
+        "cpu2": 0.16420373998853083,
+        "cpu3": 1.4305269930775157
+      }
+    },
+    {
+      "case": "udp96_11000pps",
+      "payload_bytes": 96,
+      "cpu_load": false,
+      "target_mbps": 8.448,
+      "rx_mbps_mean": 8.447167755641216,
+      "rx_mbps_min": 8.447156213472926,
+      "rx_mbps_max": 8.447181549952814,
+      "tx_mbps_mean": 8.447709709405512,
+      "rx_pps_mean": 10998.916348491166,
+      "lost_packets": 0,
+      "total_datagrams": 330033,
+      "lost_percent_pooled": 0.0,
+      "lost_percent_min": 0,
+      "lost_percent_max": 0,
+      "ping_rtt_mean_ms": 0.12971,
+      "ping_rtt_p99_ms": 0.211069999999999,
+      "ping_rtt_max_ms": 0.338,
+      "rx_cpu0_mean_percent": 4.117054373116224,
+      "rx_cpu_mean_percent": {
+        "cpu0": 4.117054373116224,
+        "cpu1": 5.371880751229336,
+        "cpu2": 0.8295005904843454,
+        "cpu3": 0.7619014898593918
+      }
+    },
+    {
+      "case": "udp96_100000pps",
+      "payload_bytes": 96,
+      "cpu_load": false,
+      "target_mbps": 76.8,
+      "rx_mbps_mean": 76.79287435034323,
+      "rx_mbps_min": 76.79267469671366,
+      "rx_mbps_max": 76.7930432737789,
+      "tx_mbps_mean": 76.79772701744126,
+      "rx_pps_mean": 99990.72181034273,
+      "lost_packets": 0,
+      "total_datagrams": 3000307,
+      "lost_percent_pooled": 0.0,
+      "lost_percent_min": 0,
+      "lost_percent_max": 0,
+      "ping_rtt_mean_ms": 0.14838666666666667,
+      "ping_rtt_p99_ms": 0.32101,
+      "ping_rtt_max_ms": 0.324,
+      "rx_cpu0_mean_percent": 17.888120089210496,
+      "rx_cpu_mean_percent": {
+        "cpu0": 17.888120089210496,
+        "cpu1": 8.518907361955778,
+        "cpu2": 2.6977726372877218,
+        "cpu3": 6.707562375393813
+      }
+    },
+    {
+      "case": "udp1472_800M_cpu100",
+      "payload_bytes": 1472,
+      "cpu_load": true,
+      "target_mbps": 800.0,
+      "rx_mbps_mean": 798.2276704941439,
+      "rx_mbps_min": 797.84463908947,
+      "rx_mbps_max": 798.5217692116037,
+      "tx_mbps_mean": 799.9772600614729,
+      "rx_pps_mean": 67784.2790840815,
+      "lost_packets": 4329,
+      "total_datagrams": 2038203,
+      "lost_percent_pooled": 0.21239297557701564,
+      "lost_percent_min": 0.1751511966947939,
+      "lost_percent_max": 0.2605174730688222,
+      "ping_rtt_mean_ms": 0.15489333333333333,
+      "ping_rtt_p99_ms": 0.26652999999999955,
+      "ping_rtt_max_ms": 2.31,
+      "rx_cpu0_mean_percent": 98.99394682873451,
+      "rx_cpu_mean_percent": {
+        "cpu0": 98.99394682873451,
+        "cpu1": 99.5291297154602,
+        "cpu2": 99.84162527699927,
+        "cpu3": 0.5088596256131408
+      }
+    },
+    {
+      "case": "udp96_11000pps_cpu100",
+      "payload_bytes": 96,
+      "cpu_load": true,
+      "target_mbps": 8.448,
+      "rx_mbps_mean": 8.44716831867129,
+      "rx_mbps_min": 8.44715705801981,
+      "rx_mbps_max": 8.447179860849428,
+      "tx_mbps_mean": 8.447707738538618,
+      "rx_pps_mean": 10998.917081603238,
+      "lost_packets": 0,
+      "total_datagrams": 330033,
+      "lost_percent_pooled": 0.0,
+      "lost_percent_min": 0,
+      "lost_percent_max": 0,
+      "ping_rtt_mean_ms": 0.13186,
+      "ping_rtt_p99_ms": 0.20513999999999896,
+      "ping_rtt_max_ms": 0.345,
+      "rx_cpu0_mean_percent": 99.08801373546923,
+      "rx_cpu_mean_percent": {
+        "cpu0": 99.08801373546923,
+        "cpu1": 99.5610603543162,
+        "cpu2": 99.90511545617258,
+        "cpu3": 0.7334666073119109
+      }
+    }
+  ],
+  "telemetry": {
+    "receiver": {
+      "freq_ghz_min_observed": 1.5,
+      "freq_ghz_max_observed": 2.4,
+      "temp_c_min_observed": 41.9,
+      "temp_c_max_observed": 50.7,
+      "throttled_values": [
+        "throttled=0x0"
+      ],
+      "throttled_observations": 48,
+      "governors": [
+        "ondemand"
+      ]
+    },
+    "sender": {
+      "freq_ghz_min_observed": 1.5,
+      "freq_ghz_max_observed": 2.4,
+      "temp_c_min_observed": 41.9,
+      "temp_c_max_observed": 51.8,
+      "throttled_values": [
+        "throttled=0x0"
+      ],
+      "throttled_observations": 48,
+      "governors": [
+        "ondemand"
+      ]
+    }
+  },
+  "supplementary_diagnostic": {
+    "id": "diagnostic_cpu800M",
+    "case": "diagnostic_cpu800M",
+    "repeat": "supplementary",
+    "payload_bytes": 1472,
+    "target_bps": 800000000,
+    "cpu_load": true,
+    "tx_mbps": 799.9769847958827,
+    "rx_mbps": 797.5939121328287,
+    "rx_pps": 67730.46128845353,
+    "lost_packets": 1867,
+    "total_datagrams": 679400,
+    "lost_percent": 0.274801295260524,
+    "jitter_ms": 0.016106943488899177,
+    "ping_samples": 100,
+    "ping_rtt_mean_ms": 0.15409,
+    "ping_rtt_p99_ms": 0.2519200000000005,
+    "ping_rtt_max_ms": 0.343,
+    "rx_cpu_percent": {
+      "cpu0": 99.25373134328358,
+      "cpu1": 99.81343283582089,
+      "cpu2": 99.90662931839402,
+      "cpu3": 3.9585296889726673
+    },
+    "tx_cpu_percent": {
+      "cpu0": 6.7357512953367875,
+      "cpu1": 8.81488736532811,
+      "cpu2": 12.915851272015656,
+      "cpu3": 50.53974484789009
+    },
+    "rx_irq_deltas": {
+      "106": [
+        337329,
+        0,
+        0,
+        0
+      ]
+    },
+    "rx_governor": {
+      "policy0": "ondemand"
+    },
+    "tx_governor": {
+      "policy0": "ondemand"
+    },
+    "udp_counter_deltas": {
+      "InDatagrams": 677537,
+      "NoPorts": 0,
+      "InErrors": 1867,
+      "OutDatagrams": 1,
+      "RcvbufErrors": 1867,
+      "SndbufErrors": 0,
+      "InCsumErrors": 0,
+      "IgnoredMulti": 0,
+      "MemErrors": 0
+    },
+    "nic_counter_deltas": {
+      "rx_packets": 679515,
+      "rx_dropped": 0,
+      "rx_errors": 0,
+      "rx_missed_errors": 0
+    }
+  },
+  "idle_ping": {
+    "samples": 100,
+    "rtt_mean_ms": 0.1621,
+    "rtt_p99_ms": 0.1963300000000007,
+    "rtt_max_ms": 0.328
+  },
+  "evidence_hashes": {
+    "udp1472_800M_cpu100_r1.json": "e50f6b33bf233a643566abbbdb8fbad6f8c60f4d49945e360a2c114efa56acde",
+    "udp1472_950M_r1.json": "5acbda78370d861cc321456b43f3e5494c571baf196c0336b4d86a5177aed893",
+    "udp1472_400M_r2.json": "62b0e038c5fc4f1aa3040fb081054103bd05dc8644cecb4af57a0ed077643dcd",
+    "udp96_11000pps_cpu100_r1.json": "c0c2fdccb5e605b07d72b38fcebd54a6b2a463d1db8c9e674e446927124b3c50",
+    "udp1472_400M_r3.json": "447b2e17ab2b35829ee207351d889d3ed2125a6ecdbd2f7aef3eae68a8c6f71d",
+    "craftp_postcheck.json": "119d04c0e7e15fb4e33ab4216fb1647e0ca3fd6e2d72967d4ab18989be3a4c6c",
+    "udp1472_800M_r1.json": "7a190f663a76fe9cb753a8bdfadb1a9cf0df3f89e031a557ba2f1ad4df455727",
+    "udp96_100000pps_r1.json": "a8fc22ffe841ba8f4bf5f06e7dac951f595a32696a70fb401b70088fd476532b",
+    "craftt_postcheck.json": "b438ef79a0c0bd06dad899f7537f775ee34a1baa52fdf5ac39068bfd23c222c9",
+    "udp96_3000pps_r1.json": "54e3c0412923f64a202d0ff5f955d6239e8ac60ccadbf3f29d7813620500d12f",
+    "udp96_11000pps_r1.json": "aadc880666ae7db8a7054b68eee02e40fab30daa32f400e42198e38ae75c09c7",
+    "udp1472_800M_r3.json": "90ff57bf107ae07dc32301bc669fb518c0a530c820e778b2816b6910fc2f6b5a",
+    "udp96_11000pps_r2.json": "44c2d1dec9c824ad8ea3f423fe256137e4b05bf8bc193b189b7a56bfa9a4544a",
+    "udp96_100000pps_r3.json": "fee2c40e2275aee4b82a99e6ec1f899586fe796cbc6964acc84bce3d2b3f06f8",
+    "udp96_3000pps_r2.json": "2af64c256c09e2a40d8918a3614438712e6b2cf02aa48b44e73c02f69a407e75",
+    "udp96_3000pps_r3.json": "5497cd88409b5a2452759ad16469f9acff4e054bd10bbc9b92dd7fe40d0ada12",
+    "udp96_100000pps_r2.json": "5eb44e43b98ddf1620e19ec16cb5dce5d9da5d55f294f52d565ee36a27a7bc80",
+    "test_plan.json": "d0d6ab1af573f453e19823b87c0b53027ca4ade958cd9e12f7e4ebfc998a3078",
+    "udp96_11000pps_r3.json": "a313c75f9b78c0c394d6887f5e2819966308475281a34fb2e51f15cf64428777",
+    "craftt_precheck.json": "bc5b28188d8425abb0b64a6d12dac3d9659fa9067e9173901e58beafe48b47d7",
+    "udp1472_800M_r2.json": "212eedddeb9dcdbbd194c726147a11edf64468505d562beab4035373b0d6e01f",
+    "craftp_precheck.json": "51278e415a57c1a6b03c1d0ee473534036575d7ee34aaebf1bcf292effe6fb6c",
+    "udp96_11000pps_cpu100_r3.json": "dfbbae1908059aded75ad975adcd7a410ef84a1efa45e9c11cd4b904d51d3c12",
+    "diagnostic_cpu800M.json": "4b8b77ce2448c52065f0972d05648ba5250a2fa8f85b211f1d9c6991712e7eef",
+    "final_process_cleanup.json": "620a9bc73b7d49a8d46e72a8f8a373622b3fb18836aaa81cd52c5e5b0e2dd4a8",
+    "udp1472_950M_r3.json": "c55d2f4c1ccd7335bed91c8871dbce675fb0b9bc1e7c9fb4bfa4455e3e1d88a3",
+    "udp1472_800M_cpu100_r3.json": "85e676bf9dc7f1b49947b4368e843768008034f44a6971cc62aa2789d916fd62",
+    "udp1472_950M_r2.json": "9a09d82e7105d9526b3e033d8ba33d1d1e41c193f7885d69436a21adfc73276e",
+    "udp1472_800M_cpu100_r2.json": "7f6f4a7f3e9408473f1bbe3b703edbd7947ace2c60d1c75f53a1136f621cba79",
+    "udp1472_400M_r1.json": "c2a2e2841b1aaff0ba22c5eed296d86c3b30a6a85981f3d030369696d14d316b",
+    "udp96_11000pps_cpu100_r2.json": "3483810fa0a01d85050ab67f61844633bc4938a54c3e72fe89859414bf65c43f"
+  },
+  "per_run": [
+    {
+      "id": "udp1472_400M_r1",
+      "case": "udp1472_400M",
+      "repeat": 1,
+      "payload_bytes": 1472,
+      "target_bps": 400000000,
+      "cpu_load": false,
+      "tx_mbps": 399.9868625499083,
+      "rx_mbps": 399.9626680312024,
+      "rx_pps": 33964.22113036705,
+      "lost_packets": 0,
+      "total_datagrams": 339708,
+      "lost_percent": 0,
+      "jitter_ms": 0.00732731369622785,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.14035,
+      "ping_rtt_p99_ms": 0.22053000000000333,
+      "ping_rtt_max_ms": 0.867,
+      "rx_cpu_percent": {
+        "cpu0": 7.360672975814932,
+        "cpu1": 5.517241379310345,
+        "cpu2": 0.19550342130987292,
+        "cpu3": 7.00888450148075
+      },
+      "tx_cpu_percent": {
+        "cpu0": 1.492537313432836,
+        "cpu1": 8.01980198019802,
+        "cpu2": 3.125,
+        "cpu3": 27.353815659068385
+      },
+      "rx_irq_deltas": {
+        "106": [
+          226861,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_400M_r2",
+      "case": "udp1472_400M",
+      "repeat": 2,
+      "payload_bytes": 1472,
+      "target_bps": 400000000,
+      "cpu_load": false,
+      "tx_mbps": 399.9875909708153,
+      "rx_mbps": 399.96219453969803,
+      "rx_pps": 33964.18092218902,
+      "lost_packets": 0,
+      "total_datagrams": 339679,
+      "lost_percent": 0,
+      "jitter_ms": 0.007644795475131287,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.13323,
+      "ping_rtt_p99_ms": 0.20815000000000058,
+      "ping_rtt_max_ms": 0.322,
+      "rx_cpu_percent": {
+        "cpu0": 9.119496855345911,
+        "cpu1": 10.069790628115653,
+        "cpu2": 0.19627085377821393,
+        "cpu3": 0.2944062806673209
+      },
+      "tx_cpu_percent": {
+        "cpu0": 3.4482758620689653,
+        "cpu1": 3.02734375,
+        "cpu2": 1.4591439688715953,
+        "cpu3": 25.691699604743082
+      },
+      "rx_irq_deltas": {
+        "106": [
+          226876,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_400M_r3",
+      "case": "udp1472_400M",
+      "repeat": 3,
+      "payload_bytes": 1472,
+      "target_bps": 400000000,
+      "cpu_load": false,
+      "tx_mbps": 399.98616502621655,
+      "rx_mbps": 399.9598511414443,
+      "rx_pps": 33963.98192437536,
+      "lost_packets": 0,
+      "total_datagrams": 339707,
+      "lost_percent": 0,
+      "jitter_ms": 0.007651588062231704,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.13242,
+      "ping_rtt_p99_ms": 0.2061600000000006,
+      "ping_rtt_max_ms": 0.321,
+      "rx_cpu_percent": {
+        "cpu0": 6.638566912539515,
+        "cpu1": 3.0632411067193677,
+        "cpu2": 4.063429137760159,
+        "cpu3": 5.841584158415841
+      },
+      "tx_cpu_percent": {
+        "cpu0": 1.5337423312883436,
+        "cpu1": 6.176470588235294,
+        "cpu2": 0.09718172983479106,
+        "cpu3": 25.765054294175716
+      },
+      "rx_irq_deltas": {
+        "106": [
+          226906,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_800M_cpu100_r1",
+      "case": "udp1472_800M_cpu100",
+      "repeat": 1,
+      "payload_bytes": 1472,
+      "target_bps": 800000000,
+      "cpu_load": true,
+      "tx_mbps": 799.978102029218,
+      "rx_mbps": 797.84463908947,
+      "rx_pps": 67751.75264007048,
+      "lost_packets": 1770,
+      "total_datagrams": 679417,
+      "lost_percent": 0.2605174730688222,
+      "jitter_ms": 0.023410032002702485,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.17009,
+      "ping_rtt_p99_ms": 0.2676300000000106,
+      "ping_rtt_max_ms": 2.31,
+      "rx_cpu_percent": {
+        "cpu0": 98.76425855513308,
+        "cpu1": 99.61904761904762,
+        "cpu2": 99.71401334604386,
+        "cpu3": 0.19120458891013384
+      },
+      "tx_cpu_percent": {
+        "cpu0": 6.94006309148265,
+        "cpu1": 11.143984220907297,
+        "cpu2": 8.521057786483839,
+        "cpu3": 50.58939096267191
+      },
+      "rx_irq_deltas": {
+        "106": [
+          337261,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_800M_cpu100_r2",
+      "case": "udp1472_800M_cpu100",
+      "repeat": 2,
+      "payload_bytes": 1472,
+      "target_bps": 800000000,
+      "cpu_load": true,
+      "tx_mbps": 799.978926136083,
+      "rx_mbps": 798.316603181358,
+      "rx_pps": 67791.83111254737,
+      "lost_packets": 1369,
+      "total_datagrams": 679373,
+      "lost_percent": 0.20150933287016115,
+      "jitter_ms": 0.014004015638124374,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.14933,
+      "ping_rtt_p99_ms": 0.26666000000000034,
+      "ping_rtt_max_ms": 0.332,
+      "rx_cpu_percent": {
+        "cpu0": 98.40823970037454,
+        "cpu1": 99.06367041198502,
+        "cpu2": 99.906191369606,
+        "cpu3": 0.18814675446848542
+      },
+      "tx_cpu_percent": {
+        "cpu0": 8.463949843260188,
+        "cpu1": 19.00990099009901,
+        "cpu2": 0.0970873786407767,
+        "cpu3": 50.7360157016683
+      },
+      "rx_irq_deltas": {
+        "106": [
+          337781,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_800M_cpu100_r3",
+      "case": "udp1472_800M_cpu100",
+      "repeat": 3,
+      "payload_bytes": 1472,
+      "target_bps": 800000000,
+      "cpu_load": true,
+      "tx_mbps": 799.9747520191175,
+      "rx_mbps": 798.5217692116037,
+      "rx_pps": 67809.25349962666,
+      "lost_packets": 1190,
+      "total_datagrams": 679413,
+      "lost_percent": 0.1751511966947939,
+      "jitter_ms": 0.022788429144987864,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.14526,
+      "ping_rtt_p99_ms": 0.24178000000000038,
+      "ping_rtt_max_ms": 0.319,
+      "rx_cpu_percent": {
+        "cpu0": 99.8093422306959,
+        "cpu1": 99.90467111534795,
+        "cpu2": 99.90467111534795,
+        "cpu3": 1.147227533460803
+      },
+      "tx_cpu_percent": {
+        "cpu0": 6.387434554973822,
+        "cpu1": 22.319688109161792,
+        "cpu2": 0.09718172983479106,
+        "cpu3": 50.68762278978389
+      },
+      "rx_irq_deltas": {
+        "106": [
+          337532,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_800M_r1",
+      "case": "udp1472_800M",
+      "repeat": 1,
+      "payload_bytes": 1472,
+      "target_bps": 800000000,
+      "cpu_load": false,
+      "tx_mbps": 799.9735323526354,
+      "rx_mbps": 799.9257594645364,
+      "rx_pps": 67928.47821539882,
+      "lost_packets": 0,
+      "total_datagrams": 679397,
+      "lost_percent": 0,
+      "jitter_ms": 0.01992623161140338,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.14381,
+      "ping_rtt_p99_ms": 0.2625800000000003,
+      "ping_rtt_max_ms": 0.32,
+      "rx_cpu_percent": {
+        "cpu0": 17.94871794871795,
+        "cpu1": 7.768924302788845,
+        "cpu2": 3.751233958538993,
+        "cpu3": 1.3793103448275863
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.10482180293501048,
+        "cpu1": 27.29064039408867,
+        "cpu2": 0.19398642095053345,
+        "cpu3": 50.29469548133595
+      },
+      "rx_irq_deltas": {
+        "106": [
+          336261,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_800M_r2",
+      "case": "udp1472_800M",
+      "repeat": 2,
+      "payload_bytes": 1472,
+      "target_bps": 800000000,
+      "cpu_load": false,
+      "tx_mbps": 799.974729659874,
+      "rx_mbps": 799.9256782549107,
+      "rx_pps": 67928.47131920098,
+      "lost_packets": 0,
+      "total_datagrams": 679415,
+      "lost_percent": 0,
+      "jitter_ms": 0.024448425842084037,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.1484,
+      "ping_rtt_p99_ms": 0.2557100000000004,
+      "ping_rtt_max_ms": 0.326,
+      "rx_cpu_percent": {
+        "cpu0": 15.135135135135135,
+        "cpu1": 2.472799208704253,
+        "cpu2": 8.250497017892645,
+        "cpu3": 9.217046580773042
+      },
+      "tx_cpu_percent": {
+        "cpu0": 2.510460251046025,
+        "cpu1": 8.10546875,
+        "cpu2": 18.403115871470302,
+        "cpu3": 50.83415112855741
+      },
+      "rx_irq_deltas": {
+        "106": [
+          338462,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_800M_r3",
+      "case": "udp1472_800M",
+      "repeat": 3,
+      "payload_bytes": 1472,
+      "target_bps": 800000000,
+      "cpu_load": false,
+      "tx_mbps": 799.975689506881,
+      "rx_mbps": 799.9233812027517,
+      "rx_pps": 67928.27625702714,
+      "lost_packets": 0,
+      "total_datagrams": 679414,
+      "lost_percent": 0,
+      "jitter_ms": 0.02228561054661449,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.15292,
+      "ping_rtt_p99_ms": 0.2559500000000056,
+      "ping_rtt_max_ms": 1.34,
+      "rx_cpu_percent": {
+        "cpu0": 16.684491978609625,
+        "cpu1": 12.63573543928924,
+        "cpu2": 0.09832841691248771,
+        "cpu3": 3.143418467583497
+      },
+      "tx_cpu_percent": {
+        "cpu0": 1.4644351464435146,
+        "cpu1": 16.748768472906406,
+        "cpu2": 9.892262487757101,
+        "cpu3": 50.73746312684366
+      },
+      "rx_irq_deltas": {
+        "106": [
+          338163,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_950M_r1",
+      "case": "udp1472_950M",
+      "repeat": 1,
+      "payload_bytes": 1472,
+      "target_bps": 950000000,
+      "cpu_load": false,
+      "tx_mbps": 949.9734518884218,
+      "rx_mbps": 949.9154196817113,
+      "rx_pps": 80665.37191590619,
+      "lost_packets": 0,
+      "total_datagrams": 806809,
+      "lost_percent": 0,
+      "jitter_ms": 0.01870297127372807,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.15504,
+      "ping_rtt_p99_ms": 0.30118000000000006,
+      "ping_rtt_max_ms": 0.319,
+      "rx_cpu_percent": {
+        "cpu0": 20.021528525296016,
+        "cpu1": 7.057654075546719,
+        "cpu2": 3.4482758620689653,
+        "cpu3": 7.5322101090188305
+      },
+      "tx_cpu_percent": {
+        "cpu0": 12.099276111685626,
+        "cpu1": 7.984420642648491,
+        "cpu2": 8.3984375,
+        "cpu3": 56.722276741903826
+      },
+      "rx_irq_deltas": {
+        "106": [
+          336023,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_950M_r2",
+      "case": "udp1472_950M",
+      "repeat": 2,
+      "payload_bytes": 1472,
+      "target_bps": 950000000,
+      "cpu_load": false,
+      "tx_mbps": 949.9699016435601,
+      "rx_mbps": 949.910349869385,
+      "rx_pps": 80664.94139515837,
+      "lost_packets": 0,
+      "total_datagrams": 806803,
+      "lost_percent": 0,
+      "jitter_ms": 0.019301304180506636,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.18004,
+      "ping_rtt_p99_ms": 0.3616800000000101,
+      "ping_rtt_max_ms": 2.31,
+      "rx_cpu_percent": {
+        "cpu0": 13.879781420765028,
+        "cpu1": 1.4792899408284024,
+        "cpu2": 16.6,
+        "cpu3": 6.05759682224429
+      },
+      "tx_cpu_percent": {
+        "cpu0": 13.796680497925312,
+        "cpu1": 7.233626588465298,
+        "cpu2": 6.7317073170731705,
+        "cpu3": 56.8762278978389
+      },
+      "rx_irq_deltas": {
+        "106": [
+          335845,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp1472_950M_r3",
+      "case": "udp1472_950M",
+      "repeat": 3,
+      "payload_bytes": 1472,
+      "target_bps": 950000000,
+      "cpu_load": false,
+      "tx_mbps": 949.9731490369232,
+      "rx_mbps": 949.9118875616444,
+      "rx_pps": 80665.07197364507,
+      "lost_packets": 0,
+      "total_datagrams": 806806,
+      "lost_percent": 0,
+      "jitter_ms": 0.016621737973775273,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.16298,
+      "ping_rtt_p99_ms": 0.2734100000000002,
+      "ping_rtt_max_ms": 0.314,
+      "rx_cpu_percent": {
+        "cpu0": 13.676148796498905,
+        "cpu1": 8.648111332007952,
+        "cpu2": 5.440158259149357,
+        "cpu3": 10.73558648111332
+      },
+      "tx_cpu_percent": {
+        "cpu0": 12.266112266112266,
+        "cpu1": 9.463414634146341,
+        "cpu2": 5.686274509803922,
+        "cpu3": 56.777996070726914
+      },
+      "rx_irq_deltas": {
+        "106": [
+          335943,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_100000pps_r1",
+      "case": "udp96_100000pps",
+      "repeat": 1,
+      "payload_bytes": 96,
+      "target_bps": 76800000,
+      "cpu_load": false,
+      "tx_mbps": 76.79775005766737,
+      "rx_mbps": 76.7930432737789,
+      "rx_pps": 99990.94176273297,
+      "lost_packets": 0,
+      "total_datagrams": 1000104,
+      "lost_percent": 0,
+      "jitter_ms": 0.008544493665205544,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.14927,
+      "ping_rtt_p99_ms": 0.32202000000000003,
+      "ping_rtt_max_ms": 0.324,
+      "rx_cpu_percent": {
+        "cpu0": 13.447171824973319,
+        "cpu1": 5.544554455445544,
+        "cpu2": 1.6699410609037328,
+        "cpu3": 12.4750499001996
+      },
+      "tx_cpu_percent": {
+        "cpu0": 10.950413223140496,
+        "cpu1": 0.19398642095053345,
+        "cpu2": 5.916585838991271,
+        "cpu3": 65.71988246816846
+      },
+      "rx_irq_deltas": {
+        "106": [
+          251215,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_100000pps_r2",
+      "case": "udp96_100000pps",
+      "repeat": 2,
+      "payload_bytes": 96,
+      "target_bps": 76800000,
+      "cpu_load": false,
+      "tx_mbps": 76.79755807452001,
+      "rx_mbps": 76.79267469671366,
+      "rx_pps": 99990.46184467923,
+      "lost_packets": 0,
+      "total_datagrams": 1000098,
+      "lost_percent": 0,
+      "jitter_ms": 0.009540895361805073,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.14718,
+      "ping_rtt_p99_ms": 0.30712000000000006,
+      "ping_rtt_max_ms": 0.319,
+      "rx_cpu_percent": {
+        "cpu0": 17.983367983367984,
+        "cpu1": 4.612365063788028,
+        "cpu2": 4.653465346534653,
+        "cpu3": 7.450980392156863
+      },
+      "tx_cpu_percent": {
+        "cpu0": 6.041666666666667,
+        "cpu1": 4.385964912280702,
+        "cpu2": 5.7560975609756095,
+        "cpu3": 65.88465298142718
+      },
+      "rx_irq_deltas": {
+        "106": [
+          251339,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_100000pps_r3",
+      "case": "udp96_100000pps",
+      "repeat": 3,
+      "payload_bytes": 96,
+      "target_bps": 76800000,
+      "cpu_load": false,
+      "tx_mbps": 76.79787292013641,
+      "rx_mbps": 76.7929050805371,
+      "rx_pps": 99990.761823616,
+      "lost_packets": 0,
+      "total_datagrams": 1000105,
+      "lost_percent": 0,
+      "jitter_ms": 0.00863446347034446,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.14871,
+      "ping_rtt_p99_ms": 0.32102,
+      "ping_rtt_max_ms": 0.323,
+      "rx_cpu_percent": {
+        "cpu0": 22.23382045929019,
+        "cpu1": 15.399802566633761,
+        "cpu2": 1.7699115044247788,
+        "cpu3": 0.19665683382497542
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.31023784901758017,
+        "cpu1": 16.30648330058939,
+        "cpu2": 1.937984496124031,
+        "cpu3": 66.01371204701273
+      },
+      "rx_irq_deltas": {
+        "106": [
+          251667,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_11000pps_cpu100_r1",
+      "case": "udp96_11000pps_cpu100",
+      "repeat": 1,
+      "payload_bytes": 96,
+      "target_bps": 8448000,
+      "cpu_load": true,
+      "tx_mbps": 8.447707738538394,
+      "rx_mbps": 8.447179860849428,
+      "rx_pps": 10998.932110481024,
+      "lost_packets": 0,
+      "total_datagrams": 110011,
+      "lost_percent": 0,
+      "jitter_ms": 0.0008017229011220025,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.11326,
+      "ping_rtt_p99_ms": 0.20514000000000057,
+      "ping_rtt_max_ms": 0.318,
+      "rx_cpu_percent": {
+        "cpu0": 99.61685823754789,
+        "cpu1": 99.90412272291466,
+        "cpu2": 99.90421455938697,
+        "cpu3": 0.19212295869356388
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.20768431983385255,
+        "cpu1": 0.1949317738791423,
+        "cpu2": 0.1049317943336831,
+        "cpu3": 12.376237623762377
+      },
+      "rx_irq_deltas": {
+        "106": [
+          220395,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_11000pps_cpu100_r2",
+      "case": "udp96_11000pps_cpu100",
+      "repeat": 2,
+      "payload_bytes": 96,
+      "target_bps": 8448000,
+      "cpu_load": true,
+      "tx_mbps": 8.447706049224564,
+      "rx_mbps": 8.44716803714463,
+      "rx_pps": 10998.916715032066,
+      "lost_packets": 0,
+      "total_datagrams": 110011,
+      "lost_percent": 0,
+      "jitter_ms": 0.003426864294381899,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.17020000000000002,
+      "ping_rtt_p99_ms": 0.20046000000000075,
+      "ping_rtt_max_ms": 0.345,
+      "rx_cpu_percent": {
+        "cpu0": 99.52335557673975,
+        "cpu1": 99.9047619047619,
+        "cpu2": 99.90485252140819,
+        "cpu3": 1.725790987535954
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.0,
+        "cpu1": 0.20855057351407716,
+        "cpu2": 0.09699321047526673,
+        "cpu3": 12.487611496531219
+      },
+      "rx_irq_deltas": {
+        "106": [
+          220214,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_11000pps_cpu100_r3",
+      "case": "udp96_11000pps_cpu100",
+      "repeat": 3,
+      "payload_bytes": 96,
+      "target_bps": 8448000,
+      "cpu_load": true,
+      "tx_mbps": 8.447709427852898,
+      "rx_mbps": 8.44715705801981,
+      "rx_pps": 10998.902419296624,
+      "lost_packets": 0,
+      "total_datagrams": 110011,
+      "lost_percent": 0,
+      "jitter_ms": 0.002830467064233196,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.11212,
+      "ping_rtt_p99_ms": 0.19542000000000073,
+      "ping_rtt_max_ms": 0.336,
+      "rx_cpu_percent": {
+        "cpu0": 98.12382739212008,
+        "cpu1": 98.87429643527204,
+        "cpu2": 99.90627928772258,
+        "cpu3": 0.2824858757062147
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.1037344398340249,
+        "cpu1": 0.0,
+        "cpu2": 0.0970873786407767,
+        "cpu3": 12.475247524752476
+      },
+      "rx_irq_deltas": {
+        "106": [
+          220423,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_11000pps_r1",
+      "case": "udp96_11000pps",
+      "repeat": 1,
+      "payload_bytes": 96,
+      "target_bps": 8448000,
+      "cpu_load": false,
+      "tx_mbps": 8.447709427852898,
+      "rx_mbps": 8.447181549952814,
+      "rx_pps": 10998.934309834392,
+      "lost_packets": 0,
+      "total_datagrams": 110011,
+      "lost_percent": 0,
+      "jitter_ms": 0.0012907065146317127,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.1583,
+      "ping_rtt_p99_ms": 0.20711000000000054,
+      "ping_rtt_max_ms": 0.317,
+      "rx_cpu_percent": {
+        "cpu0": 2.4261603375527425,
+        "cpu1": 7.333994053518335,
+        "cpu2": 0.19665683382497542,
+        "cpu3": 0.20040080160320642
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.10395010395010396,
+        "cpu1": 20.74074074074074,
+        "cpu2": 2.378686964795433,
+        "cpu3": 11.671612265084075
+      },
+      "rx_irq_deltas": {
+        "106": [
+          220294,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_11000pps_r2",
+      "case": "udp96_11000pps",
+      "repeat": 2,
+      "payload_bytes": 96,
+      "target_bps": 8448000,
+      "cpu_load": false,
+      "tx_mbps": 8.447711117168076,
+      "rx_mbps": 8.447165503497905,
+      "rx_pps": 10998.913416012896,
+      "lost_packets": 0,
+      "total_datagrams": 110011,
+      "lost_percent": 0,
+      "jitter_ms": 0.0029640235718099016,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.11869,
+      "ping_rtt_p99_ms": 0.2061900000000006,
+      "ping_rtt_max_ms": 0.324,
+      "rx_cpu_percent": {
+        "cpu0": 2.736842105263158,
+        "cpu1": 5.103042198233562,
+        "cpu2": 2.193419740777667,
+        "cpu3": 0.0992063492063492
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.0,
+        "cpu1": 0.09930486593843098,
+        "cpu2": 0.0,
+        "cpu3": 11.660079051383399
+      },
+      "rx_irq_deltas": {
+        "106": [
+          220459,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_11000pps_r3",
+      "case": "udp96_11000pps",
+      "repeat": 3,
+      "payload_bytes": 96,
+      "target_bps": 8448000,
+      "cpu_load": false,
+      "tx_mbps": 8.44770858319556,
+      "rx_mbps": 8.447156213472926,
+      "rx_pps": 10998.901319626208,
+      "lost_packets": 0,
+      "total_datagrams": 110011,
+      "lost_percent": 0,
+      "jitter_ms": 0.00196081095882367,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.11214,
+      "ping_rtt_p99_ms": 0.21128000000000063,
+      "ping_rtt_max_ms": 0.338,
+      "rx_cpu_percent": {
+        "cpu0": 7.188160676532769,
+        "cpu1": 3.6786060019361084,
+        "cpu2": 0.0984251968503937,
+        "cpu3": 1.9860973187686197
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.10384215991692627,
+        "cpu1": 0.0,
+        "cpu2": 0.0,
+        "cpu3": 11.75889328063241
+      },
+      "rx_irq_deltas": {
+        "106": [
+          220471,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_3000pps_r1",
+      "case": "udp96_3000pps",
+      "repeat": 1,
+      "payload_bytes": 96,
+      "target_bps": 2304000,
+      "cpu_load": false,
+      "tx_mbps": 2.3039131511590853,
+      "rx_mbps": 2.303771488719447,
+      "rx_pps": 2999.7024592701136,
+      "lost_packets": 0,
+      "total_datagrams": 30003,
+      "lost_percent": 0,
+      "jitter_ms": 0.000839047455811038,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.16159,
+      "ping_rtt_p99_ms": 0.21225000000000063,
+      "ping_rtt_max_ms": 0.336,
+      "rx_cpu_percent": {
+        "cpu0": 2.985074626865672,
+        "cpu1": 0.1006036217303823,
+        "cpu2": 0.09852216748768473,
+        "cpu3": 0.2949852507374631
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.1976284584980237,
+        "cpu1": 0.0,
+        "cpu2": 0.0970873786407767,
+        "cpu3": 4.585365853658536
+      },
+      "rx_irq_deltas": {
+        "106": [
+          60652,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_3000pps_r2",
+      "case": "udp96_3000pps",
+      "repeat": 2,
+      "payload_bytes": 96,
+      "target_bps": 2304000,
+      "cpu_load": false,
+      "tx_mbps": 2.303910847565443,
+      "rx_mbps": 2.303764118142488,
+      "rx_pps": 2999.6928621646975,
+      "lost_packets": 0,
+      "total_datagrams": 30003,
+      "lost_percent": 0,
+      "jitter_ms": 0.0011108088518302537,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.18324000000000001,
+      "ping_rtt_p99_ms": 0.23655000000001103,
+      "ping_rtt_max_ms": 2.37,
+      "rx_cpu_percent": {
+        "cpu0": 1.7017017017017018,
+        "cpu1": 2.4777006937561943,
+        "cpu2": 0.1968503937007874,
+        "cpu3": 2.133850630455868
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.09930486593843098,
+        "cpu1": 0.19801980198019803,
+        "cpu2": 0.0970873786407767,
+        "cpu3": 4.58984375
+      },
+      "rx_irq_deltas": {
+        "106": [
+          60558,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    },
+    {
+      "id": "udp96_3000pps_r3",
+      "case": "udp96_3000pps",
+      "repeat": 3,
+      "payload_bytes": 96,
+      "target_bps": 2304000,
+      "cpu_load": false,
+      "tx_mbps": 2.3039163761979244,
+      "rx_mbps": 2.303765730452168,
+      "rx_pps": 2999.69496152626,
+      "lost_packets": 0,
+      "total_datagrams": 30003,
+      "lost_percent": 0,
+      "jitter_ms": 0.001277492159031814,
+      "ping_samples": 100,
+      "ping_rtt_mean_ms": 0.12378,
+      "ping_rtt_p99_ms": 0.21503000000000053,
+      "ping_rtt_max_ms": 0.317,
+      "rx_cpu_percent": {
+        "cpu0": 0.7099391480730223,
+        "cpu1": 0.1006036217303823,
+        "cpu2": 0.19723865877712032,
+        "cpu3": 1.8627450980392157
+      },
+      "tx_cpu_percent": {
+        "cpu0": 0.09891196834817013,
+        "cpu1": 0.29910269192422734,
+        "cpu2": 0.09699321047526673,
+        "cpu3": 4.585365853658536
+      },
+      "rx_irq_deltas": {
+        "106": [
+          60461,
+          0,
+          0,
+          0
+        ]
+      },
+      "rx_governor": {
+        "policy0": "ondemand"
+      },
+      "tx_governor": {
+        "policy0": "ondemand"
+      }
+    }
+  ],
+  "measurement_scope": "Temporary iperf3 UDP diagnostic; not ACE mixed/all-PASS or HW-RX-to-user latency. IRQ/governor unchanged during these trials."
+}

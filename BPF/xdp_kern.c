@@ -24,6 +24,9 @@
 #include "config.h"
 #include "metadata.h"
 
+/* Set by the loader before load; immutable throughout one measured run. */
+const volatile __u32 forwarding_mode = ACE_FORWARD_MIXED;
+
 #define ETH_P_IP                0x0800
 #define ACE_IPV4_FRAGMENT_MASK  0x3fff /* MF plus fragment offset; DF excluded */
 #define ACE_EEXIST              17
@@ -351,6 +354,8 @@ int xdp_dispatch(struct xdp_md *ctx)
 
 	count_stat(ACE_XDP_STAT_TOTAL);
 	parsed = parse_experiment_packet(ctx, &packet_key, &requested_path);
+	requested_path = ace_effective_requested_path(forwarding_mode,
+						     requested_path);
 	if (parsed > 0 &&
 	    !prepare_measurement_metadata(ctx, &packet_key, requested_path,
 					  initial_xdp_ns))

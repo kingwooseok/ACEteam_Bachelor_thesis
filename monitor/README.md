@@ -67,6 +67,20 @@ results/
 
 CPU 부하를 여러 코어에 적용하면 `stress_cpu0.log`, `stress_cpu1.log`처럼 CPU별 로그가 각각 생성된다.
 
+`ace-run`이 `ACE_SKIP_MANIFEST=1`로 호출하는 `run_load.sh` 경로에서는 실행 중
+`mpstat`, `sar`, `stress-ng`, 수신기 `iperf3`와 ON/OFF 단계 로그를
+`/dev/shm/ace-monitor.<run_id>.*`의 전용 tmpfs 디렉터리에 기록한다.
+모든 native 자식 프로세스를 종료한 뒤 최종 결과 디렉터리에 로그를 배타적으로
+생성하고 저장한다. `config.txt`와 READY 표시는 준비 단계에 기록한다.
+기존 로그가 있거나 저장에 실패하면 덮어쓰지 않고 비정상 종료하며, 복구할 수
+있도록 tmpfs 원본과 그 경로를 남긴다. tmpfs는 재부팅 시 사라지므로 오류에 나온
+경로의 로그를 재부팅 전에 복사한다.
+
+송신기의 `network_load.sh`도 iperf 출력과 ON/OFF 단계 로그를
+`/dev/shm/ace-network.*`에 기록한 뒤 종료 시 원래 stdout으로 내보낸다.
+따라서 측정 중 관측 로그 저장에 따른 디스크 쓰기는 발생하지 않는다.
+설정한 `stress-ng` 메모리·I/O 부하는 실험 조건에 따라 그대로 실행한다.
+
 ### verify_cyclictest.sh 결과
 
 ```text
@@ -267,11 +281,11 @@ less results/<timestamp>/network.log
 less results/<timestamp>/stress_cpu0.log
 ```
 
-실험 중 실시간으로 확인하려면 다음처럼 사용할 수 있다.
+최종 로그는 controller 종료 후 확인한다.
 
 ```bash
-tail -f results/<timestamp>/mpstat.log
-tail -f results/<timestamp>/network.log
+less results/<timestamp>/mpstat.log
+less results/<timestamp>/network.log
 ```
 
 각 로그 및 검증 결과 파일의 상세한 해석 방법은 `LOG_GUIDE.md`를 참고한다.
@@ -485,6 +499,11 @@ CPU 부하는 `controller.sh`가 담당한다.
 ### Ctrl+C로 종료 가능
 
 실험 도중 `Ctrl+C` 또는 종료 신호를 받으면 cleanup 로직이 실행되어 controller가 시작한 `stress-ng`, `mpstat`, `sar`, `iperf3` 프로세스를 종료하고 결과 경로를 출력한다.
+
+실행 시간은 준비 단계에서 시작한 native `sleep` 하나와 Bash의 차단형 `wait -n -p`로
+관리한다. 측정 중 1초마다 새 프로세스를 만들어 상태를 조회하지 않는다.
+부하·관측 도구가 타이머보다 먼저 종료하면 실패로 처리하고 로그를 보존한다.
+이 제어 기능에는 Bash 5.1 이상이 필요하다.
 
 ### 추가 분석 도구는 필요할 때만 사용
 

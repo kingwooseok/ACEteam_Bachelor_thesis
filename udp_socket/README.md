@@ -226,3 +226,68 @@ layout의 NumPy dtype으로 읽을 수 있다. `hw_rx_ns`는 PHC domain이고
 - result: `./samples.bin`
 
 전체 연구 구조와 XDP/AF_XDP 설명은 상위 `README.md`를 참고한다.
+
+## 자동 실험의 준비·시작·종료
+
+송신기와 수신기의 `--ready-file PATH`는 socket, 메모리 잠금, 기록 공간 등
+준비가 끝났을 때 완성된 JSON 파일을 원자적으로 공개한다. 파일에는 `role`,
+`pid`, `ready_mono_ns`가 들어간다. 준비 메시지는 stdout에도 즉시 flush된다.
+이미 있는 준비 파일과 `--stats-json PATH`는 덮어쓰지 않는다. 매 실행마다
+새 디렉터리를 사용하고 준비 파일과 프로세스 생존 여부를 함께 확인한다.
+준비 파일은 실행 기록으로 남는다.
+
+여러 sender를 동시에 출발시킬 때는 모든 sender에 같은 `--start-file PATH`를
+전달한다. sender는 READY 이후 이 파일을 기다리며, 파일에 적힌 **송신 장비의
+CLOCK_MONOTONIC 절대 ns**에 송신을 시작한다. 준비 파일들이 모두 생성된 뒤
+같은 송신 장비에서 다음과 같이 시작 파일을 공개한다.
+
+```bash
+./udp_socket/bin/ace_clock --after-ms 200 > "$run_dir/start.ns.tmp"
+mv "$run_dir/start.ns.tmp" "$run_dir/start.ns"
+```
+
+`--start-at-ns NS`로 절대 시각을 직접 지정할 수도 있다. 두 시작 옵션은 함께
+사용할 수 없으며, 잘못된 값이나 이미 지난 시작 시각은 전송 전에 거부한다.
+시작 옵션을 생략하면 기존처럼 바로 송신한다. 시작 파일 대기는 측정 전에만
+일어나며 SIGINT/SIGTERM으로 종료할 수 있다. 서로 다른 장비의 MONOTONIC 값은
+공유하지 않고, 한 송신 장비에서 실행하는 흐름들이 하나의 시작 파일을 사용한다.
+
+sender는 기존 절대 주기 누적과 catch-up 동작을 유지한다. `--stats-json`에는
+`attempted`, `sent`, `errors`, `expected_count`, `flow_id`, 시작·종료 MONOTONIC 시각,
+`termination_reason`을 저장한다. `first_send_mono_ns`와 `last_send_mono_ns`,
+`interval_min_ns/max_ns/mean_ns`, `lateness_max_ns/mean_ns`, `late_period_count`는
+사용자 공간의 송신 시도 간격과 예정 시각 대비 지각을 보여 준다. NIC HW TX
+타임스탬프는 아니다. `elapsed_ns`는 첫 송신 시도부터 송신 loop 종료까지이며
+준비와 예정 출발 시각까지의 대기는 제외한다. 송신 전에 중단되면 시작 시각과
+elapsed는 0이다.
+
+receiver는 SIGINT/SIGTERM을 받은 뒤 `--drain-ms` 동안 남은 수신을 처리한다
+(기본 100 ms, 0이면 즉시 마무리). 추가 신호나 추가 패킷이 이 시간을 늘리지 않는다.
+`--idle-timeout-ms`는 마지막 유효 패킷 이후의 대기 제한이며 기본 0은 비활성이다.
+첫 패킷 전에는 준비 완료 시각을 기준으로 한다. blocking recvmsg에는 10 ms timeout을
+사용하여 신호 직전/직후의 실행 순서 때문에 무기한 대기하는 경우를 막는다.
+따라서 종료 기한 확인에는 최대 한 번의 timeout과 스케줄링 지연이 더해질 수 있다.
+기존 관측점인 recvmsg 반환 직후 MONOTONIC/REALTIME 수집은 그대로 유지한다.
+
+기록은 처음에 `--count × 56 bytes`를 확보한 배열에 순서대로 저장하고, 용량에
+도달하면 더 쓰지 않고 종료한다. 종료 후 유효한 record만 저장하고 fsync한다.
+수신 JSON에는 `received`, `invalid`, `truncated`, `missing_hwts`, `socket_drops`,
+`receive_errors`, `capacity_reached`, `records_saved`, `exit_status`와 종료 이유가 있다.
+`count`, `signal_drain`, `idle_timeout`은 수신 loop의 정상 종료 이유이며, 정상 종료
+코드만으로 전체 패킷 수신을 판단하지 않고 `received`와 송신 통계를 함께 사용한다.
+HWTS 필수 조건 위반이나 수신·저장 오류는 실패 코드로 반환한다.
+
+`ace-run`은 송수신기에 `--completion-fd FD --defer-flush`도 전달한다. 송신기는
+모든 sendto를 끝낸 뒤, 수신기는 TERM에 따른 drain을 끝낸 뒤 inherited pipe에
+byte 0(성공) 또는 1(실패)을 보낸다. 정상 캡처 후에는 SIGUSR1이 올 때까지
+통계·레코드를 메모리에 유지한다. 모든 흐름의 수신이 끝난 뒤 제어기가 기록 저장을
+허용하므로 한 흐름의 파일 I/O가 다른 흐름의 마지막 패킷 처리와 겹치지 않는다.
+수신기의 `--defer-flush`만 지정하면 count 완료 후 TERM까지 기다리는 단일 종료
+장벽으로 사용할 수 있다. 자동화의 두 단계 종료 장벽에서는 완료 FD도 함께 사용한다.
+
+자동화 회귀 검증은 Linux loopback에서 실행한다.
+
+```bash
+make -C udp_socket
+python3 -m unittest -v tests.test_udp_automation
+```

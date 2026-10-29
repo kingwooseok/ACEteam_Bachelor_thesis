@@ -17,7 +17,7 @@ import math
 import os
 import re
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
@@ -63,6 +63,7 @@ AGGREGATE_FIELDS = (
     "p95_ns",
     "p99_ns",
     "max_ns",
+    "mean_ns",
     "deadline_miss_count",
     "deadline_miss_rate",
 )
@@ -260,7 +261,7 @@ def validate_summary_inputs(
                 raise InputError(f"summary input {name} is required")
             resolved[name] = None
             continue
-        if name == "phc_calibration":
+        if name == "phc_calibration" or (name == "udp_native" and isinstance(raw_value, list)):
             if not isinstance(raw_value, list) or not raw_value:
                 raise InputError(
                     "summary input phc_calibration must be a nonempty list"
@@ -277,7 +278,7 @@ def validate_summary_inputs(
                 value, run_directory, f"summary input {name}{suffix}"
             ))
         resolved[name] = (
-            resolved_values if name == "phc_calibration" else resolved_values[0]
+            resolved_values if isinstance(raw_value, list) else resolved_values[0]
         )
     return resolved
 
@@ -313,7 +314,7 @@ def validate_input_artifacts(
                 raise InputError(f"completion input {name} is required")
             resolved[name] = None
             continue
-        if name == "phc_calibration":
+        if name == "phc_calibration" or (name == "udp_native" and isinstance(value, list)):
             if not isinstance(value, list) or not value:
                 raise InputError(
                     "completion input phc_calibration must be a nonempty list"
@@ -347,7 +348,7 @@ def parse_csv_integer(raw: str | None, path: Path, row: int, field: str) -> int:
 # run 내부의 패킷 연결/시계 보정은 이미 끝났고, 여기서는 동일 조건의 반복 결과를
 # 모아 패킷 전체 분포와 run 사이 변동을 각각 계산한다.
 # 각 run이 독립적인 반복이라는 해석은 실제 실험 설계에서 충족해야 한다.
-def load_joined_metrics(path: Path) -> tuple[int, dict[str, tuple[int, ...]]]:
+def load_joined_metrics(path: Path, selected_flow: int | None = None) -> tuple[int, dict[str, tuple[int, ...]]]:
     values: dict[str, list[int]] = {name: [] for name in METRIC_FIELDS}
     keys: set[tuple[int, int]] = set()
     row_count = 0
@@ -375,7 +376,6 @@ def load_joined_metrics(path: Path) -> tuple[int, dict[str, tuple[int, ...]]]:
         for row_number, row in enumerate(reader, start=2):
             if None in row:
                 raise InputError(f"{path}: row {row_number}: extra CSV fields")
-            row_count += 1
             flow_id = parse_csv_integer(
                 row.get("flow_id"), path, row_number, "flow_id"
             )
@@ -392,6 +392,9 @@ def load_joined_metrics(path: Path) -> tuple[int, dict[str, tuple[int, ...]]]:
                     f"{path}: row {row_number}: duplicate flow_id+sequence {key}"
                 )
             keys.add(key)
+            if selected_flow is not None and flow_id != selected_flow:
+                continue
+            row_count += 1
 
             for metric, field in METRIC_FIELDS.items():
                 raw = row.get(field)
@@ -416,12 +419,12 @@ def percentile_nearest_rank(sorted_values: Sequence[int], percentile: int) -> in
     return sorted_values[index]
 
 
-def metric_statistics(values: Sequence[int], deadline_ns: int) -> dict[str, object]:
+def metric_statistics(values: Sequence[int], deadline_ns: int | None) -> dict[str, object]:
     # deadline을 엄밀히 초과한 값만 miss다. deadline과 같은 값은 성공으로 센다.
     # p99는 정렬된 표본에서 nearest-rank 위치를 고르는 관측 분위수이며,
     # 아직 관측하지 않은 최악 지연에 대한 보장은 아니다.
     ordered = sorted(values)
-    misses = sum(value > deadline_ns for value in ordered)
+    misses = sum(value > deadline_ns for value in ordered) if deadline_ns is not None else None
     return {
         "count": len(ordered),
         "negative_count": sum(value < 0 for value in ordered),
@@ -429,8 +432,9 @@ def metric_statistics(values: Sequence[int], deadline_ns: int) -> dict[str, obje
         "p95_ns": percentile_nearest_rank(ordered, 95) if ordered else None,
         "p99_ns": percentile_nearest_rank(ordered, 99) if ordered else None,
         "max_ns": ordered[-1] if ordered else None,
+        "mean_ns": statistics.fmean(ordered) if ordered else None,
         "deadline_miss_count": misses,
-        "deadline_miss_rate": misses / len(ordered) if ordered else None,
+        "deadline_miss_rate": misses / len(ordered) if ordered and misses is not None else None,
     }
 
 
@@ -781,7 +785,7 @@ def validate_runs(runs: Sequence[RunData]) -> list[RunData]:
 
 
 def aggregate_runs(
-    runs: Sequence[RunData], deadline_ns: int
+    runs: Sequence[RunData], deadline_ns: int | None
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     metric_rows: list[dict[str, object]] = []
     run_summaries: list[dict[str, object]] = []
@@ -837,7 +841,7 @@ def aggregate_runs(
                 per_run_statistics[run.run_id][metric]["deadline_miss_count"],
             ) > 0
             for run in runs
-        )
+        ) if deadline_ns is not None else None
         # 같은 run의 패킷들은 부하/스케줄링 상태를 공유할 수 있다.
         # 따라서 패킷 수를 독립 반복 수로 삼지 않고 run별 요약값에 CI를 붙인다.
         # p99 CI는 run별 p99 평균의 불확실성이고, miss rate CI도 같은 방식이다.
@@ -864,7 +868,7 @@ def aggregate_runs(
             "with_deadline_miss_count": runs_with_misses,
             "with_deadline_miss_rate": (
                 runs_with_misses / runs_with_samples
-                if runs_with_samples else None
+                if runs_with_samples and runs_with_misses is not None else None
             ),
             "independent_run_estimates": run_estimates,
         }
@@ -912,6 +916,7 @@ def aggregate_runs(
                 "p95_ns": packet_level["p95_ns"],
                 "p99_ns": packet_level["p99_ns"],
                 "max_ns": packet_level["max_ns"],
+                "mean_ns": packet_level["mean_ns"],
                 "deadline_miss_count": packet_level["deadline_miss_count"],
                 "deadline_miss_rate": packet_level["deadline_miss_rate"],
             }
@@ -943,6 +948,55 @@ def aggregate_runs(
         "metrics": aggregated_metrics,
     }
     return metric_rows, summary
+
+
+def parse_flow_deadlines(values: Sequence[str]) -> dict[int, int]:
+    result: dict[int, int] = {}
+    for value in values:
+        try:
+            flow_text, deadline_text = value.split("=", 1)
+            flow = decimal_deadline(flow_text)
+            deadline = decimal_deadline(deadline_text)
+        except (ValueError, argparse.ArgumentTypeError) as error:
+            raise InputError("flow deadline must be ID=NS with unsigned integers") from error
+        if flow > 0xFFFFFFFF or flow in result:
+            raise InputError("flow deadline ID is out of range or repeated")
+        result[flow] = deadline
+    return result
+
+
+def run_flow_ids(run: RunData) -> set[int]:
+    with run.joined_path.open(encoding="utf-8", newline="") as file:
+        return {int(row["flow_id"]) for row in csv.DictReader(file)}
+
+
+def select_flow(run: RunData, flow_id: int) -> RunData:
+    count, metrics = load_joined_metrics(run.joined_path, flow_id)
+    return replace(run, joined_rows=count, metric_values=metrics)
+
+
+def aggregate_by_flow(
+    runs: Sequence[RunData], deadlines: Mapping[int, int],
+    default_deadline: int | None = None,
+    flow_ids: Sequence[int] | None = None,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Keep each flow's packet distribution and independent-run CI separate."""
+    ids = sorted(set(flow_ids) if flow_ids is not None else
+                 set().union(*(run_flow_ids(run) for run in runs)))
+    if set(deadlines) - set(ids):
+        raise InputError("deadline supplied for a flow absent from the experiment")
+    all_rows: list[dict[str, object]] = []
+    flows: dict[str, object] = {}
+    for flow_id in ids:
+        selected = [select_flow(run, flow_id) for run in runs]
+        rows, summary = aggregate_runs(selected, deadlines.get(flow_id, default_deadline))
+        all_rows.extend({"flow_id": flow_id, **row} for row in rows)
+        flows[str(flow_id)] = summary
+    return all_rows, {
+        "aggregation_schema_version": AGGREGATION_SCHEMA_VERSION,
+        "run_ids": [run.run_id for run in runs], "run_count": len(runs),
+        "grouping": "flow_id", "flows": flows,
+    }
 
 
 def output_exists(path: Path) -> bool:
@@ -1007,7 +1061,9 @@ def write_outputs(
         created.append(csv_path)
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as file:
             descriptor = -1
-            writer = csv.DictWriter(file, fieldnames=AGGREGATE_FIELDS)
+            fields = (("flow_id",) + AGGREGATE_FIELDS
+                      if rows and "flow_id" in rows[0] else AGGREGATE_FIELDS)
+            writer = csv.DictWriter(file, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
             file.flush()
@@ -1083,9 +1139,13 @@ def argument_parser() -> argparse.ArgumentParser:
         help="repeatable join_results completion marker (at least two)",
     )
     parser.add_argument(
-        "--deadline-ns", required=True, type=decimal_deadline,
+        "--deadline-ns", type=decimal_deadline,
         help="a latency strictly greater than this value is a deadline miss",
     )
+    parser.add_argument("--by-flow", action="store_true",
+                        help="calculate independent statistics for each flow")
+    parser.add_argument("--flow-deadline", action="append", default=[], metavar="ID=NS",
+                        help="per-flow deadline; repeatable, implies --by-flow")
     parser.add_argument(
         "--output-csv", required=True, type=Path,
         help="new aggregate metric CSV",
@@ -1123,7 +1183,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if any(path in input_paths for path in (csv_path, json_path, marker_path)):
             raise InputError("an aggregate output aliases an input artifact")
-        rows, summary = aggregate_runs(runs, args.deadline_ns)
+        deadlines = parse_flow_deadlines(args.flow_deadline)
+        if args.by_flow or deadlines:
+            rows, summary = aggregate_by_flow(runs, deadlines, args.deadline_ns)
+        else:
+            rows, summary = aggregate_runs(runs, args.deadline_ns)
         summary["completion_marker"] = str(marker_path)
         write_outputs(
             csv_path, json_path, marker_path, rows, summary,

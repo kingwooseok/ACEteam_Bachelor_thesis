@@ -1,0 +1,9 @@
+{
+  "status": "draft-unresolved",
+  "main_conditions": 15,
+  "main_runs": 150,
+  "single_runs": 15,
+  "duration_ms": 60000,
+  "warmup_ms": 5000,
+  "note": "No deployment or experiment execution. Draft PASS high=9000 is provisional."
+}
