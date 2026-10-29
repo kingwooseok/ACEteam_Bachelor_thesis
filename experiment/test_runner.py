@@ -230,6 +230,109 @@ class NativeRunnerTests(unittest.TestCase):
         for stats in rx.glob("receiver-flow*.json"):
             self.assertTrue(json.loads(stats.read_text())["records_saved"])
 
+    def test_opt_in_live_flow_placement_evidence(self):
+        cpus = sorted(os.sched_getaffinity(0))
+        text = self.base + 'verify_placement=1\n'
+        # Use an available Linux CPU, without changing any machine-level setting.
+        for flow in (1, 2, 3):
+            for role in ('tx', 'rx'):
+                text = text.replace(f'flow{flow}.{role}_cpu=inherit', f'flow{flow}.{role}_cpu={cpus[0]}')
+        self.config.write_text(text)
+        receiver = self.launch('receiver')
+        sender = self.launch('sender')
+        self.complete(sender)
+        self.complete(receiver)
+        evidence = list((self.directory / 'result').rglob('*.placement.json'))
+        self.assertEqual(len(evidence), 12)
+        for file in evidence:
+            actual = json.loads(file.read_text())
+            self.assertTrue(actual['verified'])
+            self.assertEqual(actual['cpus'], [cpus[0]])
+            self.assertEqual(actual['policy'], os.SCHED_OTHER)
+            self.assertEqual(actual['priority'], 0)
+
+    def test_full_design_configs_use_native_policy_and_capacity_checks(self):
+        from tests.test_design_plan import DesignPlanTests, plan
+        profile = DesignPlanTests().profile()
+        profile.update(pass_high_pps=15476, sender_policies=['other', 'fifo', 'rr'],
+                       sender_priorities=[0, 80, 70])
+        for index, row in enumerate(plan.rows(15476, full_design=True)):
+            self.config.write_text(plan.config(profile, row, index, full_design=True))
+            output = self.complete(self.launch('plan'))
+            modes = [json.loads(line) for line in output.splitlines()[1:]]
+            self.assertEqual({m['mode'] for m in modes}, {'all-pass', 'mixed'})
+            for mode in modes:
+                self.assertLessEqual(sum(f['count'] for f in mode['flows']), 1048576)
+                for flow in mode['flows']:
+                    index = flow['flow_id'] - 1
+                    self.assertEqual(flow['tx_cpu'], index)
+                    self.assertEqual(flow['tx_policy'], [os.SCHED_OTHER, os.SCHED_FIFO, os.SCHED_RR][index])
+                    self.assertEqual(flow['tx_priority'], [0, 80, 70][index])
+
+    def test_native_partial_control_frame_timeout_and_placement_mismatch(self):
+        # Exercise production C helpers with socketpair and the current process;
+        # no NIC, real-time privilege, SSH or machine configuration is involved.
+        source = r'''
+#define main native_runner_main
+#include "experiment/ace-run.c"
+#undef main
+#include <assert.h>
+int main(void) {
+    int sockets[2]; char frame[256];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets)==0);
+    struct context x={.fd=sockets[0]};
+    assert(write(sockets[1], "partial", 7)==7);
+    int64_t start=ace_mono_ns();
+    assert(transfer(&x,frame,sizeof(frame),0,50,0)==-1);
+    assert(errno==ETIMEDOUT);
+    assert(ace_mono_ns()-start < 1000000000LL);
+    close(sockets[0]); close(sockets[1]);
+    x.c.verify_placement=1;
+    strcpy(x.run_dir,".");
+    struct child c={.pid=getpid(),.expected_policy=SCHED_OTHER,.expected_priority=99};
+    strcpy(c.name,"sender-flow1");
+    assert(sched_getaffinity(0,sizeof(c.expected_cpus),&c.expected_cpus)==0);
+    assert(verify_child_placement(&x,&c)==-1);
+    assert(errno==EINVAL);
+    return 0;
+}
+'''
+        path = self.directory / 'native-check.c'
+        executable = self.directory / 'native-check'
+        path.write_text(source)
+        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-I', str(ROOT),
+                        '-I', str(ROOT / 'include'), str(path), str(ROOT / 'experiment/run_config.c'),
+                        str(ROOT / 'experiment/ace_manifest.c'), '-o', str(executable)], check=True)
+        subprocess.run([str(executable)], cwd=self.directory, check=True, timeout=5,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertFalse(json.loads((self.directory / 'sender-flow1.placement.json').read_text())['verified'])
+
+    def test_matrix_wrapper_sequences_native_socket_runs(self):
+        import hashlib
+        plan_dir = self.directory / 'matrix'
+        plan_dir.mkdir()
+        cases = []
+        # Explicit operational fixture: short socket-only cases, not performance runs.
+        for name in ('smoke-first', 'smoke-second'):
+            text = self.base.replace('run_id=socket-smoke', f'run_id={name}') + 'verify_placement=1\n'
+            (plan_dir / (name+'.conf')).write_text(text)
+            cases.append(dict(case_id=name, config=name+'.conf', expected_runs=10,
+                              references=['operational-test'], sha256=hashlib.sha256(text.encode()).hexdigest()))
+        (plan_dir/'execution.json').write_text(json.dumps(dict(design='D01-D11', cases=cases)))
+        wrapper = str(ROOT/'experiment/run_matrix.sh')
+        for role in ('receiver', 'sender'):
+            process = subprocess.Popen([wrapper, role, '--plan-dir', str(plan_dir)], cwd=ROOT,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            self.processes.append(process)
+        for process in reversed(self.processes):
+            self.complete(process)
+        for name in ('smoke-first', 'smoke-second'):
+            for role in ('receiver', 'sender'):
+                runs = list((self.directory/'result'/name/role/'runs').iterdir())
+                self.assertEqual(len(runs), 2)
+                self.assertTrue(all((run/'.complete').exists() for run in runs))
+                self.assertFalse(any((run/'environment-prepare.log').exists() for run in runs))
+
     def test_plan_rejects_unknown_duplicate_and_capacity(self):
         for text in (self.base + "unknown=1\n", self.base + "repeats=1\n",
                      self.base.replace("run_id=socket-smoke", "run_id=_bad"),

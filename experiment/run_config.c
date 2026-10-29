@@ -51,7 +51,7 @@ static int policy(struct parser *p, const char *key)
 static int allowed(const char *key)
 {
 	static const char *keys[] = {"run_id","receiver_address","control_port","repo","output_root","interface",
-		"modes","repeats","alternate_mode_order","duration_ms","warmup_ms","ready_timeout_ms","stop_timeout_ms",
+		"modes","repeats","alternate_mode_order","verify_placement","duration_ms","warmup_ms","ready_timeout_ms","stop_timeout_ms",
 		"start_delay_ms","drain_ms","settle_ms","supervisor_cpu","monitor",
 		"environment.governor","environment.rx_irq_cpu",
 		"receiver.supervisor_cpu","sender.supervisor_cpu","receiver.network_cpu","sender.network_cpu",
@@ -130,6 +130,7 @@ int read_run_config(const char *file, struct run_config *c)
 	c->control_port=number(&p,"control_port","49090",1024,65535);
 	c->repeats=number(&p,"repeats",NULL,1,10000);
 	c->alternate_mode_order=number(&p,"alternate_mode_order","0",0,1);
+	c->verify_placement=number(&p,"verify_placement","0",0,1);
 	c->duration_ms=number(&p,"duration_ms",NULL,1,86400000);
 	c->warmup_ms=number(&p,"warmup_ms",NULL,0,3600000);
 	c->ready_ms=number(&p,"ready_timeout_ms","60000",100,600000);

@@ -27,6 +27,8 @@ _Static_assert(sizeof(struct frame)==256,"control wire size");
 struct child {
 	pid_t pid;
 	int done, status, stopping, persistent, completion_fd, measurement_done, barrier;
+	int expected_policy, expected_priority;
+	cpu_set_t expected_cpus;
 	char name[32], ready[4096], staging[4096];
 };
 struct context {
@@ -88,9 +90,13 @@ static int spawn_pipe(struct context *x,const char *name,const char *ready,int c
 	setpgid(pid,pid);
 	unsigned index=x->children++; struct child *c=&x->child[index]; memset(c,0,sizeof(*c));
 	c->pid=pid; c->persistent=persistent;
+	c->expected_policy=policy; c->expected_priority=priority;
+	CPU_ZERO(&c->expected_cpus);
+	if (cpu>=0) CPU_SET(cpu,&c->expected_cpus);
 	c->completion_fd=-1; c->barrier=notify_fd>=0;
 	pathf(c->name,sizeof(c->name),"%s",name);
 	if (ready) pathf(c->ready,sizeof(c->ready),"%s",ready);
+	if (cpu<0 && x->c.verify_placement && sched_getaffinity(0,sizeof(c->expected_cpus),&c->expected_cpus)) return -1;
 	return (int)index;
 }
 static int spawn(struct context *x,const char *name,const char *ready,int cpu,int policy,int priority,int persistent,char *const args[])
@@ -105,6 +111,29 @@ static int pause_ms(struct context *x,uint64_t ms)
 	}
 	errno=EINTR; return -1;
 }
+/* Optional D01-D11 evidence: inspect the live process after its READY marker.
+ * Default configurations retain their original behavior and output files. */
+static int verify_child_placement(struct context *x, struct child *c)
+{
+	if (!x->c.verify_placement ||
+	    (strncmp(c->name,"sender-flow",11) && strncmp(c->name,"receiver-flow",13))) return 0;
+	cpu_set_t cpus; struct sched_param param;
+	int policy=sched_getscheduler(c->pid);
+	if (policy<0 || sched_getparam(c->pid,&param) || sched_getaffinity(c->pid,sizeof(cpus),&cpus)) return -1;
+	int okay=CPU_EQUAL(&cpus,&c->expected_cpus) && policy==c->expected_policy && param.sched_priority==c->expected_priority;
+	char path[4096];
+	if (pathf(path,sizeof(path),"%s/%s.placement.json",x->run_dir,c->name)) return -1;
+	int fd=open(path,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0644); if (fd<0) return -1;
+	FILE *out=fdopen(fd,"w"); if (!out) { close(fd); return -1; }
+	fprintf(out,"{\"pid\":%ld,\"policy\":%d,\"priority\":%d,\"verified\":%s,\"cpus\":[",(long)c->pid,policy,param.sched_priority,okay?"true":"false");
+	unsigned count=0;
+	for (unsigned cpu=0;cpu<CPU_SETSIZE;cpu++) if (CPU_ISSET(cpu,&cpus)) fprintf(out,"%s%u",count++?",":"",cpu);
+	fputs("]}\n",out);
+	int error=ferror(out); if (fclose(out)) error=1;
+	if (error) { errno=EIO; return -1; }
+	if (!okay) { fprintf(stderr,"child placement mismatch: %s\n",c->name); errno=EINVAL; return -1; }
+	return 0;
+}
 static int ready_child(struct context *x,int index)
 {
 	int64_t until=ace_mono_ns()+(int64_t)x->c.ready_ms*1000000LL;
@@ -113,7 +142,7 @@ static int ready_child(struct context *x,int index)
 		struct child *c=&x->child[index];
 		if (c->done) { errno=ECHILD; return -1; }
 		struct stat st;
-		if (!lstat(c->ready,&st)) { if (!S_ISREG(st.st_mode) || st.st_size<=0) { errno=EINVAL; return -1; } return 0; }
+		if (!lstat(c->ready,&st)) { if (!S_ISREG(st.st_mode) || st.st_size<=0) { errno=EINVAL; return -1; } return verify_child_placement(x,c); }
 		if (errno!=ENOENT) return -1;
 		if (ace_mono_ns()>=until) { errno=ETIMEDOUT; return -1; }
 		if (pause_ms(x,10)) return -1;

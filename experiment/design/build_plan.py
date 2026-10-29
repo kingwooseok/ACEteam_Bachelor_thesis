@@ -2,6 +2,7 @@
 """D01/D11 실행표와 양측 공통 설정 생성. 실행·접속·설정 변경은 하지 않는다."""
 import argparse
 import csv
+import hashlib
 import io
 import ipaddress
 import json
@@ -10,7 +11,7 @@ from pathlib import Path
 PROFILE = Path(__file__).with_name('profile.example.json')
 
 
-def rows(high=9000):
+def rows(high=9000, full_design=False):
     # 같은 조건은 한 번만 보관하고 A/B/C 참조를 함께 남긴다.
     result = []
     def add(label, pps, cpu, network='none', cpus='0,1,2', shared=False):
@@ -26,15 +27,21 @@ def rows(high=9000):
     for cpu in (0, 100):
         for network in ('none', 'high'):
             add(f'A-cpu{cpu}-{network}', 1000, cpu, network)
-    for pps in (0, 1000, 3000, high):
+    if full_design:
+        add('middle-cpu', 1000, 50)
+        add('middle-network', 1000, 0, 'middle')
+        add('middle-both', 1000, 50, 'middle')
+    levels = (0, 1000, 3000, 9000, high) if full_design else (0, 1000, 3000, high)
+    for pps in dict.fromkeys(levels):
         for cpu in (0, 100):
             add(f'B-pass{pps}-cpu{cpu}', pps, cpu)
     add('C-base', 1000, 100)
     add('C-load-share', 1000, 100, cpus='0,1,2,3')
     add('C-receiver-share', 1000, 100, shared=True)
-    add('middle-cpu', 1000, 50)
-    add('middle-network', 1000, 0, 'middle')
-    add('middle-both', 1000, 50, 'middle')
+    if not full_design:
+        add('middle-cpu', 1000, 50)
+        add('middle-network', 1000, 0, 'middle')
+        add('middle-both', 1000, 50, 'middle')
     singles = [dict(case_id=f'single-{i}', references=[f'D01-flow{i}'], pass_pps=1000,
                     cpu_percent=0, network='none', load_cpus='0,1,2',
                     pass_shares_cpu3=False, single_flow=i) for i in range(1, 4)]
@@ -43,7 +50,7 @@ def rows(high=9000):
     return singles + result
 
 
-def validate(profile):
+def validate(profile, full_design=False):
     expected = set(json.loads(PROFILE.read_text()))
     if set(profile) != expected:
         raise ValueError('profile keys must match profile.example.json')
@@ -74,11 +81,12 @@ def validate(profile):
     integer(profile['receiver_supervisor_cpu'], 0, 2, 'receiver supervisor CPU')
     integer(profile['network_high_bps'], 1, 1000000000, 'network high bps')
     integer(profile['network_middle_bps'], 1, profile['network_high_bps'] - 1, 'network middle bps')
-    integer(profile['pass_high_pps'], 3001, 15000, 'PASS high PPS (record capacity limit)')
+    integer(profile['pass_high_pps'], 9000 if full_design else 3001,
+            15476 if full_design else 15000, 'PASS high PPS (record capacity limit)')
     integer(profile['settle_ms'], 0, 60000, 'settle ms')
 
 
-def config(profile, row, index):
+def config(profile, row, index, full_design=False):
     # 확정된 공통 조건만 고정하고 미확정 값은 profile에서 요구한다.
     values = dict(run_id=row['case_id'], receiver_address=profile['receiver_address'],
                   control_port=49090, repo='AUTO', output_root='results/experiment',
@@ -100,8 +108,10 @@ def config(profile, row, index):
                    'load.network_port': 5201, 'load.network_parallel': 1,
                    'load.on_sec': 0, 'load.off_sec': 0})
     # 단독 3행은 우선 mixed의 해당 경로만 측정한다. 본시험 비교 횟수와 분리한다.
-    if row['single_flow']:
+    if row['single_flow'] and not full_design:
         values['modes'] = 'mixed'
+    if full_design:
+        values['verify_placement'] = 1
     for i in range(1, 4):
         pps = row['pass_pps'] if i == 1 else 1000
         if row['single_flow']:
@@ -123,14 +133,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--d01-d11', action='store_true',
+                        help='opt in to both-mode singles and fixed 9000 plus measured top PPS')
     args = parser.parse_args()
     profile = json.loads(args.profile.read_text()) if args.profile else None
     if profile is not None:
         try:
-            validate(profile)
+            validate(profile, args.d01_d11)
         except (ValueError, TypeError) as error:
             parser.error(str(error))
-    plan = rows(profile['pass_high_pps'] if profile else 9000)
+    plan = rows(profile['pass_high_pps'] if profile else 9000, args.d01_d11)
     # 기존 산출물/설정을 덮어쓰지 않고 새 폴더만 생성한다.
     args.output.mkdir(parents=True, exist_ok=False)
     with (args.output / 'matrix.csv').open('w', newline='') as stream:
@@ -139,13 +151,24 @@ def main():
         writer.writerows({**row, 'references': ';'.join(row['references'])} for row in plan)
     summary = dict(status='configured-unvalidated' if profile else 'draft-unresolved',
                    main_conditions=len(plan)-3, main_runs=(len(plan)-3)*10,
-                   single_runs=15, duration_ms=60000, warmup_ms=5000,
+                   single_runs=30 if args.d01_d11 else 15, duration_ms=60000, warmup_ms=5000,
                    note='No deployment or experiment execution. Draft PASS high=9000 is provisional.')
+    if args.d01_d11:
+        summary.update(design='D01-D11', total_runs=len(plan)*10)
     (args.output / 'plan.json').write_text(json.dumps(summary, indent=2) + '\n')
     if profile:
         (args.output / 'profile.json').write_text(json.dumps(profile, indent=2) + '\n')
+        cases = []
         for index, row in enumerate(plan):
-            (args.output / f"{row['case_id']}.conf").write_text(config(profile, row, index))
+            name = f"{row['case_id']}.conf"
+            text = config(profile, row, index, args.d01_d11)
+            (args.output / name).write_text(text)
+            cases.append(dict(case_id=row['case_id'], config=name,
+                              sha256=hashlib.sha256(text.encode()).hexdigest(),
+                              references=row['references'], expected_runs=10))
+        if args.d01_d11:
+            (args.output / 'execution.json').write_text(json.dumps(
+                dict(design='D01-D11', cases=cases), indent=2) + '\n')
     print(json.dumps(summary))
 
 
