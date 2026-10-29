@@ -24,6 +24,24 @@ class DesignPlanTests(unittest.TestCase):
                     receiver_network_cpu=0, network_high_bps=800000000,
                     network_middle_bps=400000000, pass_high_pps=9000, settle_ms=100)
 
+    def test_document_selected_starting_profile(self):
+        profile = json.loads(plan.PROFILE.read_text())
+        self.assertEqual(profile['receiver_cpus'], [0, 3, 1])
+        for side in ('receiver', 'sender'):
+            self.assertEqual(profile[f'{side}_policies'], ['other', 'fifo', 'fifo'])
+            self.assertEqual(profile[f'{side}_priorities'], [0, 80, 80])
+        # 네트워크 측정값을 임의로 채우지 않고 생성 차단을 유지한다.
+        with self.assertRaisesRegex(ValueError, 'unresolved'):
+            plan.validate(profile)
+        profile.update(network_high_bps=800000000, network_middle_bps=400000000,
+                       pass_high_pps=9000, settle_ms=100)
+        plan.validate(profile)
+        values = dict(line.split('=', 1) for line in plan.config(profile, plan.rows()[3], 3).splitlines()
+                      if line and not line.startswith('#'))
+        self.assertEqual(values['flow2.rx_policy'], 'fifo')
+        self.assertEqual(values['flow2.rx_priority'], '80')
+        self.assertEqual(values['flow3.rx_cpu'], '1')
+
     def test_deduplicated_main_and_single_conditions(self):
         rows = plan.rows()
         self.assertEqual(len(rows), 18)
