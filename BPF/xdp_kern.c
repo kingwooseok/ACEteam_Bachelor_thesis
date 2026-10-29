@@ -311,8 +311,19 @@ static __always_inline int prepare_measurement_metadata(struct xdp_md *ctx,
 static __always_inline int dispatch_requested_path(struct xdp_md *ctx,
 							   __u16 requested_path)
 {
+	__u32 zero = 0;
+	struct ace_runtime_config *runtime;
 	__u32 key;
 	int action;
+
+	/* all-PASS is the control condition: retain the requested class in the
+	 * measurement metadata, but deliver every experiment packet to the stack. */
+	runtime = bpf_map_lookup_elem(&runtime_config, &zero);
+	if (runtime && (runtime->flags & ACE_RUNTIME_F_ALL_PASS)) {
+		count_stat(ACE_XDP_STAT_EXPERIMENT_PASS);
+		count_stat(ACE_XDP_STAT_PASS);
+		return XDP_PASS;
+	}
 
 	if (requested_path == ACE_PATH_CPUMAP) {
 		key = ACE_XDP_RT_CPU;

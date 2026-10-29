@@ -39,6 +39,10 @@ enum {
 	ACE_XDP_RUNTIME_ABI_VERSION = 4,
 };
 
+/* runtime_config.flags: preserve the measured path while forcing delivery to
+ * the ordinary Linux stack for the all-PASS control configuration. */
+#define ACE_RUNTIME_F_ALL_PASS (1U << 4)
+
 /** @brief per-CPU stats map에서 사용하는 key와 출력 순서. */
 enum ace_xdp_stat_id {
 	ACE_XDP_STAT_PASS = 0,

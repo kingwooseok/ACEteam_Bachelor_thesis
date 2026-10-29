@@ -18,7 +18,7 @@ import os
 import re
 import statistics
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence, TextIO, cast
 
@@ -181,6 +181,7 @@ class Manifest:
     run_directory: Path
     version: int
     run_id: str
+    parameters: Mapping[str, str] = field(default_factory=dict)
 
 
 def round_ratio(numerator: int, denominator: int) -> int:
@@ -489,6 +490,7 @@ def empty_table() -> SourceTable:
 JOINED_FIELDS = (
     "flow_id", "sequence", "ingress_present", "cpumap_present",
     "afxdp_present", "udp_present", "user_source", "requested_path",
+    "delivery_mode",
     "ingress_rx_queue", "cpumap_cpu", "afxdp_rx_queue", "packet_length",
     "tx_realtime_ns", "user_rx_mono_ns", "user_rx_real_ns",
     "ingress_hw_rx_ns", "afxdp_hw_rx_ns", "udp_hw_rx_ns",
@@ -582,6 +584,7 @@ def joined_row(
     udp: Mapping[str, int] | None,
     calibration: Calibration,
     allow_endpoint_clamp: bool = False,
+    delivery_mode: str = "mixed",
 ) -> dict[str, int | str | None]:
     """Build one processed row while retaining every source's raw values."""
 
@@ -703,7 +706,8 @@ def joined_row(
     udp_hw_valid = False
     if udp is not None:
         udp_flags = udp["flags"]
-        if ingress is not None and ingress_path == ACE_PATH_XSK:
+        if (delivery_mode != "all-pass" and ingress is not None
+                and ingress_path == ACE_PATH_XSK):
             inconsistencies |= INCONSISTENT_UDP_PATH
         udp_hw_valid = bool(udp_flags & UDP_HWTS_VALID) and (
             positive_value(udp, "hw_rx_ns") is not None
@@ -780,7 +784,8 @@ def joined_row(
             user_hw = positive_value(afxdp, "hw_rx_ns")
     elif user_source == "udp":
         user_semantically_valid = (
-            udp_valid and not (inconsistencies & INCONSISTENT_UDP_PATH)
+            udp_valid and (delivery_mode == "all-pass"
+                           or not (inconsistencies & INCONSISTENT_UDP_PATH))
         )
         if udp_hw_valid:
             user_hw = positive_value(udp, "hw_rx_ns")
@@ -852,6 +857,7 @@ def joined_row(
         "udp_present": int(udp is not None),
         "user_source": user_source,
         "requested_path": requested_path,
+        "delivery_mode": delivery_mode,
         "ingress_rx_queue": value(ingress, "rx_queue"),
         "cpumap_cpu": value(cpumap, "cpu"),
         "afxdp_rx_queue": value(afxdp, "rx_queue"),
@@ -1110,7 +1116,17 @@ def load_manifest(path: Path) -> Manifest:
         r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id
     ):
         raise InputError(f"{resolved}: invalid run_id")
-    return Manifest(resolved, resolved.parent.resolve(strict=True), version, run_id)
+    parameters = payload.get("parameters", {})
+    if not isinstance(parameters, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in parameters.items()
+    ):
+        raise InputError(f"{resolved}: parameters must be a string mapping")
+    delivery_mode = parameters.get("delivery_mode", "mixed")
+    if delivery_mode not in {"mixed", "all-pass"}:
+        raise InputError(f"{resolved}: unsupported delivery_mode={delivery_mode!r}")
+    return Manifest(resolved, resolved.parent.resolve(strict=True), version,
+                    run_id, parameters)
 
 
 def path_within(path: Path, directory: Path) -> bool:
@@ -1254,6 +1270,7 @@ def analyze(
             key, ingress.records.get(key), cpumap.records.get(key),
             afxdp.records.get(key), udp.records.get(key), calibration,
             args.allow_endpoint_clamp,
+            manifest.parameters.get("delivery_mode", "mixed"),
         ))
 
     input_artifacts = input_artifact_snapshot(input_paths)

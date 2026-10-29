@@ -75,6 +75,7 @@ struct loader_options {
 	const char *output_dir;
 	const char *output_prefix;
 	__u32 record_capacity;
+	bool all_pass;
 	bool quiet;
 	bool recover;
 	bool cleanup_pins;
@@ -108,6 +109,7 @@ static void usage(const char *program)
 		"  --quiet, -q          print counters only at shutdown\n"
 		"  --verbose, -v        print counters once per second\n"
 		"  --records, -n COUNT set HASH capacity (default %u, max %u)\n"
+		"  --mode MODE          delivery mode: mixed (default) or all-pass\n"
 		"  --recover, -r        export an inactive run from pinned maps\n"
 		"  --cleanup-pins, -c   after successful recovery, remove its pins\n",
 		program, ACE_XDP_RECORD_DEFAULT_ENTRIES,
@@ -141,6 +143,7 @@ static int parse_options(int argc, char **argv, struct loader_options *options)
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "records", required_argument, NULL, 'n' },
+		{ "mode", required_argument, NULL, 'm' },
 		{ "recover", no_argument, NULL, 'r' },
 		{ "cleanup-pins", no_argument, NULL, 'c' },
 		{ "help", no_argument, NULL, 'h' },
@@ -153,7 +156,7 @@ static int parse_options(int argc, char **argv, struct loader_options *options)
 	options->record_capacity = ACE_XDP_RECORD_DEFAULT_ENTRIES;
 	options->quiet = true;
 
-	while ((option = getopt_long(argc, argv, "o:p:qvn:rch",
+	while ((option = getopt_long(argc, argv, "o:p:qvn:m:rch",
 				 long_options, NULL)) != -1) {
 		switch (option) {
 		case 'o':
@@ -172,6 +175,16 @@ static int parse_options(int argc, char **argv, struct loader_options *options)
 			if (parse_u32(optarg, 1, ACE_XDP_RECORD_MAX_ENTRIES,
 				      &options->record_capacity)) {
 				fprintf(stderr, "invalid record capacity: %s\n", optarg);
+				return -EINVAL;
+			}
+			break;
+		case 'm':
+			if (!strcmp(optarg, "mixed"))
+				options->all_pass = false;
+			else if (!strcmp(optarg, "all-pass"))
+				options->all_pass = true;
+			else {
+				fprintf(stderr, "invalid delivery mode: %s\n", optarg);
 				return -EINVAL;
 			}
 			break;
@@ -960,7 +973,8 @@ static int recover_pinned_measurement(const struct loader_options *options)
 	    (runtime.flags & ~(ACE_RUNTIME_F_HWTSTAMP_CAPTURED |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLYING |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLIED |
-			       ACE_RUNTIME_F_STOPPING))) {
+			       ACE_RUNTIME_F_STOPPING |
+			       ACE_RUNTIME_F_ALL_PASS))) {
 		fprintf(stderr,
 			"pinned runtime mismatch: abi=%u ifindex=%u records=%u "
 			"program=%u owner=%u flags=%#x\n",
@@ -1305,6 +1319,8 @@ int main(int argc, char **argv)
 	runtime.ifindex = (__u32)ifindex;
 	runtime.record_capacity = options.record_capacity;
 	runtime.xdp_program_id = owned_id;
+	if (options.all_pass)
+		runtime.flags |= ACE_RUNTIME_F_ALL_PASS;
 	runtime.owner_pid = (__u32)getpid();
 	err = ace_process_start_ticks(getpid(), &runtime.owner_start_ticks);
 	if (err) {
@@ -1399,9 +1415,10 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
-	printf("attached native xdp_dispatch id=%u to %s; records=%u; "
+	printf("attached native xdp_dispatch id=%u to %s; mode=%s; records=%u; "
 	       "RX HWTSTAMP filter=%d; Ctrl-C to stop\n",
-	       owned_id, options.ifname, options.record_capacity,
+	       owned_id, options.ifname,
+	       options.all_pass ? "all-pass" : "mixed", options.record_capacity,
 	       hwtstamp.effective.rx_filter);
 	/* 이 준비 완료 메시지 뒤에 수신기와 송신기를 시작한다. loader의 대기
 	 * 루프는 패킷당 작업을 하지 않으며 기본 quiet 모드로 출력 부하를 줄인다. */
