@@ -25,6 +25,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis import aggregate_runs as aggregate
 from analysis import join_results as join
+from analysis.clock_validation import validate_clock
 
 
 class ExperimentError(ValueError):
@@ -350,12 +351,17 @@ def join_completed_run(directory: Path, descriptor: Mapping) -> aggregate.RunDat
     output = directory / "analysis"
     output.mkdir(exist_ok=True)
     marker = output / "summary.json.complete"
+    tracking = bool((descriptor.get("environment") or {}).get("phc_tracking"))
     if marker.exists():
         run = aggregate.load_run(marker)
         if run.run_id != descriptor["run_id"]:
             raise ExperimentError("join run_id disagrees with run.json")
         if run.analysis_policy["hw_timestamp_policy"] != join.HW_TIMESTAMP_POLICY:
             raise ExperimentError("existing join uses the previous HW clock policy; collect into a new output directory and analyze again")
+        if tracking:
+            summary = read_json(run.summary_path)
+            if [Path(p).name for p in summary["inputs"]["phc_calibration"]] != ["phc-during.csv"]:
+                raise ExperimentError("existing join does not use continuous PHC observations")
         return run
     args = ["--manifest", str(contained_file(directory, "manifest.json")),
             "--ingress", str(contained_file(directory, "xdp-ingress_records.csv")),
@@ -367,7 +373,7 @@ def join_completed_run(directory: Path, descriptor: Mapping) -> aggregate.RunDat
             args.extend((option, str(contained_file(directory, name))))
     for path in sorted(directory.glob("udp-flow*.bin")):
         args.extend(("--udp-native", str(contained_file(directory, path.name))))
-    for name in ("phc-before.csv", "phc-after.csv"):
+    for name in (("phc-during.csv",) if tracking else ("phc-before.csv", "phc-after.csv")):
         args.extend(("--phc-calibration", str(contained_file(directory, name))))
     parsed = join.argument_parser().parse_args(args)
     rows, summary = join.analyze(parsed)
@@ -707,6 +713,11 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
         run = None if descriptor["mode"] == "socket-only" else join_completed_run(directory, descriptor)
         if run is not None:
             summary = read_json(run.summary_path)
+            if (descriptor.get("environment") or {}).get("phc_tracking"):
+                result["clock_validation"] = validate_clock(
+                    run.joined_path, contained_file(directory, "phc-during.csv"))
+                if not result["clock_validation"]["accepted"]:
+                    raise ExperimentError("continuous clock validation failed: " + json.dumps(result["clock_validation"]))
             result["decomposition"] = summary.get("decomposition")
             result["hw_timestamp_policy"] = run.analysis_policy["hw_timestamp_policy"]
         result["flows"] = descriptor["flows"]

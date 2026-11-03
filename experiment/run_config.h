@@ -20,6 +20,8 @@ struct run_config {
 	unsigned mode_count, repeats, control_port, ready_ms, stop_ms, start_delay_ms;
 	unsigned drain_ms, settle_ms, monitor, cpu_percent, memory_workers, io_workers;
 	unsigned cpu_workers;
+	unsigned xsk_busy, phc_tracking;
+	int rx_coalesce_usecs;
 	unsigned network_port, network_parallel, load_on_sec, load_off_sec;
 	unsigned rx_irq_cpu;
 	int supervisor_cpu, receiver_supervisor_cpu, sender_supervisor_cpu;

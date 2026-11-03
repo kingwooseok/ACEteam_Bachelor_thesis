@@ -1,5 +1,16 @@
 # BPF 측정 프로그램 자동 실행
 
+## 2026-11-04 AF_XDP 상시 확인
+
+`afxdp_recv --busy`는 RX 링이 비어도 `poll()` 대기로 들어가지 않고 다시 확인한다.
+`--start-gated`를 함께 쓰면 준비 파일 게시 뒤 SIGUSR2까지 대기한다.
+실행기는 부하 안정화가 끝난 뒤 이 신호를 보내고 측정을 시작한다.
+`--busy-timeout-sec N`은 상시 확인 시작 후의 안전 시간 제한이다(기본 90초).
+시간 제한 종료는 실패이며, 정상 종료는 SIGTERM → drain → 기록 저장 순서다.
+`--busy`를 생략하면 기존 blocking 수신을 유지한다.
+11월 4일 profile은 중요2 수신기를 FIFO49로 실행한다. CPU는 해당 모드의 일반 영역을 공유한다.
+
+
 `make -C BPF`는 실행 중인 Linux 커널의 BTF로 BPF object와 skeleton을 만들고 `xdp_loader`, `afxdp_recv`를 빌드한다. clang의 BPF target, bpftool, libbpf·libxdp 개발 패키지가 필요하다.
 
 ## 경로 정책

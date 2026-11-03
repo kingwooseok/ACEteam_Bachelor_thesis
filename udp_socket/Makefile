@@ -4,7 +4,7 @@ CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic
 
 BIN_DIR := bin
-TARGETS := $(BIN_DIR)/sender $(BIN_DIR)/receiver $(BIN_DIR)/phc_calibrate $(BIN_DIR)/ace_clock $(BIN_DIR)/cpu_sample
+TARGETS := $(BIN_DIR)/sender $(BIN_DIR)/receiver $(BIN_DIR)/phc_calibrate $(BIN_DIR)/phc_track $(BIN_DIR)/ace_clock $(BIN_DIR)/cpu_sample
 
 .PHONY: all clean
 
@@ -20,7 +20,10 @@ $(BIN_DIR)/receiver: src/receiver.c include/config.h include/protocol.h \
 		../include/ace_packet_abi.h ../include/ace_hwtstamp.h ../include/ace_run_control.h | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
-$(BIN_DIR)/phc_calibrate: src/phc_calibrate.c | $(BIN_DIR)
+$(BIN_DIR)/phc_calibrate: src/phc_calibrate.c ../include/ace_phc.h | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(BIN_DIR)/phc_track: src/phc_track.c ../include/ace_phc.h ../include/ace_run_control.h | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 $(BIN_DIR)/ace_clock: src/ace_clock.c ../include/ace_run_control.h | $(BIN_DIR)

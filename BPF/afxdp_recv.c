@@ -66,6 +66,7 @@ enum {
 static volatile sig_atomic_t stop;
 static volatile sig_atomic_t stop_signal;
 static volatile sig_atomic_t flush_requested;
+static volatile sig_atomic_t busy_released;
 static unsigned long long received_packets;
 static unsigned long long received_udp_packets;
 static unsigned long long received_experiment_packets;
@@ -89,6 +90,29 @@ static void on_flush_signal(int signo)
 {
 	(void)signo;
 	flush_requested = 1;
+}
+
+static void on_busy_signal(int signo)
+{
+	(void)signo;
+	busy_released = 1;
+}
+
+/* Hold only the preparation phase; capture uses the unchanged busy loop. */
+static int wait_busy_release(void)
+{
+	sigset_t blocked, previous, waiting;
+	sigemptyset(&blocked);
+	sigaddset(&blocked, SIGUSR2);
+	sigaddset(&blocked, SIGTERM);
+	sigaddset(&blocked, SIGINT);
+	if (sigprocmask(SIG_BLOCK, &blocked, &previous)) return -1;
+	waiting = previous;
+	sigdelset(&waiting, SIGUSR2);
+	sigdelset(&waiting, SIGTERM);
+	sigdelset(&waiting, SIGINT);
+	while (!busy_released && !stop) sigsuspend(&waiting);
+	return sigprocmask(SIG_SETMASK, &previous, NULL);
 }
 
 /* One byte on an inherited pipe announces capture completion without storage
@@ -161,6 +185,8 @@ struct receiver_options {
 	__u32 drain_ms;
 	int completion_fd;
 	bool defer_flush;
+	bool busy_poll, start_gated;
+	unsigned busy_timeout_sec;
 	__u32 queue_id;
 	__u32 record_capacity;
 	bool records_explicit;
@@ -699,7 +725,10 @@ static void usage(const char *program)
 		"  --stats-json FILE  create end-of-run receiver statistics JSON\n"
 		"  --drain-ms N       receive for at most N ms after INT/TERM (default 100, max 60000)\n"
 		"  --completion-fd N  inherited pipe: byte 0 capture complete, byte 1 error\n"
-		"  --defer-flush      wait for SIGUSR1 after capture before writing results\n",
+		"  --defer-flush      wait for SIGUSR1 after capture before writing results\n"
+		"  --busy             continuously inspect the RX ring\n"
+		"  --start-gated      wait for SIGUSR2 before busy capture\n"
+		"  --busy-timeout-sec N  bounded busy capture (default 90)\n",
 		program, ACE_XDP_RECORD_DEFAULT_ENTRIES,
 		ACE_XDP_RECORD_MAX_ENTRIES);
 }
@@ -714,6 +743,9 @@ static int parse_options(int argc, char **argv, struct receiver_options *options
 		{ "drain-ms", required_argument, NULL, 1002 },
 		{ "completion-fd", required_argument, NULL, 1003 },
 		{ "defer-flush", no_argument, NULL, 1004 },
+		{ "busy", no_argument, NULL, 1005 },
+		{ "start-gated", no_argument, NULL, 1006 },
+		{ "busy-timeout-sec", required_argument, NULL, 1007 },
 		{ "help", no_argument, NULL, 'h' },
 		{},
 	};
@@ -724,6 +756,7 @@ static int parse_options(int argc, char **argv, struct receiver_options *options
 	options->record_capacity = ACE_XDP_RECORD_DEFAULT_ENTRIES;
 	options->drain_ms = 100;
 	options->completion_fd = -1;
+	options->busy_timeout_sec = 90;
 
 	while ((option = getopt_long(argc, argv, "o:n:h",
 				 long_options, NULL)) != -1) {
@@ -763,6 +796,14 @@ static int parse_options(int argc, char **argv, struct receiver_options *options
 		case 1004:
 			options->defer_flush = true;
 			break;
+		case 1005: options->busy_poll = true; break;
+		case 1006: options->start_gated = true; break;
+		case 1007: {
+			uint64_t value;
+			if (ace_parse_u64(optarg, 1, 172800, &value)) return -EINVAL;
+			options->busy_timeout_sec = (unsigned)value;
+			break;
+		}
 		case 'h':
 			usage(argv[0]);
 			return 1;
@@ -777,7 +818,7 @@ static int parse_options(int argc, char **argv, struct receiver_options *options
 		if (parse_queue_id(argv[optind++], &options->queue_id))
 			return -EINVAL;
 	}
-	if (optind != argc || !options->output_path || !*options->output_path)
+	if ((options->start_gated && !options->busy_poll) || optind != argc || !options->output_path || !*options->output_path)
 		return -EINVAL;
 	return 0;
 }
@@ -1135,6 +1176,8 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 	signal(SIGUSR1, on_flush_signal);
+	signal(SIGUSR2, on_busy_signal);
+	signal(SIGALRM, on_signal);
 	signal(SIGPIPE, SIG_IGN);
 	self_owner.pid = (__u32)getpid();
 	err = ace_process_start_ticks(getpid(), &self_owner.process_start_ticks);
@@ -1368,9 +1411,19 @@ int main(int argc, char **argv)
 		fprintf(stderr, "cannot publish AF_XDP readiness: %s\n", strerror(-err));
 		goto out;
 	}
+	fprintf(stdout,"receive_wait=%s policy=external\n",options.busy_poll?"busy_spin":"poll");
+	fflush(stdout);
 	ready = true;
 	termination_reason = "signal";
 	err = 0;
+	if (options.start_gated && wait_busy_release()) { err = -errno; goto out; }
+	if (options.start_gated) {
+		start_mono_ns = ace_mono_ns();
+		if (start_mono_ns < 0) { err = -errno; goto out; }
+	}
+	if (!stop && options.busy_poll) alarm(options.busy_timeout_sec);
+	fprintf(stdout,"receive_start_mono_ns=%"PRId64"\n",ace_mono_ns());
+	fflush(stdout);
 	for (;;) {
 		int64_t now = ace_mono_ns();
 		int wait_ms, poll_result, received;
@@ -1402,6 +1455,16 @@ int main(int argc, char **argv)
 		}
 		if (received)
 			continue;
+		/* Continuously inspect RX while capturing when requested.
+		 * ARM YIELD is a CPU hint; it does not sleep or sched_yield(). */
+		if (!drain.active && options.busy_poll) {
+#if defined(__aarch64__)
+			__asm__ __volatile__("yield" ::: "memory");
+#else
+			__asm__ __volatile__("" ::: "memory");
+#endif
+			continue;
+		}
 		poll_result = poll(&pollfd, 1, wait_ms);
 		if (poll_result < 0) {
 			if (errno == EINTR)
@@ -1424,6 +1487,8 @@ int main(int argc, char **argv)
 			break;
 		}
 	}
+	alarm(0);
+	if (stop_signal == SIGALRM) { err = -ETIMEDOUT; termination_reason = "busy_timeout"; }
 	end_mono_ns = ace_mono_ns();
 	if (end_mono_ns < 0) {
 		end_mono_ns = start_mono_ns;
