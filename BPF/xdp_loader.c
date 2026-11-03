@@ -111,7 +111,7 @@ static void usage(const char *program)
 		"  --quiet, -q          print counters only at shutdown\n"
 		"  --verbose, -v        print counters once per second\n"
 		"  --records, -n COUNT set HASH capacity (default %u, max %u)\n"
-		"  --mode MODE          mixed (default) or all-pass, with identical measurement\n"
+		"  --mode MODE          mixed (default), all-pass or pass-xsk; same measurement\n"
 		"  --ready-file PATH    atomically publish readiness JSON (new file only)\n"
 		"  --recover, -r        export an inactive run from pinned maps\n"
 		"  --cleanup-pins, -c   after successful recovery, remove its pins\n",
@@ -187,8 +187,10 @@ static int parse_options(int argc, char **argv, struct loader_options *options)
 				options->mode = ACE_FORWARD_MIXED;
 			else if (!strcmp(optarg, "all-pass"))
 				options->mode = ACE_FORWARD_ALL_PASS;
+			else if (!strcmp(optarg, "pass-xsk"))
+				options->mode = ACE_FORWARD_PASS_XSK;
 			else {
-				fprintf(stderr, "invalid --mode: %s (mixed or all-pass)\n", optarg);
+				fprintf(stderr, "invalid --mode: %s (mixed, all-pass or pass-xsk)\n", optarg);
 				return -EINVAL;
 			}
 			break;
@@ -470,13 +472,17 @@ static int configure_maps(struct xdp_kern *skel,
 	__u32 zero = 0;
 	int remote_fd;
 
-	remote_fd = bpf_program__fd(skel->progs.xdp_cpumap_measure);
-	if (remote_fd < 0)
-		return -EINVAL;
-	cpu_value.bpf_prog.fd = remote_fd;
-	if (bpf_map_update_elem(bpf_map__fd(skel->maps.cpu_map), &cpu,
-				&cpu_value, BPF_ANY))
-		return -errno;
+	/* A CPUMAP entry creates its destination kthread. Only mixed uses it;
+	 * keep both PASS controls free of an unused CPU3 forwarding worker. */
+	if (!(runtime->flags & (ACE_RUNTIME_F_ALL_PASS | ACE_RUNTIME_F_PASS_XSK))) {
+		remote_fd = bpf_program__fd(skel->progs.xdp_cpumap_measure);
+		if (remote_fd < 0)
+			return -EINVAL;
+		cpu_value.bpf_prog.fd = remote_fd;
+		if (bpf_map_update_elem(bpf_map__fd(skel->maps.cpu_map), &cpu,
+					&cpu_value, BPF_ANY))
+			return -errno;
+	}
 	if (bpf_map_update_elem(bpf_map__fd(skel->maps.runtime_config), &zero,
 				runtime, BPF_ANY))
 		return -errno;
@@ -1023,7 +1029,9 @@ static int recover_pinned_measurement(const struct loader_options *options)
 			       ACE_RUNTIME_F_HWTSTAMP_APPLYING |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLIED |
 			       ACE_RUNTIME_F_STOPPING |
-			       ACE_RUNTIME_F_ALL_PASS))) {
+			       ACE_RUNTIME_F_ALL_PASS | ACE_RUNTIME_F_PASS_XSK)) ||
+	    ((runtime.flags & (ACE_RUNTIME_F_ALL_PASS | ACE_RUNTIME_F_PASS_XSK)) ==
+	     (ACE_RUNTIME_F_ALL_PASS | ACE_RUNTIME_F_PASS_XSK))) {
 		fprintf(stderr,
 			"pinned runtime mismatch: abi=%u ifindex=%u records=%u "
 			"program=%u owner=%u flags=%#x\n",
@@ -1368,6 +1376,8 @@ int main(int argc, char **argv)
 	runtime.abi_version = ACE_XDP_RUNTIME_ABI_VERSION;
 	if (options.mode == ACE_FORWARD_ALL_PASS)
 		runtime.flags |= ACE_RUNTIME_F_ALL_PASS;
+	else if (options.mode == ACE_FORWARD_PASS_XSK)
+		runtime.flags |= ACE_RUNTIME_F_PASS_XSK;
 	runtime.ifindex = (__u32)ifindex;
 	runtime.record_capacity = options.record_capacity;
 	runtime.xdp_program_id = owned_id;
@@ -1469,7 +1479,8 @@ int main(int argc, char **argv)
 	       "RX HWTSTAMP filter=%d; mode=%s; Ctrl-C to stop\n",
 	       owned_id, options.ifname, options.record_capacity,
 	       hwtstamp.effective.rx_filter,
-	       options.mode == ACE_FORWARD_ALL_PASS ? "all-pass" : "mixed");
+	       options.mode == ACE_FORWARD_ALL_PASS ? "all-pass" :
+	       options.mode == ACE_FORWARD_PASS_XSK ? "pass-xsk" : "mixed");
 	if (ace_publish_ready(options.ready_path, "xdp_loader")) {
 		err = -errno;
 		fprintf(stderr, "cannot publish loader readiness: %s\n", strerror(-err));

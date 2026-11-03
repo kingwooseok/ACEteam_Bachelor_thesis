@@ -87,6 +87,58 @@ class ExperimentTests(unittest.TestCase):
             self.assertNotIn("<script src", output)
             self.assertEqual(before, {str(path): path.read_bytes() for run in runs for path in run.glob("*.bin")})
 
+    def test_three_modes_keep_cpu_placements_and_distinct_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for mode in ("all-pass", "pass-xsk", "mixed"):
+                for repeat in (1, 2):
+                    run = self.make_run(root, f'{mode}-{repeat}')
+                    data = json.loads((run / "run.json").read_text())
+                    data.update(mode=mode, repeat=repeat)
+                    data["flows"][0]["rx_cpu"] = 0
+                    data["flows"][1].update(rx_cpu=1 if mode == "all-pass" else 3,
+                                            requested_path="cpumap" if mode == "mixed" else "pass")
+                    data["flows"].append(dict(flow_id=3, port=9002, count=3, period_ns=1000000,
+                                              deadline_ns=250, requested_path="pass" if mode == "all-pass" else "xsk", rx_cpu=1))
+                    ingress = (run / "xdp-ingress_records.csv").read_text()
+                    if mode != "mixed":
+                        ingress = ingress.replace("2,0,0,1300,1300,19,1,0", "2,0,0,1300,1300,19,0,0")
+                        (run / "xdp-cpumap_records.csv").write_text(CPUMAP_HEADER)
+                    ingress += f'3,0,0,1700,1700,19,{0 if mode == "all-pass" else 2},0\n'
+                    (run / "xdp-ingress_records.csv").write_text(ingress)
+                    if mode == "all-pass":
+                        (run / "udp-flow3.bin").write_bytes(join.UDP_RECORD.pack(0, 100, 1900, 5000, 1700, 3, 96, 1, 0, 0))
+                    else:
+                        (run / "afxdp.csv").write_text(AFXDP_HEADER + "3,0,0,100,1900,5000,1700,1700,19,2,0,96,7\n")
+                    (run / "sender-flow3.json").write_text(json.dumps(dict(flow_id=3, sent=3, expected_count=3,
+                        errors=0, start_mono_ns=1000000000, end_mono_ns=2000000000, elapsed_ns=1000000000)))
+                    (run / "run.json").write_text(json.dumps(data))
+                    (run / "manifest.json").write_text(json.dumps(dict(manifest_version=1, run_id=data["run_id"],
+                        parameters=dict(mode=mode, flows=data["flows"]))))
+                    runs.append(run)
+            single = self.make_run(root, "single-mixed")
+            data = json.loads((single / "run.json").read_text())
+            data["case_id"] = "single-2"
+            (single / "run.json").write_text(json.dumps(data))
+            runs.append(single)
+            report = experiment.build_report(runs)
+            self.assertTrue(all(run["status"] == "completed" for run in report["runs"]), report)
+            self.assertEqual(len(report["conditions"]), 4)
+            for condition in report["conditions"]:
+                self.assertEqual(condition["status"], "completed", condition)
+                if condition["case_id"] == "single-2":
+                    self.assertEqual(condition["statistics"]["flows"]["2"]["run_count"], 1)
+                    continue
+                self.assertEqual(condition["flows"][1]["rx_cpu"], 1 if condition["mode"] == "all-pass" else 3)
+                self.assertEqual(condition["statistics"]["flows"]["2"]["run_count"], 2)
+                self.assertEqual(len(condition["decomposition"]), 2)
+                self.assertEqual(condition["decomposition"][0]["max_abs_residual_ns"], 0)
+            page = experiment.render_html(report)
+            self.assertIn("pass-xsk", page)
+            self.assertIn("구간별 지연과 실제 수신 배치", page)
+            self.assertIn("같은 패킷의 구간 합 검사", page)
+
     def test_smoke_and_incomplete_runs_cannot_contribute_hardware_statistics(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

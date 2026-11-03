@@ -1220,7 +1220,7 @@ int main(int argc, char **argv)
 			       ACE_RUNTIME_F_HWTSTAMP_APPLYING |
 			       ACE_RUNTIME_F_HWTSTAMP_APPLIED |
 			       ACE_RUNTIME_F_STOPPING |
-			       ACE_RUNTIME_F_ALL_PASS)) ||
+			       ACE_RUNTIME_F_ALL_PASS | ACE_RUNTIME_F_PASS_XSK)) ||
 	    runtime.effective_hwtstamp_rx_filter != HWTSTAMP_FILTER_ALL) {
 		fprintf(stderr,
 			"runtime configuration mismatch: abi=%u ifindex=%u records=%u "

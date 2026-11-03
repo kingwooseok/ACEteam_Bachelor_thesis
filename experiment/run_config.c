@@ -60,7 +60,7 @@ static int allowed(const char *key)
 		"load.network_port","load.network_parallel","load.on_sec","load.off_sec"};
 	for (unsigned i = 0; i < sizeof(keys) / sizeof(*keys); i++) if (!strcmp(key, keys[i])) return 1;
 	if (strlen(key) < 7 || strncmp(key, "flow", 4) || key[4] < '1' || key[4] > '3' || key[5] != '.') return 0;
-	static const char *fields[] = {"enabled","period_ns","deadline_ns","tx_cpu","rx_cpu","tx_policy","rx_policy","tx_priority","rx_priority"};
+	static const char *fields[] = {"enabled","period_ns","deadline_ns","tx_cpu","rx_cpu","all_pass_rx_cpu","tx_policy","rx_policy","tx_priority","rx_priority"};
 	for (unsigned i = 0; i < sizeof(fields) / sizeof(*fields); i++) if (!strcmp(key + 6, fields[i])) return 1;
 	return 0;
 }
@@ -90,6 +90,21 @@ static int config_hash(const char *path, char digest[65])
 }
 uint64_t flow_count(const struct run_flow *f, uint64_t duration_ms)
 { return (duration_ms * 1000000ULL + f->period_ns - 1) / f->period_ns; }
+
+const char *run_flow_path(const char *mode, unsigned flow_index)
+{
+	if (flow_index==2 && (!strcmp(mode,"mixed") || !strcmp(mode,"pass-xsk"))) return "xsk";
+	if (flow_index==1 && !strcmp(mode,"mixed")) return "cpumap";
+	return "pass";
+}
+int run_rx_cpu(const struct run_flow *f, const char *mode)
+{ return !strcmp(mode,"all-pass") ? f->all_pass_rx_cpu : f->rx_cpu; }
+unsigned run_mode_index(const struct run_config *c, unsigned repeat, unsigned position)
+{
+	/* Two modes alternate; three comparison modes rotate their starting order. */
+	unsigned offset=c->alternate_mode_order && repeat ? repeat-1 : 0;
+	return c->mode_count ? (position+offset)%c->mode_count : 0;
+}
 
 int read_run_config(const char *file, struct run_config *c)
 {
@@ -176,7 +191,7 @@ int read_run_config(const char *file, struct run_config *c)
 	if (c->control_port==c->network_port || (c->control_port>=9000 && c->control_port<=9002) || (c->network_port>=9000 && c->network_port<=9002)) p.error=1;
 	char modes[64]; string(&p,"modes",NULL,modes,sizeof(modes)); char *save=NULL;
 	for (char *m=strtok_r(modes,",",&save);m;m=strtok_r(NULL,",",&save)) {
-		if (c->mode_count>=3 || (strcmp(m,"mixed") && strcmp(m,"all-pass") && strcmp(m,"socket-only"))) { p.error=1; break; }
+		if (c->mode_count>=4 || (strcmp(m,"mixed") && strcmp(m,"all-pass") && strcmp(m,"pass-xsk") && strcmp(m,"socket-only"))) { p.error=1; break; }
 		for (unsigned j=0;j<c->mode_count;j++) if (!strcmp(c->modes[j],m)) p.error=1;
 		strcpy(c->modes[c->mode_count++],m);
 	}
@@ -191,6 +206,10 @@ int read_run_config(const char *file, struct run_config *c)
 		f->period_ns=number(&p,FIELD("period_ns"),NULL,1,1000000000000ULL);
 		f->deadline_ns=number(&p,FIELD("deadline_ns"),"0",0,1000000000000ULL);
 		f->tx_cpu=cpu(&p,FIELD("tx_cpu"),NULL); f->rx_cpu=cpu(&p,FIELD("rx_cpu"),NULL);
+		/* A mode override inherits the common receiver CPU when omitted. */
+		char rx_cpu[16];
+		if (f->rx_cpu<0) strcpy(rx_cpu,"inherit"); else snprintf(rx_cpu,sizeof(rx_cpu),"%d",f->rx_cpu);
+		f->all_pass_rx_cpu=cpu(&p,FIELD("all_pass_rx_cpu"),rx_cpu);
 		f->tx_policy=policy(&p,FIELD("tx_policy")); f->rx_policy=policy(&p,FIELD("rx_policy"));
 		f->tx_priority=number(&p,FIELD("tx_priority"),NULL,f->tx_policy==SCHED_OTHER?0:1,f->tx_policy==SCHED_OTHER?0:99);
 		f->rx_priority=number(&p,FIELD("rx_priority"),NULL,f->rx_policy==SCHED_OTHER?0:1,f->rx_policy==SCHED_OTHER?0:99);
@@ -213,7 +232,7 @@ void write_condition(FILE *out,const struct run_config *c,const char *mode,uint6
 	for (unsigned i=0;i<3;i++) { const struct run_flow *f=&c->flows[i]; if (!f->enabled) continue;
 		fprintf(out,"%s{\"flow_id\":%u,\"port\":%u,\"count\":%llu,\"period_ns\":%llu,\"deadline_ns\":",emitted++?",":"",i+1,9000+i,(unsigned long long)flow_count(f,duration_ms),(unsigned long long)f->period_ns);
 		if (f->deadline_ns) fprintf(out,"%llu",(unsigned long long)f->deadline_ns); else fputs("null",out);
-		fprintf(out,",\"requested_path\":\"%s\",\"tx_cpu\":%d,\"rx_cpu\":%d,\"tx_policy\":%d,\"rx_policy\":%d,\"tx_priority\":%d,\"rx_priority\":%d}",!strcmp(mode,"mixed")?(i==0?"pass":i==1?"cpumap":"xsk"):"pass",f->tx_cpu,f->rx_cpu,f->tx_policy,f->rx_policy,f->tx_priority,f->rx_priority);
+		fprintf(out,",\"requested_path\":\"%s\",\"tx_cpu\":%d,\"rx_cpu\":%d,\"tx_policy\":%d,\"rx_policy\":%d,\"tx_priority\":%d,\"rx_priority\":%d}",run_flow_path(mode,i),f->tx_cpu,run_rx_cpu(f,mode),f->tx_policy,f->rx_policy,f->tx_priority,f->rx_priority);
 	}
 	fprintf(out,"],\"load\":{\"cpu_percent\":%u,\"cpu_cpus\":",c->cpu_percent); json_string(out,c->cpu_cpus);
 	fprintf(out,",\"memory_workers\":%u,\"memory_bytes\":",c->memory_workers); json_string(out,c->memory_bytes);

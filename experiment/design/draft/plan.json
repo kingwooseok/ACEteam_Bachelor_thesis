@@ -1,8 +1,14 @@
 {
   "status": "draft-unresolved",
-  "main_conditions": 15,
-  "main_runs": 150,
+  "design": "D01-D11",
+  "design_revision": "minimal-135-v1",
+  "main_conditions": 12,
+  "main_runs": 120,
   "single_runs": 15,
+  "total_runs": 135,
+  "primary_runs": 100,
+  "middle_control_runs": 10,
+  "c_additional_runs": 10,
   "duration_ms": 60000,
   "warmup_ms": 5000,
   "note": "No deployment or experiment execution. Draft PASS high=9000 is provisional."

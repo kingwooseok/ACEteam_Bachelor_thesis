@@ -18,8 +18,9 @@ sys.path.insert(0, str(ROOT))
 def load_cases(directory):
     directory = directory.resolve(strict=True)
     execution = json.loads((directory / 'execution.json').read_text())
-    if execution.get('design') != 'D01-D11' or not execution.get('cases'):
-        raise ValueError('requires a configured --d01-d11 plan')
+    if (execution.get('design') != 'D01-D11' or
+            execution.get('design_revision') != 'minimal-135-v1' or not execution.get('cases')):
+        raise ValueError('requires a current configured D01-D11 plan; regenerate plan')
     seen = set()
     cases = execution['cases']
     for case in cases:
@@ -27,13 +28,23 @@ def load_cases(directory):
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', name) or name in seen:
             raise ValueError('invalid or duplicate case_id')
         seen.add(name)
-        if case['config'] != name + '.conf' or case['expected_runs'] != 10:
+        modes, repeats = case.get('expected_modes'), case.get('repeats')
+        if (case['config'] != name + '.conf' or not isinstance(modes, list) or not modes or
+                any(mode not in ('all-pass', 'pass-xsk', 'mixed', 'socket-only') for mode in modes) or
+                len(modes) != len(set(modes)) or type(repeats) is not int or repeats < 1 or
+                type(case.get('expected_runs')) is not int or
+                case['expected_runs'] != len(modes) * repeats):
             raise ValueError('invalid D01-D11 case entry')
         path = directory / case['config']
         if path.is_symlink() or not path.is_file():
             raise ValueError(f'not a regular configuration: {path}')
         if hashlib.sha256(path.read_bytes()).hexdigest() != case['sha256']:
             raise ValueError(f'configuration changed; regenerate plan: {path}')
+        values = dict(line.split('=', 1) for line in path.read_text().splitlines()
+                      if line.strip() and not line.lstrip().startswith('#'))
+        if (values.get('run_id') != name or values.get('modes', '').split(',') != modes or
+                values.get('repeats') != str(repeats)):
+            raise ValueError('case mode/repeat metadata differs from configuration; regenerate plan')
     return cases
 
 
@@ -73,10 +84,11 @@ def collect(directory, cases, receiver, sender, output):
         try:
             analysis.collect_suite(receiver / name / 'receiver', sender / name / 'sender', destination)
             suite = json.loads((destination / 'suite.json').read_text())
-            expected = {(mode, repeat) for mode in ('all-pass', 'mixed') for repeat in range(1, 6)}
+            expected = {(mode, repeat) for mode in case['expected_modes']
+                        for repeat in range(1, case['repeats'] + 1)}
             actual = [(item.get('mode'), item.get('repeat')) for item in suite['runs']]
-            if len(actual) != 10 or set(actual) != expected:
-                raise ValueError('expected five runs of each mode')
+            if len(actual) != case['expected_runs'] or set(actual) != expected:
+                raise ValueError('collected mode/repeat set differs from execution plan')
             for item in suite['runs']:
                 descriptor = json.loads((destination / item['dir'] / 'run.json').read_text())
                 if descriptor['config']['sha256'] != case['sha256']:

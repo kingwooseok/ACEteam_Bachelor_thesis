@@ -103,6 +103,8 @@ int main(void) {
     for (unsigned short p = ACE_PATH_PASS; p <= ACE_PATH_XSK; ++p) {
         assert(ace_effective_requested_path(ACE_FORWARD_MIXED, p) == p);
         assert(ace_effective_requested_path(ACE_FORWARD_ALL_PASS, p) == ACE_PATH_PASS);
+        assert(ace_effective_requested_path(ACE_FORWARD_PASS_XSK, p) ==
+               (p == ACE_PATH_XSK ? ACE_PATH_XSK : ACE_PATH_PASS));
     }
     assert(ace_xsk_drain_poll_ms(&d, 1000000000) == 1000);
     ace_xsk_drain_begin(&d, 1000000000, 100);
@@ -130,6 +132,83 @@ int main(void) {
                             "-I", str(ROOT), str(src), "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 
+    def test_loader_configures_cpumap_only_for_mixed(self):
+        compiler = shutil.which(os.environ.get("CC", "cc"))
+        pkg_config = shutil.which("pkg-config")
+        if not compiler or not pkg_config or not (ROOT / "BPF/xdp_kern.skel.h").exists():
+            self.skipTest("C compiler, libbpf and generated BPF skeleton required")
+        flags = subprocess.run([pkg_config, "--cflags", "--libs", "libbpf"],
+                               text=True, capture_output=True)
+        if flags.returncode:
+            self.skipTest("libbpf development package required")
+        # Exercise the loader's real parser and map setup without loading BPF,
+        # attaching to a NIC, or creating a kernel forwarding thread.
+        source = r'''#define main loader_program_main
+#define bpf_map_update_elem fixture_map_update
+#define bpf_map__fd fixture_map_fd
+#define bpf_program__fd fixture_program_fd
+#include "BPF/xdp_loader.c"
+#undef main
+#include <assert.h>
+static int cpumap_updates, runtime_updates, remote_lookups;
+static __u32 expected_flags;
+int fixture_map_fd(const struct bpf_map *map) {
+    return (int)(uintptr_t)map;
+}
+int fixture_program_fd(const struct bpf_program *program) {
+    assert((uintptr_t)program == 77);
+    remote_lookups++;
+    return 77;
+}
+int fixture_map_update(int fd, const void *key, const void *value, __u64 flags) {
+    assert(flags == BPF_ANY);
+    if (fd == 21) {
+        const struct bpf_cpumap_val *entry = value;
+        assert(*(__u32 *)key == ACE_XDP_RT_CPU);
+        assert(entry->qsize == ACE_XDP_CPU_MAP_QUEUE_SIZE);
+        assert(entry->bpf_prog.fd == 77);
+        cpumap_updates++;
+    } else {
+        const struct ace_runtime_config *runtime = value;
+        assert(fd == 22 && *(__u32 *)key == 0);
+        assert(runtime->flags == expected_flags);
+        runtime_updates++;
+    }
+    return 0;
+}
+int main(void) {
+    struct xdp_kern skel = {0};
+    const char *modes[] = {"mixed", "all-pass", "pass-xsk"};
+    const __u32 mode_flags[] = {0, ACE_RUNTIME_F_ALL_PASS, ACE_RUNTIME_F_PASS_XSK};
+    skel.maps.cpu_map = (struct bpf_map *)(uintptr_t)21;
+    skel.maps.runtime_config = (struct bpf_map *)(uintptr_t)22;
+    skel.progs.xdp_cpumap_measure = (struct bpf_program *)(uintptr_t)77;
+    for (__u32 mode = 0; mode < 3; mode++) {
+        char *argv[] = {"loader", "--output-dir", "/unused", "--mode", (char *)modes[mode], NULL};
+        struct loader_options options = {0};
+        struct ace_runtime_config runtime = { .flags = mode_flags[mode] };
+        optind = 0;
+        assert(parse_options(5, argv, &options) == 0);
+        assert(options.mode == mode);
+        cpumap_updates = runtime_updates = remote_lookups = 0;
+        expected_flags = runtime.flags;
+        assert(configure_maps(&skel, &runtime) == 0);
+        assert(runtime_updates == 1);
+        assert(cpumap_updates == (mode == ACE_FORWARD_MIXED));
+        assert(remote_lookups == (mode == ACE_FORWARD_MIXED));
+    }
+    return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            src = Path(directory) / "loader-modes.c"
+            exe = Path(directory) / "loader-modes"
+            src.write_text(source)
+            subprocess.run([compiler, "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror",
+                            "-I", str(ROOT), str(src), "-o", str(exe),
+                            *shlex.split(flags.stdout)], check=True)
+            subprocess.run([str(exe)], check=True, timeout=5)
+
     def binary(self, name):
         result = ROOT / "BPF" / name
         if not result.is_file() or not os.access(result, os.X_OK):
@@ -149,6 +228,7 @@ int main(void) {
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("--mode", result.stderr)
+        self.assertIn("pass-xsk", result.stderr)
         self.assertIn("--ready-file", result.stderr)
 
     def test_recovery_rejects_ready_file(self):

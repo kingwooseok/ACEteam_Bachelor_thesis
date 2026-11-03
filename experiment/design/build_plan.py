@@ -3,18 +3,25 @@
 import argparse
 import csv
 import hashlib
-import io
 import ipaddress
 import json
 from pathlib import Path
 
 PROFILE = Path(__file__).with_name('profile.example.json')
+DESIGN_REVISION = 'minimal-135-v1'
+REPEATS = 5
+
+
+def write_json(path, value):
+    path.write_bytes((json.dumps(value, indent=2) + '\n').encode('utf-8'))
 
 
 def rows(high=9000, full_design=False):
-    # 같은 조건은 한 번만 보관하고 A/B/C 참조를 함께 남긴다.
+    # full_design is retained for callers of the previous generator. Both entry
+    # points now use the same revised table; identical A/B/C baselines are reused.
     result = []
-    def add(label, pps, cpu, network='none', cpus='0,1,2', shared=False):
+    def add(label, pps, cpu, network='none', cpus='0,1,2', shared=False,
+            modes=('all-pass', 'mixed')):
         signature = (pps, cpu, network, cpus, shared)
         for row in result:
             if row['_signature'] == signature:
@@ -23,28 +30,23 @@ def rows(high=9000, full_design=False):
         result.append(dict(case_id=f'main-{len(result)+1:02d}', references=[label],
                            pass_pps=pps, cpu_percent=cpu, network=network,
                            load_cpus=cpus, pass_shares_cpu3=shared, single_flow=None,
+                           modes=list(modes),
                            _signature=signature))
     for cpu in (0, 100):
         for network in ('none', 'high'):
-            add(f'A-cpu{cpu}-{network}', 1000, cpu, network)
-    if full_design:
-        add('middle-cpu', 1000, 50)
-        add('middle-network', 1000, 0, 'middle')
-        add('middle-both', 1000, 50, 'middle')
-    levels = (0, 1000, 3000, 9000, high) if full_design else (0, 1000, 3000, high)
+            modes = ('all-pass', 'pass-xsk', 'mixed') if (cpu, network) in (
+                (0, 'none'), (100, 'high')) else ('all-pass', 'mixed')
+            add(f'A-cpu{cpu}-{network}', 1000, cpu, network, modes=modes)
+    levels = (0, 1000, 3000, high)
     for pps in dict.fromkeys(levels):
         for cpu in (0, 100):
             add(f'B-pass{pps}-cpu{cpu}', pps, cpu)
     add('C-base', 1000, 100)
-    add('C-load-share', 1000, 100, cpus='0,1,2,3')
-    add('C-receiver-share', 1000, 100, shared=True)
-    if not full_design:
-        add('middle-cpu', 1000, 50)
-        add('middle-network', 1000, 0, 'middle')
-        add('middle-both', 1000, 50, 'middle')
+    add('C-load-share', 1000, 100, cpus='0,2,3', modes=('mixed',))
+    add('C-receiver-share', 1000, 100, shared=True, modes=('mixed',))
     singles = [dict(case_id=f'single-{i}', references=[f'D01-flow{i}'], pass_pps=1000,
                     cpu_percent=0, network='none', load_cpus='0,1,2',
-                    pass_shares_cpu3=False, single_flow=i) for i in range(1, 4)]
+                    pass_shares_cpu3=False, single_flow=i, modes=['mixed']) for i in range(1, 4)]
     for row in result:
         del row['_signature']
     return singles + result
@@ -80,18 +82,20 @@ def validate(profile, full_design=False):
     integer(profile['receiver_network_cpu'], 0, 2, 'receiver network CPU')
     integer(profile['receiver_supervisor_cpu'], 0, 2, 'receiver supervisor CPU')
     integer(profile['network_high_bps'], 1, 1000000000, 'network high bps')
-    integer(profile['network_middle_bps'], 1, profile['network_high_bps'] - 1, 'network middle bps')
-    integer(profile['pass_high_pps'], 9000 if full_design else 3001,
-            15476 if full_design else 15000, 'PASS high PPS (record capacity limit)')
+    integer(profile['pass_high_pps'], 3001, 15476, 'PASS high PPS (record capacity limit)')
     integer(profile['settle_ms'], 0, 60000, 'settle ms')
 
 
 def config(profile, row, index, full_design=False):
     # 확정된 공통 조건만 고정하고 미확정 값은 profile에서 요구한다.
+    modes = list(row['modes'])
+    offset = index % len(modes)
+    modes = modes[offset:] + modes[:offset]
     values = dict(run_id=row['case_id'], receiver_address=profile['receiver_address'],
                   control_port=49090, repo='AUTO', output_root='results/experiment',
-                  interface='eth0', modes='all-pass,mixed' if index % 2 == 0 else 'mixed,all-pass',
-                  repeats=5, alternate_mode_order=1, duration_ms=60000, warmup_ms=5000,
+                  interface='eth0', modes=','.join(modes),
+                  repeats=REPEATS, alternate_mode_order=1, verify_placement=1,
+                  duration_ms=60000, warmup_ms=5000,
                   settle_ms=profile['settle_ms'], ready_timeout_ms=60000,
                   stop_timeout_ms=60000, start_delay_ms=250, drain_ms=100,
                   supervisor_cpu='inherit', monitor=1)
@@ -107,11 +111,6 @@ def config(profile, row, index, full_design=False):
                    'load.network_protocol': 'udp', 'load.network_direction': 'forward',
                    'load.network_port': 5201, 'load.network_parallel': 1,
                    'load.on_sec': 0, 'load.off_sec': 0})
-    # 단독 3행은 우선 mixed의 해당 경로만 측정한다. 본시험 비교 횟수와 분리한다.
-    if row['single_flow'] and not full_design:
-        values['modes'] = 'mixed'
-    if full_design:
-        values['verify_placement'] = 1
     for i in range(1, 4):
         pps = row['pass_pps'] if i == 1 else 1000
         if row['single_flow']:
@@ -125,6 +124,9 @@ def config(profile, row, index, full_design=False):
                        f'flow{i}.rx_policy': profile['receiver_policies'][i - 1],
                        f'flow{i}.tx_priority': profile['sender_priorities'][i - 1],
                        f'flow{i}.rx_priority': profile['receiver_priorities'][i - 1]})
+    # Only the shared all-PASS baseline changes flow 2's receive CPU. pass-xsk
+    # and mixed retain identical application placement for their direct contrast.
+    values['flow2.all_pass_rx_cpu'] = 1
     return '# Generated common config: copy identical bytes to both Pis.\n' + ''.join(
         f'{key}={value}\n' for key, value in values.items())
 
@@ -134,7 +136,7 @@ def main():
     parser.add_argument('--profile', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--d01-d11', action='store_true',
-                        help='opt in to both-mode singles and fixed 9000 plus measured top PPS')
+                        help='compatibility flag: generate the revised 135-run D01-D11 design')
     args = parser.parse_args()
     profile = json.loads(args.profile.read_text()) if args.profile else None
     if profile is not None:
@@ -145,19 +147,23 @@ def main():
     plan = rows(profile['pass_high_pps'] if profile else 9000, args.d01_d11)
     # 기존 산출물/설정을 덮어쓰지 않고 새 폴더만 생성한다.
     args.output.mkdir(parents=True, exist_ok=False)
-    with (args.output / 'matrix.csv').open('w', newline='') as stream:
+    with (args.output / 'matrix.csv').open('w', encoding='utf-8', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(plan[0]), lineterminator='\n')
         writer.writeheader()
-        writer.writerows({**row, 'references': ';'.join(row['references'])} for row in plan)
+        writer.writerows({**row, 'references': ';'.join(row['references']),
+                         'modes': ';'.join(row['modes'])} for row in plan)
+    main_runs = sum(len(row['modes']) * REPEATS for row in plan if not row['single_flow'])
+    single_runs = sum(len(row['modes']) * REPEATS for row in plan if row['single_flow'])
     summary = dict(status='configured-unvalidated' if profile else 'draft-unresolved',
-                   main_conditions=len(plan)-3, main_runs=(len(plan)-3)*10,
-                   single_runs=30 if args.d01_d11 else 15, duration_ms=60000, warmup_ms=5000,
+                   design='D01-D11', design_revision=DESIGN_REVISION,
+                   main_conditions=len(plan)-3, main_runs=main_runs,
+                   single_runs=single_runs, total_runs=main_runs+single_runs,
+                   primary_runs=100, middle_control_runs=10, c_additional_runs=10,
+                   duration_ms=60000, warmup_ms=5000,
                    note='No deployment or experiment execution. Draft PASS high=9000 is provisional.')
-    if args.d01_d11:
-        summary.update(design='D01-D11', total_runs=len(plan)*10)
-    (args.output / 'plan.json').write_text(json.dumps(summary, indent=2) + '\n')
+    write_json(args.output / 'plan.json', summary)
     if profile:
-        (args.output / 'profile.json').write_text(json.dumps(profile, indent=2) + '\n')
+        write_json(args.output / 'profile.json', profile)
         cases = []
         for index, row in enumerate(plan):
             name = f"{row['case_id']}.conf"
@@ -165,12 +171,15 @@ def main():
             # and Linux: text-mode output would translate LF to CRLF on Windows.
             data = config(profile, row, index, args.d01_d11).encode('utf-8')
             (args.output / name).write_bytes(data)
+            values = dict(line.split('=', 1) for line in data.decode('utf-8').splitlines()
+                          if line and not line.startswith('#'))
+            modes = values['modes'].split(',')
             cases.append(dict(case_id=row['case_id'], config=name,
                               sha256=hashlib.sha256(data).hexdigest(),
-                              references=row['references'], expected_runs=10))
-        if args.d01_d11:
-            (args.output / 'execution.json').write_text(json.dumps(
-                dict(design='D01-D11', cases=cases), indent=2) + '\n')
+                              references=row['references'], expected_modes=modes,
+                              repeats=REPEATS, expected_runs=len(modes)*REPEATS))
+        write_json(args.output / 'execution.json',
+                   dict(design='D01-D11', design_revision=DESIGN_REVISION, cases=cases))
     print(json.dumps(summary))
 
 

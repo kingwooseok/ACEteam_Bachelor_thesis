@@ -32,8 +32,9 @@ from typing import Iterable, Mapping, Sequence, TextIO, cast
 Key = tuple[int, int]
 
 MANIFEST_VERSION = 1
-SUMMARY_SCHEMA_VERSION = 3
+SUMMARY_SCHEMA_VERSION = 4
 COMPLETION_SCHEMA_VERSION = 2
+HW_TIMESTAMP_POLICY = "one-hw-monotonic-per-packet:xdp-reference-else-user"
 
 UDP_RECORD = struct.Struct("@QqqqqIIHHI")
 
@@ -524,7 +525,10 @@ JOINED_FIELDS = (
     "afxdp_tx_realtime_ns", "afxdp_user_rx_mono_ns",
     "afxdp_user_rx_real_ns", "afxdp_packet_length", "udp_tx_realtime_ns",
     "udp_user_rx_mono_ns", "udp_user_rx_real_ns", "udp_packet_length",
-    "inconsistency_flags",
+    "hw_rx_mono_ns", "hw_rx_source", "hw_calibration_reference",
+    "hw_calibration_reference_ns", "hw_calibration_offset_ns",
+    "d1_ns", "d2_ns", "d3_ns", "segment_sum_ns", "segment_residual_ns",
+    "segment_status", "inconsistency_flags",
 )
 
 METRIC_FIELDS = {
@@ -808,16 +812,25 @@ def joined_row(
 
     # HW RX는 PHC, XDP/CPUMAP/user_mono는 같은 Pi의 MONOTONIC 계열이다.
     # 서로 다른 기준 시각끼리 바로 빼면 시계 offset이 지연에 섞여 들어간다.
-    # PHC -> MONOTONIC 변환은 hw - offset이므로 아래 계산은
-    # mono - (hw - offset) == mono + offset - hw로 표현한다.
+    # HW 시각을 패킷별로 한 번 변환해 d1과 total에서 같은 값을 재사용한다.
+    # 최초 XDP가 있으면 그 시각의 offset을 선택한다. XDP 기록이 없는 UDP
+    # 패킷만 사용자 수신 시각으로 보정한다. 범위 밖 XDP는 user로 대체하지 않는다.
+    # xdp/user lookup 열은 범위 진단용이며 실제 보정값은 hw_*에 남긴다.
     # 송신자의 tx_realtime_ns는 원본으로 보존할 뿐 이 로컬 지연식에 넣지 않는다.
-    xdp_offset = None if xdp_lookup is None else xdp_lookup.offset_ns
-    user_offset = None if user_lookup is None else user_lookup.offset_ns
+    hw_reference = "xdp" if initial_xdp is not None else "user"
+    hw_reference_ns = initial_xdp if initial_xdp is not None else user_mono
+    hw_lookup = xdp_lookup if initial_xdp is not None else user_lookup
+    hw_offset = None if hw_lookup is None else hw_lookup.offset_ns
+    common_hw = xdp_hw
+    hw_source = initial_xdp_source if xdp_hw is not None else ""
+    if common_hw is None and user_semantically_valid:
+        common_hw = user_hw
+        hw_source = user_source if user_hw is not None else ""
+    hw_mono = common_hw - hw_offset if common_hw is not None and hw_offset is not None else None
     xdp_hw_metric = (
-        initial_xdp + xdp_offset - xdp_hw
+        initial_xdp - hw_mono
         if initial_xdp is not None
-        and xdp_offset is not None
-        and xdp_hw is not None
+        and hw_mono is not None
         else None
     )
     # CPUMAP-XDP는 최초 분류 이후 대상 CPU의 CPUMAP 프로그램까지 걸린 시간이다.
@@ -845,11 +858,10 @@ def joined_row(
         else None
     )
     user_hw_metric = (
-        user_mono + user_offset - user_hw
+        user_mono - hw_mono
         if user_semantically_valid
         and user_mono is not None
-        and user_offset is not None
-        and user_hw is not None
+        and hw_mono is not None
         else None
     )
 
@@ -858,6 +870,20 @@ def joined_row(
         requested_path = afxdp_path
     if requested_path is None:
         requested_path = cpumap_path
+
+    # PASS/XSK의 d2=0은 구간 정의다. CPUMAP 기록의 누락은 0으로 채우지 않는다.
+    d2 = cpumap_xdp_metric if requested_path == ACE_PATH_CPUMAP else (
+        0 if requested_path in (ACE_PATH_PASS, ACE_PATH_XSK) else None)
+    d3 = user_cpumap_metric if requested_path == ACE_PATH_CPUMAP else (
+        user_xdp_metric if requested_path in (ACE_PATH_PASS, ACE_PATH_XSK) else None)
+    stages = (xdp_hw_metric, d2, d3)
+    stage_sum = sum(cast(tuple[int, int, int], stages)) if all(item is not None for item in stages) else None
+    residual = (user_hw_metric - stage_sum
+                if user_hw_metric is not None and stage_sum is not None else None)
+    negative = any(item is not None and item < 0 for item in (*stages, user_hw_metric))
+    stage_status = ("invalid" if inconsistencies or negative else
+                    "incomplete" if residual is None else
+                    "complete" if residual == 0 else "mismatch")
 
     # 계산에 선택한 값과 별개로 각 source의 원시 timestamp도 모두 남긴다.
     # 나중에 보정 방식이나 관측 출처를 확인할 때 joined CSV만으로 비교할 수 있다.
@@ -891,6 +917,17 @@ def joined_row(
         "user_cpumap_ns": user_cpumap_metric,
         "user_xdp_ns": user_xdp_metric,
         "user_hw_ns": user_hw_metric,
+        "hw_rx_mono_ns": hw_mono,
+        "hw_rx_source": hw_source,
+        "hw_calibration_reference": hw_reference if hw_reference_ns is not None else "",
+        "hw_calibration_reference_ns": hw_reference_ns,
+        "hw_calibration_offset_ns": hw_offset,
+        "d1_ns": xdp_hw_metric,
+        "d2_ns": d2,
+        "d3_ns": d3,
+        "segment_sum_ns": stage_sum,
+        "segment_residual_ns": residual,
+        "segment_status": stage_status,
         "ingress_flags": value(ingress, "flags"),
         "ingress_requested_path": ingress_path,
         "ingress_timestamp_error": value(ingress, "timestamp_error"),
@@ -988,6 +1025,22 @@ def lookup_summary(
     }
 
 
+def decomposition_summary(rows: Sequence[Mapping[str, int | str | None]]) -> dict[str, object]:
+    residuals = [cast(int, row["segment_residual_ns"]) for row in rows
+                 if row["segment_residual_ns"] is not None]
+    return {
+        "equation": "user-hw = d1 + d2 + d3",
+        "mapping": {"d1": "xdp-hw", "d2": "cpumap-xdp for CPUMAP; 0 for PASS/AF_XDP",
+                    "d3": "user-cpumap for CPUMAP; user-xdp for PASS/AF_XDP"},
+        "residual_definition": "user-hw - (d1 + d2 + d3)",
+        "counts": {status: sum(row["segment_status"] == status for row in rows)
+                   for status in ("complete", "incomplete", "invalid", "mismatch")},
+        "checked_count": len(residuals),
+        "nonzero_residual_count": sum(value != 0 for value in residuals),
+        "max_abs_residual_ns": max((abs(value) for value in residuals), default=None),
+    }
+
+
 def build_summary(
     rows: Sequence[Mapping[str, int | str | None]],
     sources: Mapping[str, tuple[SourceTable, bool]],
@@ -1066,6 +1119,8 @@ def build_summary(
                 else "exclude-clock-crossing-metrics"
             ),
             "inside_range_policy": "linear-interpolation",
+            "hw_timestamp_policy": HW_TIMESTAMP_POLICY,
+            "diagnostic_lookups": "xdp/user lookups describe coverage; hw_calibration_* records the one selected offset",
             "lookups": {
                 **lookup_summary(rows, ("xdp", "user")),
                 "xdp": lookup_summary(rows, ("xdp",)),
@@ -1093,9 +1148,11 @@ def build_summary(
             name: summarize_metric(values, joined_count)
             for name, values in metric_values.items()
         },
+        "decomposition": decomposition_summary(rows),
         "flows": {
             str(flow_id): {
                 "joined_rows": sum(row["flow_id"] == flow_id for row in rows),
+                "decomposition": decomposition_summary([row for row in rows if row["flow_id"] == flow_id]),
                 "metrics": {
                     name: summarize_metric(
                         [cast(int, row[field]) for row in rows

@@ -7,6 +7,7 @@ import json
 import statistics
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -186,6 +187,17 @@ class AggregateRunsTest(unittest.TestCase):
             json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8"
         )
         return marker_path
+
+    def test_legacy_runs_load_but_cannot_mix_with_shared_hw_clock_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runs = [aggregate_runs.load_run(self.make_run(root, name, name, [{"user_hw_ns": 100}]))
+                    for name in ("old-one", "old-two")]
+            self.assertEqual(runs[0].analysis_policy["hw_timestamp_policy"], "legacy-per-observation-offset")
+            runs[1] = replace(runs[1], analysis_policy={**runs[1].analysis_policy,
+                              "hw_timestamp_policy": "one-hw-monotonic-per-packet:xdp-reference-else-user"})
+            with self.assertRaisesRegex(aggregate_runs.InputError, "mixed analyzer policy"):
+                aggregate_runs.validate_runs(runs)
 
     def test_aggregate_percentiles_deadlines_and_exclusive_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

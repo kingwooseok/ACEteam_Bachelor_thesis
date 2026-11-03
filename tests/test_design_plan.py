@@ -16,6 +16,19 @@ spec.loader.exec_module(plan)
 
 
 class DesignPlanTests(unittest.TestCase):
+    def setUp(self):
+        # Linux runs real directory fsync; Windows still exercises the complete
+        # generation/collection/analysis chain with that OS-specific call stubbed.
+        if sys.platform == 'win32':
+            import contextlib
+            import os
+            from unittest.mock import patch
+            from analysis import join_results, aggregate_runs
+            stack = self.enterContext(contextlib.ExitStack())
+            stack.enter_context(patch.object(os, 'O_CLOEXEC', 0, create=True))
+            stack.enter_context(patch.object(join_results, 'fsync_directories'))
+            stack.enter_context(patch.object(aggregate_runs, 'fsync_directories'))
+
     def profile(self):
         # 회귀 검사용 값이다. 연구에서 확정한 정책/네트워크 세기가 아니다.
         return dict(receiver_address='192.168.10.10', receiver_cpus=[0, 3, 1],
@@ -23,7 +36,7 @@ class DesignPlanTests(unittest.TestCase):
                     sender_policies=['other']*3, sender_priorities=[0]*3,
                     receiver_supervisor_cpu=0, sender_supervisor_cpu=3,
                     receiver_network_cpu=0, network_high_bps=800000000,
-                    network_middle_bps=400000000, pass_high_pps=9000, settle_ms=100)
+                    pass_high_pps=9000, settle_ms=100)
 
     def test_document_selected_starting_profile(self):
         profile = json.loads(plan.PROFILE.read_text())
@@ -34,25 +47,44 @@ class DesignPlanTests(unittest.TestCase):
         # 네트워크 측정값을 임의로 채우지 않고 생성 차단을 유지한다.
         with self.assertRaisesRegex(ValueError, 'unresolved'):
             plan.validate(profile)
-        profile.update(network_high_bps=800000000, network_middle_bps=400000000,
-                       pass_high_pps=9000, settle_ms=100)
+        self.assertNotIn('network_middle_bps', profile)
+        profile.update(network_high_bps=800000000, pass_high_pps=9000, settle_ms=100)
         plan.validate(profile)
         values = dict(line.split('=', 1) for line in plan.config(profile, plan.rows()[3], 3).splitlines()
                       if line and not line.startswith('#'))
         self.assertEqual(values['flow2.rx_policy'], 'fifo')
         self.assertEqual(values['flow2.rx_priority'], '80')
         self.assertEqual(values['flow3.rx_cpu'], '1')
+        self.assertEqual(values['flow2.rx_cpu'], '3')
+        self.assertEqual(values['flow2.all_pass_rx_cpu'], '1')
 
     def test_deduplicated_main_and_single_conditions(self):
         rows = plan.rows()
-        self.assertEqual(len(rows), 18)
+        self.assertEqual(len(rows), 15)
         main = [r for r in rows if not r['single_flow']]
-        self.assertEqual(len(main), 15)
+        self.assertEqual(len(main), 12)
         signatures = {(r['pass_pps'], r['cpu_percent'], r['network'],
                        r['load_cpus'], r['pass_shares_cpu3']) for r in main}
-        self.assertEqual(len(signatures), 15)
+        self.assertEqual(len(signatures), 12)
         shared_base = next(r for r in main if 'C-base' in r['references'])
         self.assertEqual(len(shared_base['references']), 3)
+        self.assertEqual(shared_base['load_cpus'], '0,1,2')
+        self.assertEqual(shared_base['modes'], ['all-pass', 'mixed'])
+        moved = next(r for r in main if 'C-load-share' in r['references'])
+        self.assertEqual(moved['load_cpus'], '0,2,3')
+        self.assertFalse(moved['pass_shares_cpu3'])
+        receiver = next(r for r in main if 'C-receiver-share' in r['references'])
+        self.assertEqual(receiver['load_cpus'], '0,1,2')
+        self.assertTrue(receiver['pass_shares_cpu3'])
+        self.assertEqual(moved['modes'], receiver['modes'])
+        self.assertEqual(moved['modes'], ['mixed'])
+        self.assertEqual(sum(len(row['modes']) * 5 for row in rows), 135)
+        middle = [row for row in rows if 'pass-xsk' in row['modes']]
+        self.assertEqual({(r['cpu_percent'], r['network']) for r in middle},
+                         {(0, 'none'), (100, 'high')})
+        self.assertTrue(all(row['pass_pps'] == 1000 for row in middle))
+        self.assertTrue(all(row['cpu_percent'] in (0, 100) and
+                            row['network'] in ('none', 'high') for row in rows))
 
     def test_unresolved_profile_publishes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -111,22 +143,23 @@ class DesignPlanTests(unittest.TestCase):
             self.assertEqual(marker.read_text(), 'original')
 
 
-    def test_full_design_is_explicit_and_preserves_legacy_singles(self):
+    def test_measured_high_replaces_provisional_9000_and_singles_stay_single_path(self):
         profile = self.profile()
-        for high, count in ((9000, 18), (12000, 20), (15476, 20)):
+        for high in (3001, 7000, 9000, 12000, 15476):
             profile['pass_high_pps'] = high
             plan.validate(profile, full_design=True)
             rows = plan.rows(high, full_design=True)
-            self.assertEqual(len(rows), count)
+            self.assertEqual(len(rows), 15)
             references = [label for row in rows for label in row['references']]
             self.assertEqual(len(references), len(set(references)))
             for cpu in (0, 100):
-                self.assertIn(f'B-pass9000-cpu{cpu}', references)
                 self.assertIn(f'B-pass{high}-cpu{cpu}', references)
+                if high != 9000:
+                    self.assertNotIn(f'B-pass9000-cpu{cpu}', references)
             for index, row in enumerate(rows):
                 text = plan.config(profile, row, index, full_design=True)
                 values = dict(line.split('=', 1) for line in text.splitlines() if not line.startswith('#'))
-                self.assertEqual(set(values['modes'].split(',')), {'all-pass', 'mixed'})
+                self.assertEqual(set(values['modes'].split(',')), set(row['modes']))
                 self.assertEqual(values['verify_placement'], '1')
                 self.assertEqual(values['repeats'], '5')
                 capacity = 0
@@ -140,8 +173,9 @@ class DesignPlanTests(unittest.TestCase):
                 self.assertLessEqual(capacity, 1048576)
         legacy = plan.config(self.profile(), plan.rows()[0], 0)
         self.assertIn('modes=mixed\n', legacy)
-        self.assertNotIn('verify_placement=', legacy)
-        for high in (8999, 15477):
+        self.assertIn('verify_placement=1', legacy)
+        self.assertEqual(plan.rows(), plan.rows(full_design=True))
+        for high in (3000, 15477):
             profile['pass_high_pps'] = high
             with self.assertRaises(ValueError):
                 plan.validate(profile, full_design=True)
@@ -165,8 +199,13 @@ class DesignPlanTests(unittest.TestCase):
                             '--profile', str(profile), '--output', str(output)],
                            check=True, capture_output=True)
             cases = module.load_cases(output)
-            self.assertEqual(len(cases), 18)
-            self.assertEqual(sum(c['expected_runs'] for c in cases), 180)
+            self.assertEqual(len(cases), 15)
+            self.assertEqual(sum(c['expected_runs'] for c in cases), 135)
+            self.assertEqual({c['expected_runs'] for c in cases}, {5, 10, 15})
+            summary = json.loads((output/'plan.json').read_text())
+            self.assertEqual(summary['single_runs'], 15)
+            self.assertEqual(summary['main_runs'], 120)
+            self.assertEqual(summary['total_runs'], 135)
             for case in cases:
                 data = (output / case['config']).read_bytes()
                 self.assertNotIn(b'\r', data)
@@ -178,11 +217,47 @@ class DesignPlanTests(unittest.TestCase):
                 popen.return_value.poll.return_value = 1
                 with self.assertRaisesRegex(RuntimeError, 'matrix stopped'):
                     module.execute('receiver', output, cases)
-                self.assertEqual(validate.call_count, 18)
+                self.assertEqual(validate.call_count, 15)
                 self.assertEqual(popen.call_count, 1)
                 self.assertEqual(popen.call_args.args[0][1], 'receiver')
                 self.assertEqual(Path(popen.call_args.args[0][0]), ROOT / 'experiment/ace-run')
             (output / cases[0]['config']).write_text('changed')
+            with self.assertRaisesRegex(ValueError, 'regenerate plan'):
+                module.load_cases(output)
+
+    def test_execution_metadata_must_match_saved_modes_and_repeats(self):
+        import copy
+        import types
+        from unittest.mock import patch
+        wrapper = ROOT / 'experiment/run_matrix.sh'
+        source = wrapper.read_text().split("<<'PYTHON'\n", 1)[1].rsplit('\nPYTHON', 1)[0]
+        module = types.ModuleType('matrix_metadata')
+        with patch.object(sys, 'argv', ['-', str(wrapper)]):
+            exec(compile(source, str(wrapper), 'exec'), module.__dict__)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root/'profile.json'
+            profile.write_text(json.dumps(self.profile()))
+            output = root/'plan'
+            # The old flag remains optional; both routes publish the same design.
+            subprocess.run([sys.executable, str(SCRIPT), '--profile', str(profile),
+                            '--output', str(output)], check=True, capture_output=True)
+            original = json.loads((output/'execution.json').read_text())
+            self.assertEqual(len(module.load_cases(output)), 15)
+            for change in (
+                    {'expected_modes': ['mixed', 'mixed'], 'expected_runs': 10},
+                    {'expected_modes': ['invalid']}, {'repeats': True},
+                    {'expected_runs': 10},
+                    {'expected_modes': ['all-pass']},
+                    {'repeats': 4, 'expected_runs': 4}):
+                execution = copy.deepcopy(original)
+                execution['cases'][0].update(change)
+                (output/'execution.json').write_text(json.dumps(execution))
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    module.load_cases(output)
+            execution = copy.deepcopy(original)
+            del execution['design_revision']
+            (output/'execution.json').write_text(json.dumps(execution))
             with self.assertRaisesRegex(ValueError, 'regenerate plan'):
                 module.load_cases(output)
 
@@ -203,16 +278,17 @@ class DesignPlanTests(unittest.TestCase):
             root = Path(temporary)
             rx, tx, plan_dir = root/'rx', root/'tx', root/'plan'
             plan_dir.mkdir()
-            case = dict(case_id='load0', sha256='fixture', expected_runs=10)
+            case = dict(case_id='load0', sha256='fixture', expected_runs=15,
+                        expected_modes=['all-pass', 'pass-xsk', 'mixed'], repeats=5)
             (plan_dir/'execution.json').write_text(json.dumps(dict(cases=[case])))
-            for mode in ('all-pass', 'mixed'):
+            for mode in case['expected_modes']:
                 for repeat in range(1, 6):
                     name = f'load0-{mode}-r{repeat:04d}'
                     for base, role in ((rx, 'receiver'), (tx, 'sender')):
                         run = ExperimentTests().make_run(base/'load0'/role/'runs', name)
                         descriptor = json.loads((run/'run.json').read_text())
                         descriptor.update(mode=mode, repeat=repeat, config={'sha256':'fixture'})
-                        if mode == 'all-pass':
+                        if mode in ('all-pass', 'pass-xsk'):
                             descriptor['flows'][1]['requested_path'] = 'pass'
                             path = run/'xdp-ingress_records.csv'
                             path.write_text(path.read_text().replace('19,1,0', '19,0,0'))
@@ -225,8 +301,8 @@ class DesignPlanTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(module.collect(plan_dir, [case], rx, tx, output), 0)
             report = json.loads((output/'analysis-report/report.json').read_text())
-            self.assertEqual(len(report['runs']), 10)
-            self.assertEqual(len(report['conditions']), 2)
+            self.assertEqual(len(report['runs']), 15)
+            self.assertEqual(len(report['conditions']), 3)
             for condition in report['conditions']:
                 self.assertEqual(condition['status'], 'completed')
                 self.assertEqual(condition['delivery']['2']['sent'], 15)

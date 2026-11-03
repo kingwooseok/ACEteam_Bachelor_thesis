@@ -5,6 +5,7 @@
 //   UDP/9000 -> requested PASS path
 //   UDP/9001 -> requested CPUMAP path (CPU 3)
 //   UDP/9002 -> requested XSK path (current receiver uses XDP_COPY)
+// pass-xsk keeps UDP/9001 on PASS; all-pass keeps all three on PASS.
 //
 // requested_path records the classifier decision.  It is not proof that a
 // redirect was delivered; consumers and redirect/error counters provide that

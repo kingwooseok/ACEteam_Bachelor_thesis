@@ -10,8 +10,10 @@ BPF/xdp_loader --output-dir "$RUN_DIR" --records "$TOTAL_RECORDS" \
 ```
 
 - `--mode mixed`가 기본값이다. UDP/9000은 PASS, UDP/9001은 CPUMAP CPU 3, UDP/9002는 AF_XDP COPY로 전달한다.
+- `--mode pass-xsk`는 UDP/9000·9001을 PASS, UDP/9002를 AF_XDP COPY로 전달하는 중간 대조 구성이다. mixed와 같은 9001 수신기 CPU·우선순위를 사용하면 커널 처리의 CPU 이동 효과를 비교할 수 있다.
 - `--mode all-pass`는 세 포트의 실험 패킷을 동일한 파서·타임스탬프·ingress map으로 기록한 뒤 모두 PASS로 전달한다. `flow_id`, `sequence`, 목적 포트와 패킷 본문은 유지한다. 기록의 `requested_path`는 PASS(0)다. 세 UDP 수신기를 실행하며 AF_XDP 수신기는 실행하지 않는다.
-- 모드는 BPF load 전에 read-only 설정으로 고정하고 runtime map의 `ALL_PASS` flag에도 남긴다. runtime ABI는 5이며 wire header는 기존 32바이트, runtime 구조는 기존 56바이트다.
+- 모드는 BPF load 전에 read-only 설정으로 고정하고 runtime map의 `ALL_PASS` 또는 `PASS_XSK` flag에도 남긴다. 두 flag가 모두 없으면 mixed다. runtime ABI는 5이며 wire header는 기존 32바이트, runtime 구조는 기존 56바이트다.
+- CPUMAP 엔트리와 CPU 3 전달 워커는 mixed에서만 생성한다. all-pass와 pass-xsk는 빈 CPUMAP을 유지하며 ingress 기록과 종료 시 CSV 형식은 세 구성에서 같다.
 - 단일 RX queue 0, CPUMAP CPU 3·queue 256, AF_XDP COPY·4096 UMEM frames·RX ring 2048·batch 64를 유지한다. AF_XDP는 scatter/gather를 요청하지 않으며 다중 descriptor 패킷을 수신 오류로 처리한다.
 
 `--records`는 ingress 및 CPUMAP HASH의 용량이다. **세 흐름의 예상 총 패킷 수** 이상으로 설정한다. 기본 262144, 상한 1048576이며 기존 실행 동안 map을 교체하거나 기록을 덮어쓰지 않는다. 더 긴 측정은 이 용량 안의 개별 run으로 구성한다.
@@ -20,7 +22,7 @@ BPF/xdp_loader --output-dir "$RUN_DIR" --records "$TOTAL_RECORDS" \
 
 1. 고유한 run 디렉터리를 만들고 loader를 실행한다.
 2. `loader.ready.json`의 유효 JSON과 해당 PID 생존을 확인한다.
-3. mixed에서는 UDP 수신기 두 개와 다음 AF_XDP 수신기를 실행한다. all-pass에서는 UDP 수신기 세 개를 실행한다.
+3. mixed와 pass-xsk에서는 UDP 수신기 두 개와 다음 AF_XDP 수신기를 실행한다. all-pass에서는 UDP 수신기 세 개를 실행한다.
 4. 모든 수신기의 ready JSON과 PID 생존을 확인한 뒤 송신을 시작한다.
 
 ```sh

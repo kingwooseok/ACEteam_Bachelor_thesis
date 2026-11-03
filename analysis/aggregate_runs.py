@@ -23,7 +23,7 @@ from typing import Mapping, Sequence, cast
 
 
 JOIN_COMPLETION_SCHEMA_VERSION = 2
-JOIN_SUMMARY_SCHEMA_VERSION = 3
+JOIN_SUMMARY_SCHEMA_VERSION = 4
 MANIFEST_VERSION = 1
 AGGREGATION_SCHEMA_VERSION = 1
 AGGREGATION_COMPLETION_SCHEMA_VERSION = 1
@@ -591,9 +591,12 @@ def analysis_policy(summary: Mapping[str, object]) -> dict[str, object]:
         calibration.get("inside_range_policy"),
         "summary calibration.inside_range_policy",
     )
+    hw_policy = (string_field(calibration.get("hw_timestamp_policy"), "summary calibration.hw_timestamp_policy")
+                 if summary.get("schema_version") == 4 else "legacy-per-observation-offset")
     return {
         "outside_range_policy": outside,
         "inside_range_policy": inside,
+        "hw_timestamp_policy": hw_policy,
         "percentile_method": "nearest-rank",
         "sources_provided": source_presence(summary),
     }
@@ -638,9 +641,9 @@ def load_run(marker_path: Path) -> RunData:
     summary_version = integer_field(
         completion.get("summary_schema_version"), "summary_schema_version"
     )
-    if summary_version != JOIN_SUMMARY_SCHEMA_VERSION:
+    if summary_version not in (3, JOIN_SUMMARY_SCHEMA_VERSION):
         raise InputError(
-            f"{marker}: summary_schema_version must be {JOIN_SUMMARY_SCHEMA_VERSION}"
+            f"{marker}: summary_schema_version must be 3 or {JOIN_SUMMARY_SCHEMA_VERSION}"
         )
     outputs = nested_mapping(completion, "outputs", "completion outputs")
     joined = marker_artifact(outputs, "joined_csv", marker_directory)

@@ -139,6 +139,104 @@ class NativeRunnerTests(unittest.TestCase):
         self.complete(receiver, False)
         self.assertEqual(list((self.directory / "result").rglob(".complete")), [])
 
+    def test_mode_paths_and_effective_receiver_placement(self):
+        text = self.base.replace('modes=socket-only', 'modes=all-pass,pass-xsk,mixed,socket-only')
+        text = text.replace('flow2.rx_cpu=inherit', 'flow2.rx_cpu=3')
+        text += 'flow2.all_pass_rx_cpu=1\n'
+        self.config.write_text(text)
+        conditions = {item['mode']: item for item in map(
+            json.loads, self.complete(self.launch('plan')).splitlines()[1:])}
+        expected = {
+            'all-pass': (['pass', 'pass', 'pass'], 1),
+            'pass-xsk': (['pass', 'pass', 'xsk'], 3),
+            'mixed': (['pass', 'cpumap', 'xsk'], 3),
+            'socket-only': (['pass', 'pass', 'pass'], 3),
+        }
+        for mode, (paths, cpu) in expected.items():
+            flows = conditions[mode]['flows']
+            self.assertEqual([flow['requested_path'] for flow in flows], paths)
+            self.assertEqual(flows[1]['rx_cpu'], cpu)
+            self.assertEqual([flow['rx_cpu'] for flow in (flows[0], flows[2])], [-1, -1])
+        # Existing configurations retain their common affinity in all-pass.
+        self.config.write_text(text.replace('flow2.all_pass_rx_cpu=1\n', ''))
+        conditions = [json.loads(line) for line in self.complete(self.launch('plan')).splitlines()[1:]]
+        self.assertEqual(conditions[0]['flows'][1]['rx_cpu'], 3)
+
+    def test_receiver_override_is_applied_to_the_running_socket_child(self):
+        cpus = sorted(os.sched_getaffinity(0))
+        self.config.write_text(
+            self.base.replace('repo=AUTO', f'repo={ROOT}').replace(
+                'flow2.rx_cpu=inherit', f'flow2.rx_cpu={cpus[0]}') +
+            f'flow2.all_pass_rx_cpu={cpus[-1]}\nverify_placement=1\n')
+        source = self.directory / 'receiver-placement.c'
+        source.write_text(r'''
+#define main native_runner_main
+#include "experiment/ace-run.c"
+#undef main
+#include <assert.h>
+int main(int argc, char **argv) {
+    assert(argc==4);
+    struct context x={.fd=-1,.receiver=1,.index=1};
+    assert(read_run_config(argv[1],&x.c)==0);
+    assert(chdir(x.c.repo)==0);
+    strcpy(x.mode,argv[2]); strcpy(x.run_dir,argv[3]);
+    int child=receiver_process(&x,1);
+    cleanup_children(&x);
+    assert(child>=0);
+    return 0;
+}
+''')
+        binary = self.directory / 'receiver-placement'
+        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-I', str(ROOT),
+                        '-I', str(ROOT / 'include'), str(source), str(ROOT / 'experiment/run_config.c'),
+                        str(ROOT / 'experiment/ace_manifest.c'), '-o', str(binary)], check=True)
+        # Call the real receiver-start path without loader, IRQ or governor setup.
+        for mode, expected_cpu in (('all-pass', cpus[-1]), ('pass-xsk', cpus[0])):
+            run = self.directory / mode
+            run.mkdir()
+            subprocess.run([str(binary), str(self.config), mode, str(run)],
+                           check=True, timeout=10, capture_output=True, text=True)
+            placement = json.loads((run / 'receiver-flow2.placement.json').read_text())
+            self.assertTrue(placement['verified'])
+            self.assertEqual(placement['cpus'], [expected_cpu])
+
+    def test_pass_xsk_preflight_requires_direct_receiver_only_when_enabled(self):
+        source = self.directory / 'preflight.c'
+        source.write_text(r'''
+#define main native_runner_main
+#include "experiment/ace-run.c"
+#undef main
+int main(int argc, char **argv) {
+    if (argc!=2) return 2;
+    struct context x={.fd=-1,.receiver=1};
+    x.c.mode_count=1; strcpy(x.c.modes[0],"pass-xsk");
+    x.c.flows[2].enabled=atoi(argv[1]);
+    return preflight(&x) ? 1 : 0;
+}
+''')
+        binary = self.directory / 'preflight'
+        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-I', str(ROOT),
+                        '-I', str(ROOT / 'include'), str(source), str(ROOT / 'experiment/run_config.c'),
+                        str(ROOT / 'experiment/ace_manifest.c'), '-o', str(binary)], check=True)
+        fixture = self.directory / 'preflight-repo'
+        for relative in ('udp_socket/bin/sender', 'udp_socket/bin/receiver',
+                         'udp_socket/bin/ace_clock', 'udp_socket/bin/phc_calibrate',
+                         'BPF/xdp_loader', 'monitor/capture_state.sh',
+                         'monitor/capture_scheduler.sh', 'monitor/prepare_env.sh',
+                         'monitor/set_irq_affinity.sh'):
+            path = fixture / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('# fixture: preflight only checks access\n')
+            path.chmod(0o755)
+        result = subprocess.run([str(binary), '1'], cwd=fixture, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('missing executable: BPF/afxdp_recv', result.stderr)
+        subprocess.run([str(binary), '0'], cwd=fixture, check=True, capture_output=True)
+        direct_receiver = fixture / 'BPF/afxdp_recv'
+        direct_receiver.write_text('# fixture\n')
+        direct_receiver.chmod(0o755)
+        subprocess.run([str(binary), '1'], cwd=fixture, check=True, capture_output=True)
+
     @unittest.skipUnless(all(shutil.which(tool) for tool in ("iperf3", "sar")),
                          "real iperf3/sar are required")
     def test_real_network_load_and_observation_two_repeat_suite(self):
@@ -168,14 +266,15 @@ class NativeRunnerTests(unittest.TestCase):
         def descendants(pid):
             try:
                 children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 return []
             result = []
             for child in children:
                 child = int(child)
                 try:
                     command = Path(f"/proc/{child}/cmdline").read_bytes().replace(b"\0", b" ")
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
+                    # A short-lived child can exit after opening its proc file.
                     continue
                 result.append((child, command))
                 result.extend(descendants(child))
@@ -266,7 +365,7 @@ class NativeRunnerTests(unittest.TestCase):
             self.config.write_text(plan.config(profile, row, index, full_design=True))
             output = self.complete(self.launch('plan'))
             modes = [json.loads(line) for line in output.splitlines()[1:]]
-            self.assertEqual({m['mode'] for m in modes}, {'all-pass', 'mixed'})
+            self.assertEqual({m['mode'] for m in modes}, set(row['modes']))
             for mode in modes:
                 self.assertLessEqual(sum(f['count'] for f in mode['flows']), 1048576)
                 for flow in mode['flows']:
@@ -274,6 +373,9 @@ class NativeRunnerTests(unittest.TestCase):
                     self.assertEqual(flow['tx_cpu'], index)
                     self.assertEqual(flow['tx_policy'], [os.SCHED_OTHER, os.SCHED_FIFO, os.SCHED_RR][index])
                     self.assertEqual(flow['tx_priority'], [0, 80, 70][index])
+                    expected_rx_cpu = 1 if index == 1 and mode['mode'] == 'all-pass' else (
+                        3 if index == 0 and row['pass_shares_cpu3'] else profile['receiver_cpus'][index])
+                    self.assertEqual(flow['rx_cpu'], expected_rx_cpu)
 
     def test_native_partial_control_frame_timeout_and_placement_mismatch(self):
         # Exercise production C helpers with socketpair and the current process;
@@ -284,6 +386,16 @@ class NativeRunnerTests(unittest.TestCase):
 #undef main
 #include <assert.h>
 int main(void) {
+    struct run_config order={.mode_count=3,.alternate_mode_order=1};
+    unsigned expected[3][3]={{0,1,2},{1,2,0},{2,0,1}};
+    for (unsigned repeat=1;repeat<=6;repeat++)
+        for (unsigned i=0;i<3;i++)
+            assert(run_mode_index(&order,repeat,i)==expected[(repeat-1)%3][i]);
+    order.mode_count=2;
+    assert(run_mode_index(&order,1,0)==0 && run_mode_index(&order,2,0)==1);
+    assert(run_mode_index(&order,2,1)==0 && run_mode_index(&order,3,0)==0);
+    order.alternate_mode_order=0;
+    assert(run_mode_index(&order,2,0)==0 && run_mode_index(&order,2,1)==1);
     int sockets[2]; char frame[256];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets)==0);
     struct context x={.fd=sockets[0]};
@@ -322,9 +434,11 @@ int main(void) {
         for name in ('smoke-first', 'smoke-second'):
             text = self.base.replace('run_id=socket-smoke', f'run_id={name}') + 'verify_placement=1\n'
             (plan_dir / (name+'.conf')).write_text(text)
-            cases.append(dict(case_id=name, config=name+'.conf', expected_runs=10,
+            cases.append(dict(case_id=name, config=name+'.conf', expected_runs=2,
+                              expected_modes=['socket-only'], repeats=2,
                               references=['operational-test'], sha256=hashlib.sha256(text.encode()).hexdigest()))
-        (plan_dir/'execution.json').write_text(json.dumps(dict(design='D01-D11', cases=cases)))
+        (plan_dir/'execution.json').write_text(json.dumps(dict(
+            design='D01-D11', design_revision='minimal-135-v1', cases=cases)))
         wrapper = str(ROOT/'experiment/run_matrix.sh')
         for role in ('receiver', 'sender'):
             process = subprocess.Popen([wrapper, role, '--plan-dir', str(plan_dir)], cwd=ROOT,
@@ -347,6 +461,8 @@ int main(void) {
                      self.base + "environment.rx_irq_cpu=-1\n",
                      self.base + "receiver.supervisor_cpu=-2\n",
                      self.base + "sender.network_cpu=bad\n",
+                     self.base + "flow2.all_pass_rx_cpu=bad\n",
+                     self.base.replace('modes=socket-only', 'modes=pass-xsk,pass-xsk'),
                      self.base + "alternate_mode_order=2\n"):
             self.config.write_text(text)
             self.complete(self.launch("plan"), False)

@@ -41,11 +41,15 @@ enum ace_requested_path {
 enum ace_forwarding_mode {
 	ACE_FORWARD_MIXED = 0,
 	ACE_FORWARD_ALL_PASS = 1,
+	ACE_FORWARD_PASS_XSK = 2,
 };
 
 static __inline __u16 ace_effective_requested_path(__u32 mode, __u16 classified)
 {
-	return mode == ACE_FORWARD_ALL_PASS ? ACE_PATH_PASS : classified;
+	if (mode == ACE_FORWARD_ALL_PASS ||
+	    (mode == ACE_FORWARD_PASS_XSK && classified == ACE_PATH_CPUMAP))
+		return ACE_PATH_PASS;
+	return classified;
 }
 
 enum ace_rx_meta_flags {
@@ -134,6 +138,7 @@ enum ace_runtime_flags {
 	ACE_RUNTIME_F_HWTSTAMP_APPLIED = 1U << 2,
 	ACE_RUNTIME_F_STOPPING = 1U << 3,
 	ACE_RUNTIME_F_ALL_PASS = 1U << 4,
+	ACE_RUNTIME_F_PASS_XSK = 1U << 5,
 };
 
 /* Userspace lifecycle claim for one XSKMAP queue.  A separate HASH is needed

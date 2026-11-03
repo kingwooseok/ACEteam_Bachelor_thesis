@@ -23,7 +23,7 @@ Raspberry Pi 5의 PREEMPT_RT Linux에서 macb Native XDP를 분류기로 사용�
 | --- | --- | --- |
 | PASS: 일반 트래픽의 범용 처리와 기존 네트워크 기능 유지 | 9000 | XDP_PASS → Linux UDP socket |
 | CPUMAP: 커널 기능이 필요한 중요 트래픽을 전용 CPU로 분리 | 9001 | CPUMAP → CPU 3 → Linux UDP socket |
-| AF_XDP: 스택 기능이 불필요한 중요 트래픽의 저지연 처리 | 9002 | AF_XDP → 사용자 프로그램 (`XDP_COPY` 모드) |
+| AF_XDP: 중요 트래픽의 직접 수신과 사용자 공간 처리 | 9002 | AF_XDP → 사용자 프로그램 (`XDP_COPY` 모드) |
 
 현재 실험에서는 UDP 포트로 트래픽 종류를 지정한다. CPUMAP의 전용 CPU 격리는
 CPU affinity·IRQ·스케줄링 설정과 함께 구성한다.
@@ -135,3 +135,10 @@ sudo ./BPF/xdp_loader --recover --cleanup-pins \
 측정 후 양쪽 결과를 VMware 등 분석용 컴퓨터로 옮기고,
 `analysis/analyze_experiment.py collect`로 합친 뒤 HTML 보고서를 생성한다.
 빠른 기능 검증용 `socket-smoke.conf`는 UDP loopback 실행 예제다.
+
+최신 [실험 실행표](experiment/design/배포전_준비사항.md)는 단독 15회와 본실험
+120회를 생성한다. A·B의 all-PASS/mixed 비교에 무부하·복합부하의
+`pass-xsk`(PASS/PASS/AF_XDP) 대조를 더하고, C는 워커 수를 유지한 위치 이동과
+PASS 수신기 이동을 각각 시험한다. `run_matrix.sh`가 조건별 구성·반복 수에 따라
+직접 실행하고 결과를 수집한다. 같은 패킷의 보정된 HW 시각을 재사용해 총지연과
+구간별 지연을 연결한다.

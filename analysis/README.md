@@ -41,6 +41,30 @@ metric에 사용한다.
 `user-hw`다. `user-cpumap`은 CPUMAP remote program 관측 이후부터 UDP
 userspace 관측까지를 뜻하며 순수 socket wakeup 시간으로 해석하지 않는다.
 
+HW 수신 시각은 **패킷별로 한 번** PHC→MONOTONIC으로 변환한다. 최초 XDP
+시각에서 보간한 offset을 사용하고, XDP 관측이 없는 UDP 패킷은 사용자 수신
+시각의 offset을 사용한다. `hw_rx_mono_ns`를 `xdp-hw`와 `user-hw`에 공통으로
+사용한다. `hw_calibration_reference`, `hw_calibration_reference_ns`,
+`hw_calibration_offset_ns`, `hw_rx_source`에 실제 선택을 남긴다. 기존
+`calibration_*_at_xdp/user` 관련 열은 각 관측 시각의 보정 범위 진단값이다.
+
+| CSV 구간 | CPUMAP | PASS · AF_XDP |
+| --- | --- | --- |
+| `d1_ns` | `xdp_hw_ns` | `xdp_hw_ns` |
+| `d2_ns` | `cpumap_xdp_ns` | `0` |
+| `d3_ns` | `user_cpumap_ns` | `user_xdp_ns` |
+
+`segment_residual_ns = user_hw_ns - (d1_ns + d2_ns + d3_ns)`를 같은 패킷에서
+계산한다. `segment_status`는 `complete`(일치), `incomplete`(관측 부족),
+`invalid`(음수 구간 또는 메타데이터 오류), `mismatch`(합계 불일치)이며
+summary의 `decomposition`과 flow별 요약에 건수·최대 절대 잔차를 기록한다.
+CPUMAP 관측 누락을 0으로 채우지 않는다. 총지연 p99는 패킷별 `user-hw`에서
+계산하며 구간별 p99를 합산하지 않는다.
+
+새 join summary는 schema 4다. 독립 집계기는 기존 schema 3도 읽으며 서로 다른
+HW 보정 정책의 run을 섞어 집계하지 않는다. 통합 분석에서 이전 정책의 캐시를
+만나면 새 수집 디렉터리에서 다시 분석하도록 안내한다. 원본·기존 분석은 보존한다.
+
 `--phc-calibration`은 여러 번 지정할 수 있고 selected 표본을 합쳐 시간순
 선형 보간한다. 기본은 calibration 범위 밖 clock-crossing metric을
 제외하고 before/after/out-of-range 건수와 거리를 요약한다.
@@ -54,6 +78,11 @@ Joined CSV와 summary JSON을 `O_EXCL`로 생성하고 파일/디렉터리를
 완결된 run으로 취급하지 않는다.
 
 ## 반복 run aggregation
+
+통합 보고서는 `all-pass`, `pass-xsk`(PASS/PASS/AF_XDP), `mixed`를 각각 표시한다.
+반복 집계는 `(case_id, mode)` 단위로 수행해 단독·C·A/B 조건을 섞지 않는다.
+`run.json`의 실제 수신 CPU와 경로를 구간별 표에 표시하며, all-PASS의 flow2
+CPU 1과 pass-xsk/mixed의 CPU 3 배치를 그대로 보존한다.
 
 `aggregate_runs.py`는 같은 조건의 독립 run을 묶어 deadline과 tail
 latency를 계산한다. 최소 두 개의 join completion marker가 필요하다.

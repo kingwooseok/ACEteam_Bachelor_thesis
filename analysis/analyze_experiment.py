@@ -198,7 +198,7 @@ def load_descriptor(directory: Path) -> dict:
         raise ExperimentError("run.json schema_version must be 1")
     if not isinstance(descriptor.get("run_id"), str) or not aggregate.RUN_ID_PATTERN.fullmatch(descriptor["run_id"]):
         raise ExperimentError("invalid run_id")
-    if descriptor.get("mode") not in ("mixed", "all-pass", "socket-only"):
+    if descriptor.get("mode") not in ("mixed", "all-pass", "pass-xsk", "socket-only"):
         raise ExperimentError("invalid run mode")
     flows = descriptor.get("flows")
     if not isinstance(flows, list) or not flows:
@@ -227,6 +227,8 @@ def join_completed_run(directory: Path, descriptor: Mapping) -> aggregate.RunDat
         run = aggregate.load_run(marker)
         if run.run_id != descriptor["run_id"]:
             raise ExperimentError("join run_id disagrees with run.json")
+        if run.analysis_policy["hw_timestamp_policy"] != join.HW_TIMESTAMP_POLICY:
+            raise ExperimentError("existing join uses the previous HW clock policy; collect into a new output directory and analyze again")
         return run
     args = ["--manifest", str(contained_file(directory, "manifest.json")),
             "--ingress", str(contained_file(directory, "xdp-ingress_records.csv")),
@@ -496,6 +498,11 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
                           reason="warmup capture excluded from measurement aggregation")
             return result, None, descriptor
         run = None if descriptor["mode"] == "socket-only" else join_completed_run(directory, descriptor)
+        if run is not None:
+            summary = read_json(run.summary_path)
+            result["decomposition"] = summary.get("decomposition")
+            result["hw_timestamp_policy"] = run.analysis_policy["hw_timestamp_policy"]
+        result["flows"] = descriptor["flows"]
         result["delivery"] = delivery_statistics(directory, descriptor, run)
         result["cpu_observation"] = sysstat_summary(directory / "monitor" / "mpstat.log", "cpu")
         result["cpu"], result["cpu_measurement"] = measurement_cpu_summary(
@@ -568,6 +575,9 @@ def build_report(directories: Sequence[Path]) -> dict:
                 }
             cpu = [entry[0]["cpu"].get("all", {}).get("busy_pct") for entry in entries]
             condition.update(statistics=statistics_by_flow, delivery=delivery,
+                             flows=flows, load=descriptors[0].get("load"),
+                             decomposition=[{"run_id": entry[0]["run_id"], **entry[0]["decomposition"]}
+                                            for entry in entries if entry[0].get("decomposition")],
                              cpu_busy_pct=aggregate.mean_confidence_interval_95([
                                  item for item in cpu if item is not None]))
         except (ExperimentError, aggregate.InputError, OSError, ValueError) as error:
@@ -576,6 +586,7 @@ def build_report(directories: Sequence[Path]) -> dict:
     return {"schema_version": 1, "artifact_kind": "ace-experiment-report",
             "runs": runs, "conditions": conditions,
             "methods": {"latency": "NIC hardware RX to userspace, PHC/MONOTONIC calibrated",
+                        "hw_timestamp_policy": join.HW_TIMESTAMP_POLICY,
                         "percentiles": "nearest-rank", "ci": "equal-run-weight two-sided Student-t 95%",
                         "delivery_window": "first attempted send to sender end; includes delivery during final drain",
                         "cpu_window": "receiver first XDP to last XDP/CPUMAP/userspace observation, CLOCK_MONOTONIC",
@@ -638,6 +649,31 @@ def render_html(report: Mapping) -> str:
             latency_bars.append((label+f' / flow {flow_id}', None if ci["mean"] is None else ci["mean"] / 1000))
             loss_bars.append((label+f' / flow {flow_id}', None if delivery["loss_rate"] is None else delivery["loss_rate"] * 100))
     parts.append('</table></div><p class="note">지연은 NIC 하드웨어 RX → 사용자 수신 구간입니다. Deadline 미지정 시 초과율은 계산하지 않습니다. 신뢰구간은 독립 run 통계이며 1회 실행은 CI 없이 표시합니다. 수신 PPS의 분모는 첫 송신 시도부터 마지막 송신 종료까지이며, 수신 개수에는 종료 후 drain 구간의 도착분도 포함됩니다.</p></section>')
+    parts.append('<section><h2>구간별 지연과 실제 수신 배치</h2><div class="scroll"><table><tr><th>조건 / 구성</th><th>Flow / 경로</th><th>수신 CPU</th><th>d₁ p99 µs</th><th>d₂ p99 µs</th><th>d₃ p99 µs</th><th>XDP 이후 p99 µs</th></tr>')
+    for condition in report["conditions"]:
+        if condition["status"] != "completed":
+            continue
+        for flow in condition.get("flows", []):
+            path = flow.get("requested_path")
+            metrics = condition["statistics"]["flows"][str(flow["flow_id"])]["metrics"]
+            p99 = lambda name: metrics[name]["packet_level"]["p99_ns"]
+            d2 = p99("cpumap-xdp") if path == "cpumap" else 0 if path in ("pass", "xsk") else None
+            d3 = p99("user-cpumap") if path == "cpumap" else p99("user-xdp") if path in ("pass", "xsk") else None
+            values = [f'{condition["case_id"]} / {condition["mode"]}', f'{flow["flow_id"]} / {path}',
+                      flow.get("rx_cpu", "—"), number(p99("xdp-hw"), .001), number(d2, .001),
+                      number(d3, .001), number(p99("user-xdp"), .001)]
+            parts.append('<tr>'+''.join(f'<td>{escape(value)}</td>' for value in values)+'</tr>')
+    parts.append('</table></div><p class="note">d₁: NIC→최초 XDP · d₂: CPUMAP CPU 전달(PASS/AF_XDP는 0) · d₃: 마지막 XDP→사용자 수신. 각 p99는 해당 구간의 분포에서 계산하며 총지연 p99는 패킷별 총지연에서 직접 계산합니다. XDP 이후 지연은 PASS의 d₃와 CPUMAP의 d₂+d₃를 같은 관측 경계에서 비교합니다.</p></section>')
+    parts.append('<section><h2>같은 패킷의 구간 합 검사</h2><table><tr><th>Run</th><th>일치</th><th>관측 부족</th><th>무효</th><th>불일치</th><th>최대 절대 잔차 ns</th></tr>')
+    for run in report["runs"]:
+        decomposition = run.get("decomposition")
+        if decomposition is None:
+            continue
+        counts = decomposition["counts"]
+        values = [run["run_id"], *(counts[name] for name in ("complete", "incomplete", "invalid", "mismatch")),
+                  decomposition["max_abs_residual_ns"] if decomposition["max_abs_residual_ns"] is not None else "—"]
+        parts.append('<tr>'+''.join(f'<td>{escape(value)}</td>' for value in values)+'</tr>')
+    parts.append('</table><p class="note">패킷별 보정 HW 시각을 d₁과 총지연에 공통 사용합니다. 잔차는 총지연−(d₁+d₂+d₃)이며 음수 구간·메타데이터 오류는 무효로 표시합니다.</p></section>')
     parts.extend((bars("Run p99 평균", latency_bars, "µs"), bars("패킷 손실률", loss_bars, "%"), bars("수신 측정 구간 CPU 사용률", cpu_bars, "%")))
     parts.append('<p class="note">CPU 사용률은 수신 Pi의 최초 XDP부터 최종 수신 관측(XDP·CPUMAP·사용자 수신)까지 계산합니다. 경계의 1초 표본은 측정창과 겹친 시간으로 가중합니다. 준비 대기와 저장 단계는 집계에서 제외하며, 표본이 전체 측정창을 덮지 못하면 값을 표시하지 않습니다. 소켓 운영 검증은 최초·최종 사용자 수신 사이를 사용합니다.</p>')
     parts.append('<section><h2>Run별 송수신·부하</h2><table><tr><th>Run / flow</th><th>계획 / 실제 송신 / 수신</th><th>송신 오류</th><th>손실</th><th>실제 송신 PPS</th><th>수신 측정 구간 CPU</th></tr>')

@@ -359,18 +359,19 @@ static int receiver_process(struct context *x,unsigned i)
 {
 	char name[32],ready[4096],stats[4096],output[4096],stage[4096],count[32],flow[16],port[16],drain[16];
 	struct run_flow *f=&x->c.flows[i];
+	int rx_cpu=run_rx_cpu(f,x->mode);
 	pathf(name,sizeof(name),"receiver-flow%u",i+1); pathf(ready,sizeof(ready),"%s/%s.ready",x->run_dir,name); pathf(stats,sizeof(stats),"%s/%s.json",x->run_dir,name);
 	snprintf(count,sizeof(count),"%llu",(unsigned long long)flow_count(f,x->c.duration_ms)); snprintf(flow,sizeof(flow),"%u",i+1); snprintf(port,sizeof(port),"%u",9000+i); snprintf(drain,sizeof(drain),"%u",x->c.drain_ms);
 	int n;
 	int pipes[2]; char notify[16]; if (pipe2(pipes,O_CLOEXEC)) return -1; snprintf(notify,sizeof(notify),"%d",pipes[1]);
-	if (!strcmp(x->mode,"mixed") && i==2) {
+	if (!strcmp(run_flow_path(x->mode,i),"xsk")) {
 		pathf(output,sizeof(output),"%s/afxdp.csv",x->run_dir);
 		char *args[]={"./BPF/afxdp_recv","--output",output,"--records",count,"--ready-file",ready,"--stats-json",stats,"--drain-ms",drain,"--completion-fd",notify,"--defer-flush",x->c.interface,NULL};
-		n=spawn_pipe(x,name,ready,f->rx_cpu,f->rx_policy,f->rx_priority,1,args,pipes[1]);
+		n=spawn_pipe(x,name,ready,rx_cpu,f->rx_policy,f->rx_priority,1,args,pipes[1]);
 	} else {
 		pathf(output,sizeof(output),"%s/udp-flow%u.bin",x->run_dir,i+1); pathf(stage,sizeof(stage),"/dev/shm/ace-%ld-%u-%u.tmp",(long)getpid(),x->index,i+1);
 		char *args[]={"./udp_socket/bin/receiver","--flow-id",flow,"--port",port,"--count",count,"--tmpfs",stage,"--output",output,"--ready-file",ready,"--stats-json",stats,"--drain-ms",drain,"--completion-fd",notify,"--defer-flush",NULL};
-		n=spawn_pipe(x,name,ready,f->rx_cpu,f->rx_policy,f->rx_priority,1,args,pipes[1]);
+		n=spawn_pipe(x,name,ready,rx_cpu,f->rx_policy,f->rx_priority,1,args,pipes[1]);
 		if (n>=0) pathf(x->child[n].staging,sizeof(x->child[n].staging),"%s",stage);
 	}
 	close(pipes[1]); if (n<0) { close(pipes[0]); return -1; } x->child[n].completion_fd=pipes[0];
@@ -518,7 +519,9 @@ static int preflight(struct context *x)
 	if (x->receiver) for (unsigned m=0;m<x->c.mode_count;m++) if (strcmp(x->c.modes[m],"socket-only")) {
 		const char *bpf[]={"BPF/xdp_loader","udp_socket/bin/phc_calibrate",NULL};
 		for (unsigned i=0;bpf[i];i++) if (access(bpf[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",bpf[i]); return -1; }
-		if (!strcmp(x->c.modes[m],"mixed") && x->c.flows[2].enabled && access("BPF/afxdp_recv",X_OK)) return -1;
+		if (!strcmp(run_flow_path(x->c.modes[m],2),"xsk") && x->c.flows[2].enabled && access("BPF/afxdp_recv",X_OK)) {
+			fprintf(stderr,"missing executable: BPF/afxdp_recv\n"); return -1;
+		}
 	}
 	return 0;
 }
@@ -548,8 +551,8 @@ int main(int argc,char **argv)
 	if (connect_peer(&x)) { perror("control handshake"); if (x.fd>=0) close(x.fd); return 1; }
 	int failed=0;
 	for (unsigned r=1;r<=x.c.repeats && !failed;r++) for (unsigned m=0;m<x.c.mode_count && !failed;m++) {
-		/* 반복마다 시작 모드를 뒤집어 항상 같은 모드가 먼저인 편향을 줄인다. */
-		unsigned mode_index=x.c.alternate_mode_order && !(r%2)?x.c.mode_count-1-m:m;
+		/* 반복마다 시작 구성을 순환한다. 두 구성에서는 기존 교대 순서다. */
+		unsigned mode_index=run_mode_index(&x.c,r,m);
 		x.repeat=r; x.index++; strcpy(x.mode,x.c.modes[mode_index]);
 		if (begin_run(&x)) { perror("prepare run"); failed=1; }
 		else { printf("%s: %s\n",argv[1],x.run_id); fflush(stdout); if (x.receiver?receiver_run(&x):sender_run(&x)) { perror("run failed"); failed=1; } }
