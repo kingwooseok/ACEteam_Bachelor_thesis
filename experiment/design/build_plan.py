@@ -161,10 +161,12 @@ def main():
         cases = []
         for index, row in enumerate(plan):
             name = f"{row['case_id']}.conf"
-            text = config(profile, row, index, args.d01_d11)
-            (args.output / name).write_text(text)
+            # Keep the saved configuration and its digest identical on Windows
+            # and Linux: text-mode output would translate LF to CRLF on Windows.
+            data = config(profile, row, index, args.d01_d11).encode('utf-8')
+            (args.output / name).write_bytes(data)
             cases.append(dict(case_id=row['case_id'], config=name,
-                              sha256=hashlib.sha256(text.encode()).hexdigest(),
+                              sha256=hashlib.sha256(data).hexdigest(),
                               references=row['references'], expected_runs=10))
         if args.d01_d11:
             (args.output / 'execution.json').write_text(json.dumps(

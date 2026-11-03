@@ -125,6 +125,24 @@ HTML은 SVG 그래프와 표를 포함해 네트워크나 외부 라이브러리
 수신 프로그램의 `receiver-flowN.json`과 `monitor/mpstat.log`,
 `monitor/network.log`도 함께 보존·분석한다.
 
+새 실행에서는 네이티브 CPU 관측기가 `monitor/cpu-samples.csv`에 수신 Pi의
+MONOTONIC 시각과 CPU별 누적 실행 시간을 1초 간격으로 남긴다. 분석기는 같은
+Pi의 패킷 기록에서 **최초 XDP → 최종 수신 관측(XDP·CPUMAP·사용자 수신)** 창을
+구하고 그 구간의 CPU 사용률을 계산한다. 사용자 공간에 도달하지 못한 마지막
+패킷도 XDP/CPUMAP 관측이 있으면 창에 포함한다. 준비 대기·저장 시간은 제외된다.
+
+전체 표본 구간은 누적 카운터 차분을 그대로 사용하고, 측정창 경계에 걸친
+구간은 겹친 시간 비율로 차분을 가중한다. CPU 사용률은 전체 시간에서 idle과
+iowait를 뺀 비율이며 guest 시간은 중복 계산하지 않는다. 창의 시작·종료·실제
+길이, 표본 간격과 포함 비율은 `cpu_measurement`, CPU별 결과는 `cpu`에 저장한다.
+전체 창을 덮는 표본이 있는 CPU만 결과를 제공한다. 소켓 운영 검증은 최초·최종
+사용자 수신 시각을 사용한다.
+
+기존 `mpstat.log`의 전체 관측 평균은 `cpu_observation`에 보존한다. 새 CPU 표본이
+없는 이전 결과는 측정창 CPU 값을 비워 두며, 전체 관측 평균을 측정창 평균으로
+대체하지 않는다. HTML의 **수신 측정 구간 CPU 사용률**과 조건별 `cpu_busy_pct`는
+새 측정창 결과만 집계한다.
+
 보고서는 같은 조건의 반복 run을 flow별로 묶는다. 기존 nearest-rank 분위수와
 동일 run 가중치의 양측 95% Student-t 신뢰구간을 사용한다. 한 run만 있으면
 지연 통계는 표시하고 CI는 null로 둔다. manifest의 반복 공통 조건과

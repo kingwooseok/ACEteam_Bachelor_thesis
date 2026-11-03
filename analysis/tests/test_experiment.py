@@ -49,6 +49,12 @@ class ExperimentTests(unittest.TestCase):
         (run / "phc-after.csv").write_text(CALIBRATION_HEADER + "0,0,4990,5100,5010,20,100,1\n", encoding="utf-8")
         monitor = run / "monitor"; monitor.mkdir()
         (monitor / "mpstat.log").write_text("00:00:00 CPU %usr %sys %idle\nAverage: all 10.00 5.00 85.00\nAverage: 0 20.00 5.00 75.00\n", encoding="utf-8")
+        (monitor / "cpu-samples.csv").write_text(
+            "monotonic_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal\n"
+            "1000,all,0,0,0,0,0,0,0,0\n1000,0,0,0,0,0,0,0,0,0\n"
+            "2000,all,10,0,5,85,0,0,0,0\n2000,0,20,0,5,75,0,0,0,0\n"
+            "3000,all,20,0,10,170,0,0,0,0\n3000,0,40,0,10,150,0,0,0,0\n",
+            encoding="utf-8")
         (monitor / "network.log").write_text("00:00:00 IFACE rxpck/s txpck/s rxkB/s txkB/s\nAverage: eth0 3.00 0.00 0.30 0.00\n", encoding="utf-8")
         return run
 
@@ -69,11 +75,15 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(condition["delivery"]["1"]["sent"], 6)
             self.assertEqual(condition["delivery"]["1"]["loss_count"], 4)
             self.assertEqual(condition["cpu_busy_pct"]["mean"], 15)
+            self.assertEqual(report["runs"][0]["cpu_measurement"]["window"]["end_ns"], 2100)
+            self.assertEqual(report["runs"][0]["cpu_measurement"]["window"]["start_ns"], 1100)
+            self.assertIn("monitor/cpu-samples.csv", report["runs"][0]["input_artifacts"])
             for run in runs:
                 validated = aggregate.load_run(run / "analysis/summary.json.complete")
                 self.assertEqual(len(validated.input_artifacts["udp_native"]), 2)
             output = experiment.render_html(report)
             self.assertIn("<svg", output)
+            self.assertIn("수신 측정 구간 CPU 사용률", output)
             self.assertNotIn("<script src", output)
             self.assertEqual(before, {str(path): path.read_bytes() for run in runs for path in run.glob("*.bin")})
 
@@ -219,6 +229,74 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(delivery["received_unique"], 1)
             self.assertEqual(delivery["loss_count"], 2)
             self.assertEqual(delivery["receiver_statistics"]["role"], "afxdp_recv")
+
+    def test_cpu_average_excludes_preparation_and_weights_boundary_intervals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cpu.csv"
+            path.write_text(
+                "monotonic_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal\n"
+                "1,all,0,0,0,0,0,0,0,0\n1,0,0,0,0,0,0,0,0,0\n"
+                "1000000001,all,100,0,0,0,0,0,0,0\n1000000001,0,100,0,0,0,0,0,0,0\n"
+                "2000000001,all,120,0,0,70,10,0,0,0\n2000000001,0,110,0,0,90,0,0,0,0\n"
+                "3000000001,all,160,0,0,120,20,0,0,0\n3000000001,0,200,0,0,100,0,0,0,0\n"
+                "4000000001,all,260,0,0,120,20,0,0,0\n4000000001,0,300,0,0,100,0,0,0,0\n",
+                encoding="utf-8")
+            window = {"status": "available", "start_ns": 1500000001,
+                      "end_ns": 2500000001, "duration_ns": 1000000000}
+            cpu, detail = experiment.measurement_cpu_summary(path, window)
+            self.assertEqual(detail["status"], "complete")
+            self.assertEqual(detail["coverage"]["all"]["fraction"], 1)
+            self.assertEqual(detail["sample_interval_ns"], {"min": 1000000000, "max": 1000000000})
+            # Half of the 20%-busy interval plus half of the 40%-busy interval.
+            # The 100%-busy preparation/post-capture periods contribute nothing.
+            self.assertAlmostEqual(cpu["all"]["busy_pct"], 30)
+            self.assertAlmostEqual(cpu["all"]["%iowait"], 10)
+            self.assertAlmostEqual(cpu["0"]["busy_pct"], 50)
+
+    def test_cpu_partial_or_invalid_samples_do_not_supply_measurement_average(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cpu.csv"
+            header = "monotonic_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal\n"
+            path.write_text(header + "2000,all,20,0,0,80,0,0,0,0\n"
+                            "3000,all,40,0,0,160,0,0,0,0\n", encoding="utf-8")
+            window = {"status": "available", "start_ns": 1000, "end_ns": 3000,
+                      "duration_ns": 2000}
+            cpu, detail = experiment.measurement_cpu_summary(path, window)
+            self.assertEqual(cpu, {})
+            self.assertEqual(detail["status"], "partial-coverage")
+            self.assertEqual(detail["coverage"]["all"]["fraction"], .5)
+            path.write_text(header + "1000,all,20,0,0,80,0,0,0,0\n"
+                            "3000,all,10,0,0,160,0,0,0,0\n", encoding="utf-8")
+            cpu, detail = experiment.measurement_cpu_summary(path, window)
+            self.assertEqual(cpu, {})
+            self.assertEqual(detail["status"], "invalid-samples")
+            self.assertIn("decreased", detail["reason"])
+
+    def test_legacy_mpstat_is_preserved_without_replacing_missing_measurement_cpu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.make_run(Path(directory), "legacy")
+            (run / "monitor/cpu-samples.csv").unlink()
+            report = experiment.build_report([run])
+            result = report["runs"][0]
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["cpu"], {})
+            self.assertEqual(result["cpu_measurement"]["status"], "missing-samples")
+            self.assertEqual(result["cpu_observation"]["all"]["busy_pct"], 15)
+            self.assertIsNone(report["conditions"][0]["cpu_busy_pct"]["mean"])
+
+    def test_window_includes_dropped_tail_and_later_cpumap_observation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.make_run(Path(directory), "tail")
+            # Last packet reaches XDP/CPUMAP but never reaches userspace.
+            with (run / "xdp-ingress_records.csv").open("a") as file:
+                file.write("2,2,0,2400,2400,19,1,0\n")
+            with (run / "xdp-cpumap_records.csv").open("a") as file:
+                file.write("2,2,3,2600,23,1\n")
+            result = experiment.build_report([run])["runs"][0]
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["cpu_measurement"]["window"]["end_ns"], 2600)
+            self.assertEqual(result["cpu_measurement"]["window"]["duration_ns"], 1500)
+            self.assertEqual(result["cpu_measurement"]["status"], "complete")
 
 
 if __name__ == "__main__":

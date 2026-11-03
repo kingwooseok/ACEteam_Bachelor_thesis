@@ -255,6 +255,7 @@ python3 -m unittest -v \
 	analysis.tests.test_experiment \
 	tests.test_capture_manifest \
 	tests.test_environment \
+	tests.test_scheduler_capture \
 	tests.test_design_plan
 
 step 10 "native experiment runner, readiness, drain and load lifecycle"
@@ -263,6 +264,8 @@ python3 -m unittest -v \
 	tests.test_udp_automation \
 	tests.test_bpf_automation \
 	tests.test_load_controller \
+	tests.test_cpu_sample \
+	tests.test_runner_timing \
 	tests.test_native_manifest
 python3 -m unittest discover -s experiment -p test_runner.py -v
 

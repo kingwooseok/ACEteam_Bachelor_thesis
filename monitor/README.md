@@ -5,7 +5,7 @@
 핵심 자동화 스크립트는 `controller.sh`이며, 수신기에서 다음 작업을 한 번에 수행한다.
 
 - `iperf3` 서버 실행
-- `mpstat` 기반 CPU 사용률 측정
+- 단독 controller는 `mpstat`, `ace-run`은 MONOTONIC 기반 C 관측기로 CPU 사용률 측정
 - `sar` 기반 `eth0` 네트워크 사용량 측정
 - `stress-ng` 기반 지정 CPU 부하 생성
 - 실험 설정 및 로그 자동 저장

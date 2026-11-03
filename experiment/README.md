@@ -8,8 +8,9 @@ VMware는 코드 관리·빌드 검증과 실험 후 분석에 사용한다. 실
 
 양쪽 Pi의 저장소에서 프로그램을 빌드한다. `repo=AUTO`이면 `ace-run` 실행 파일의
 상위 저장소를 사용한다. 실제 측정에는 Native XDP와 PREEMPT_RT를 준비한 기존
-실험 환경 및 각 도구의 실행 권한이 필요하다. 제어기는 커널 설정, NIC MTU,
-IRQ affinity, 주파수와 패킷 크기를 변경하지 않는다.
+실험 환경 및 각 도구의 실행 권한이 필요하다. 실제 run 준비 단계에서 양측 CPU
+governor와 수신 IRQ affinity를 설정값대로 적용·검증한다. `socket-only`는 이를
+변경하지 않는다. 커널 설정, NIC MTU와 패킷 크기는 기존 환경을 사용한다.
 
 ```bash
 make -C udp_socket
@@ -46,6 +47,8 @@ policy는 `other/fifo/rr`, priority는 OTHER=0, FIFO/RR=1..99이다.
 
 1. TCP 제어 연결에서 설정 파일 SHA256, run ID, 프로토콜 버전과 세션 nonce를 검사한다.
 2. 수신기가 XDP loader, 경로별 수신기, 부하·관측 도구를 시작하고 READY를 확인한다.
+   로더와 수신기 준비 직후 `scheduler-ready.json`에 NIC IRQ·CPUMAP 커널 스레드의
+   정책·RT 우선순위·허용 CPU를 기록한다. 이 단계는 스케줄링 정책을 변경하지 않는다.
 3. 송신기가 흐름별 C sender와 네트워크 부하를 준비한다.
 4. `warmup_ms` 동안 **부하가 안정화되도록 기다린 뒤** PHC 사전 보정을 수행한다.
 5. 송신 Pi에서 공통 MONOTONIC 출발 시각을 파일로 원자적으로 공개한다. 모든 sender가
@@ -59,6 +62,17 @@ policy는 `other/fifo/rr`, priority는 OTHER=0, FIFO/RR=1..99이다.
 8. 수신 측은 ACK를 받은 뒤 부하·관측 도구와 iperf3 서버를 종료하고 완료를 기록한다.
    다른 흐름의 마지막 송수신과 파일 I/O가 겹치지 않도록 캡처 완료와 저장 완료를
    분리하며, 네트워크 부하 클라이언트가 정상 종료할 때까지 서버를 유지한다.
+
+CPU·네트워크 부하의 안전 타이머에는 측정·준비 대기·추가 수신 대기(`settle_ms`)·
+drain과 준비/종료 제한 시간을 포함한다. 정상 종료는 위 단계의 명시적 종료 요청이
+담당하므로 긴 settle을 설정해도 부하 타이머가 먼저 종료되지 않도록 한다.
+
+CPU 관측은 C 프로그램 `udp_socket/bin/cpu_sample`이 기존 mpstat를 대신해 1초마다
+수행한다. `/proc/stat` 누적 tick과 수신 기록에 공통인 MONOTONIC 시각을
+`monitor/cpu-samples.csv`에 남긴다. 파일은 측정 중 tmpfs에 기록하고 종료 후
+복사한다. 분석기는 최초 XDP부터 최종 수신 관측까지의 구간만 집계하며,
+경계 표본은 겹친 시간으로 가중한다. 구간 전체를 덮는 표본이 없으면 값을
+비워 두고 원인을 기록한다. 준비·저장 시간의 CPU 사용률은 이 평균에 포함하지 않는다.
 
 측정 중 제어기는 종료·자식 실패·기한·상대 연결 변화에만 깨어나는 차단 대기를
 사용한다. heartbeat, SSH와 Python 실행은 없다. 메타데이터 수집을 위한 git 및
@@ -89,6 +103,7 @@ results/experiment/<run_id>/
     udp-flowN.bin  receiver-flowN.json  afxdp.csv
     xdp-ingress_records.csv  xdp-cpumap_records.csv
     phc-before.csv  phc-after.csv  monitor/
+    scheduler-ready.json  monitor/cpu-samples.csv
   sender/runs/<run_id>-<mode>-r0001/
     run.json  manifest.json  .complete
     sender-flowN.json  sender-flowN.log  network-load.log

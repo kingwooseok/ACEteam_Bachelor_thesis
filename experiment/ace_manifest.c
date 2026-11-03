@@ -338,7 +338,7 @@ int ace_write_manifest(const char *output, const char *run_id,
 	static const char *const binaries[] = {
 		"BPF/xdp_loader", "BPF/afxdp_recv", "udp_socket/bin/sender",
 		"udp_socket/bin/receiver", "udp_socket/bin/phc_calibrate",
-		"udp_socket/bin/ace_clock", "experiment/ace-run",
+		"udp_socket/bin/ace_clock", "udp_socket/bin/cpu_sample", "experiment/ace-run",
 	};
 	struct artifact artifacts[sizeof(binaries) / sizeof(binaries[0])] = {0};
 	struct utsname system_info;

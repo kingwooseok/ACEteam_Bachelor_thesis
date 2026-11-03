@@ -289,6 +289,117 @@ def sysstat_summary(path: Path, kind: str) -> dict:
     return result
 
 
+CPU_COUNTERS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
+
+
+def receiver_measurement_window(directory: Path, run: aggregate.RunData | None) -> dict:
+    """Use only timestamps on the receiver's MONOTONIC clock."""
+    first = last = None
+    source = "first_xdp_to_last_receive_observation" if run is not None else "first_user_to_last_user"
+    if run is not None:
+        with run.joined_path.open(encoding="utf-8", newline="") as file:
+            for row in csv.DictReader(file):
+                ingress = int(row["initial_xdp_ns"]) if row.get("initial_xdp_ns") else 0
+                user = int(row["user_rx_mono_ns"]) if row.get("user_rx_mono_ns") else 0
+                cpumap = int(row["cpumap_ns"]) if row.get("cpumap_ns") else 0
+                if ingress > 0:
+                    first = ingress if first is None else min(first, ingress)
+                    last = ingress if last is None else max(last, ingress)
+                if cpumap > 0:
+                    last = cpumap if last is None else max(last, cpumap)
+                if user > 0 and row.get("user_source") in ("udp", "afxdp"):
+                    last = user if last is None else max(last, user)
+    else:
+        for path in sorted(directory.glob("udp-flow*.bin")):
+            table = join.load_udp_records(contained_file(directory, path.name))
+            for record in table.records.values():
+                timestamp = record["user_rx_mono_ns"]
+                if timestamp > 0:
+                    first = timestamp if first is None else min(first, timestamp)
+                    last = timestamp if last is None else max(last, timestamp)
+    valid = first is not None and last is not None and last > first
+    return {"status": "available" if valid else "unavailable",
+            "clock": "CLOCK_MONOTONIC", "source": source,
+            "start_ns": first, "end_ns": last,
+            "duration_ns": last - first if valid else None}
+
+
+def measurement_cpu_summary(path: Path, window: Mapping) -> tuple[dict, dict]:
+    """Crop cumulative CPU counters to the observed packet-processing window.
+
+    Boundary intervals assume a constant tick rate within that sample interval;
+    all complete intervals retain their measured counter deltas unchanged.
+    """
+    detail = {"status": "missing-samples", "window": dict(window),
+              "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+              "busy_definition": "total minus idle and iowait; guest ticks not counted twice",
+              "sample_interval_ns": None, "coverage": {}}
+    if not path.is_file():
+        return {}, detail
+    if window.get("status") != "available":
+        detail["status"] = "unavailable-window"
+        return {}, detail
+    try:
+        by_cpu: dict[str, list[tuple[int, tuple[int, ...]]]] = {}
+        snapshots: dict[int, set[str]] = {}
+        with path.open(encoding="utf-8", newline="") as file:
+            reader = csv.DictReader(file)
+            if reader.fieldnames != ["monotonic_ns", "cpu", *CPU_COUNTERS]:
+                raise ExperimentError("unexpected CPU sample columns")
+            for row in reader:
+                cpu = row["cpu"]
+                if cpu != "all" and (not cpu or not cpu.isascii() or not cpu.isdigit()):
+                    raise ExperimentError("invalid CPU sample identifier")
+                values = [row["monotonic_ns"], *(row[key] for key in CPU_COUNTERS)]
+                if any(value is None or not value.isascii() or not value.isdigit() for value in values):
+                    raise ExperimentError("CPU samples require nonnegative integer counters")
+                timestamp, *counters = map(int, values)
+                samples = by_cpu.setdefault(cpu, [])
+                if samples and timestamp <= samples[-1][0]:
+                    raise ExperimentError("CPU sample timestamps must increase per CPU")
+                samples.append((timestamp, tuple(counters)))
+                snapshots.setdefault(timestamp, set()).add(cpu)
+        if "all" not in by_cpu or len(snapshots) < 2:
+            raise ExperimentError("CPU samples need two snapshots including all CPUs")
+        if any(cpus != set(by_cpu) for cpus in snapshots.values()):
+            raise ExperimentError("CPU snapshot is missing a CPU row")
+        start, end = window["start_ns"], window["end_ns"]
+        span = end - start
+        result = {}
+        intervals = []
+        for cpu, samples in by_cpu.items():
+            totals = [0.0] * len(CPU_COUNTERS)
+            covered = 0
+            for (before_ns, before), (after_ns, after) in zip(samples, samples[1:]):
+                elapsed = after_ns - before_ns
+                intervals.append(elapsed)
+                overlap = max(0, min(end, after_ns) - max(start, before_ns))
+                if not overlap:
+                    continue
+                delta = [new - old for old, new in zip(before, after)]
+                if any(value < 0 for value in delta):
+                    raise ExperimentError("CPU counter decreased inside measurement window")
+                if sum(delta) <= 0:
+                    continue
+                covered += overlap
+                for index, value in enumerate(delta):
+                    totals[index] += value * (overlap / elapsed)
+            detail["coverage"][cpu] = {"covered_ns": covered, "fraction": covered / span}
+            if covered == span:
+                total = sum(totals)
+                percentages = {"%" + name: value * 100 / total
+                               for name, value in zip(CPU_COUNTERS, totals)}
+                percentages["busy_pct"] = (total - totals[3] - totals[4]) * 100 / total
+                result[cpu] = percentages
+        detail["sample_interval_ns"] = {"min": min(intervals), "max": max(intervals)}
+        detail["snapshot_count"] = len(snapshots)
+        detail["status"] = "complete" if len(result) == len(by_cpu) else "partial-coverage"
+        return result, detail
+    except (ExperimentError, ValueError, TypeError, KeyError, csv.Error) as error:
+        detail.update(status="invalid-samples", reason=str(error))
+        return {}, detail
+
+
 def read_capture_keys(directory: Path, run: aggregate.RunData | None) -> dict[int, set[int]]:
     keys: dict[int, set[int]] = {}
     if run is not None:
@@ -386,7 +497,9 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
             return result, None, descriptor
         run = None if descriptor["mode"] == "socket-only" else join_completed_run(directory, descriptor)
         result["delivery"] = delivery_statistics(directory, descriptor, run)
-        result["cpu"] = sysstat_summary(directory / "monitor" / "mpstat.log", "cpu")
+        result["cpu_observation"] = sysstat_summary(directory / "monitor" / "mpstat.log", "cpu")
+        result["cpu"], result["cpu_measurement"] = measurement_cpu_summary(
+            directory / "monitor" / "cpu-samples.csv", receiver_measurement_window(directory, run))
         result["network"] = sysstat_summary(directory / "monitor" / "network.log", "network")
         sender_manifest = directory / "sender" / "manifest.json"
         result["sender_cohort"] = (aggregate.manifest_cohort_identity(read_json(sender_manifest))
@@ -396,7 +509,7 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
         artifact_names += [f"sender-flow{flow['flow_id']}.json" for flow in descriptor["flows"]]
         artifact_names += [path.name for path in directory.glob("receiver-flow*.json")]
         artifact_names += [path.name for path in directory.glob("udp-flow*.bin")]
-        artifact_names += [name for name in ("monitor/mpstat.log", "monitor/network.log")
+        artifact_names += [name for name in ("monitor/mpstat.log", "monitor/cpu-samples.csv", "monitor/network.log")
                            if (directory / name).is_file()]
         result["input_artifacts"] = {
             name: join.file_digest(contained_file(directory, name)) for name in artifact_names
@@ -465,6 +578,9 @@ def build_report(directories: Sequence[Path]) -> dict:
             "methods": {"latency": "NIC hardware RX to userspace, PHC/MONOTONIC calibrated",
                         "percentiles": "nearest-rank", "ci": "equal-run-weight two-sided Student-t 95%",
                         "delivery_window": "first attempted send to sender end; includes delivery during final drain",
+                        "cpu_window": "receiver first XDP to last XDP/CPUMAP/userspace observation, CLOCK_MONOTONIC",
+                        "cpu_average": "counter deltas weighted by overlapping time at sample boundaries; full window coverage required",
+                        "cpu_observation": "legacy mpstat whole-observation average, excluded from measurement CPU aggregation",
                         "deadline": "only explicitly supplied per-flow values",
                         "socket_only": "operational smoke validation only"}}
 
@@ -522,8 +638,9 @@ def render_html(report: Mapping) -> str:
             latency_bars.append((label+f' / flow {flow_id}', None if ci["mean"] is None else ci["mean"] / 1000))
             loss_bars.append((label+f' / flow {flow_id}', None if delivery["loss_rate"] is None else delivery["loss_rate"] * 100))
     parts.append('</table></div><p class="note">지연은 NIC 하드웨어 RX → 사용자 수신 구간입니다. Deadline 미지정 시 초과율은 계산하지 않습니다. 신뢰구간은 독립 run 통계이며 1회 실행은 CI 없이 표시합니다. 수신 PPS의 분모는 첫 송신 시도부터 마지막 송신 종료까지이며, 수신 개수에는 종료 후 drain 구간의 도착분도 포함됩니다.</p></section>')
-    parts.extend((bars("Run p99 평균", latency_bars, "µs"), bars("패킷 손실률", loss_bars, "%"), bars("전체 CPU 평균 사용률", cpu_bars, "%")))
-    parts.append('<section><h2>Run별 송수신·부하</h2><table><tr><th>Run / flow</th><th>계획 / 실제 송신 / 수신</th><th>송신 오류</th><th>손실</th><th>실제 송신 PPS</th><th>CPU 사용률</th></tr>')
+    parts.extend((bars("Run p99 평균", latency_bars, "µs"), bars("패킷 손실률", loss_bars, "%"), bars("수신 측정 구간 CPU 사용률", cpu_bars, "%")))
+    parts.append('<p class="note">CPU 사용률은 수신 Pi의 최초 XDP부터 최종 수신 관측(XDP·CPUMAP·사용자 수신)까지 계산합니다. 경계의 1초 표본은 측정창과 겹친 시간으로 가중합니다. 준비 대기와 저장 단계는 집계에서 제외하며, 표본이 전체 측정창을 덮지 못하면 값을 표시하지 않습니다. 소켓 운영 검증은 최초·최종 사용자 수신 사이를 사용합니다.</p>')
+    parts.append('<section><h2>Run별 송수신·부하</h2><table><tr><th>Run / flow</th><th>계획 / 실제 송신 / 수신</th><th>송신 오류</th><th>손실</th><th>실제 송신 PPS</th><th>수신 측정 구간 CPU</th></tr>')
     for run in report["runs"]:
         for delivery in run.get("delivery", []):
             values = [f'{run["run_id"]} / {delivery["flow_id"]}', f'{delivery["expected_count"]} / {delivery["sent"]} / {delivery["received_unique"]}', delivery["send_errors"], delivery["loss_count"], number(delivery["offered_pps"]), number(run.get("cpu", {}).get("all", {}).get("busy_pct"), 1, "%")]

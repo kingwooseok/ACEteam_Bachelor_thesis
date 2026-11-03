@@ -85,6 +85,7 @@ RUN_ID=${ACE_RUN_ID:?ACE_RUN_ID required}
 RESULT_DIR=${ACE_RUN_DIR:?ACE_RUN_DIR required}
 INTERFACE=${ACE_INTERFACE:-eth0}
 MONITOR_ENABLED=${ACE_MONITOR_ENABLED:-1}
+CPU_SAMPLER=${ACE_CPU_SAMPLER:-}
 IPERF_ENABLED=${ACE_IPERF_ENABLED:-0}
 IPERF_PORT=${ACE_IPERF_PORT:-5201}
 IPERF_CPU=${ACE_IPERF_CPU:-inherit}
@@ -123,7 +124,14 @@ for command in mktemp stat cat sync; do require "$command"; done
 [[ -d /dev/shm && -w /dev/shm && $(stat -f -c %T /dev/shm) == tmpfs ]] || die '/dev/shm must be writable tmpfs'
 if ((CPU_LOAD || MEMORY_WORKERS || IO_WORKERS)); then require stress-ng; fi
 if ((CPU_LOAD)); then require taskset; fi
-if ((MONITOR_ENABLED)); then require mpstat; require sar; require stdbuf; fi
+if ((MONITOR_ENABLED)); then
+    require sar; require stdbuf
+    if [[ -n $CPU_SAMPLER ]]; then
+        [[ $CPU_SAMPLER == /* && -x $CPU_SAMPLER ]] || die 'ACE_CPU_SAMPLER must be an executable absolute path'
+    else
+        require mpstat
+    fi
+fi
 if ((IPERF_ENABLED)); then
     require iperf3
     if [[ $IPERF_CPU != inherit ]]; then
@@ -154,7 +162,11 @@ if ((IPERF_ENABLED)); then
     launch observe iperf3.log "${iperf_args[@]}"
 fi
 if ((MONITOR_ENABLED)); then
-    launch observe mpstat.log stdbuf -oL mpstat -P ALL "$INTERVAL"
+    if [[ -n $CPU_SAMPLER ]]; then
+        launch observe cpu-samples.csv "$CPU_SAMPLER" --interval-ms "$((INTERVAL * 1000))"
+    else
+        launch observe mpstat.log stdbuf -oL mpstat -P ALL "$INTERVAL"
+    fi
     launch observe network.log stdbuf -oL sar -n DEV --iface="$INTERFACE" "$INTERVAL"
 fi
 if ((CPU_LOAD)); then

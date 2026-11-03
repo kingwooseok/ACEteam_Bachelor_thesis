@@ -78,6 +78,10 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertFalse((run / 'environment-prepare.log').exists())
                 self.assertEqual(data['environment']['governor'], 'performance')
                 self.assertEqual(data['environment']['rx_irq_cpu'], 2)
+                if role == 'receiver':
+                    scheduler = json.loads((run / 'scheduler-ready.json').read_text())
+                    self.assertEqual(scheduler['phase'], 'ready')
+                    self.assertTrue(scheduler['complete'])
                 manifest = json.loads((run / "manifest.json").read_text())
                 self.assertEqual(manifest["run_id"], data["run_id"])
                 for flow in data["flows"]:
@@ -135,8 +139,8 @@ class NativeRunnerTests(unittest.TestCase):
         self.complete(receiver, False)
         self.assertEqual(list((self.directory / "result").rglob(".complete")), [])
 
-    @unittest.skipUnless(all(shutil.which(tool) for tool in ("iperf3", "mpstat", "sar")),
-                         "real iperf3/mpstat/sar are required")
+    @unittest.skipUnless(all(shutil.which(tool) for tool in ("iperf3", "sar")),
+                         "real iperf3/sar are required")
     def test_real_network_load_and_observation_two_repeat_suite(self):
         # The real client reports failure if RX stops its server before TX ACK.
         # Reserve a dynamically selected port in both transports while choosing it.
@@ -204,8 +208,10 @@ class NativeRunnerTests(unittest.TestCase):
                     stats = json.loads((run / f'{role}-flow{flow["flow_id"]}.json').read_text())
                     self.assertEqual(stats["sent" if role == "sender" else "received"], flow["count"])
                 if role == "receiver":
-                    for name in ("mpstat.log", "network.log", "iperf3.log"):
+                    for name in ("cpu-samples.csv", "network.log", "iperf3.log"):
                         self.assertGreater((run / "monitor" / name).stat().st_size, 0)
+                    self.assertFalse((run / 'monitor' / 'mpstat.log').exists())
+                    self.assertIn('monotonic_ns,cpu,user', (run / 'monitor' / 'cpu-samples.csv').read_text())
 
     def test_peer_loss_flushes_own_receivers(self):
         self.config.write_text(self.base.replace("duration_ms=100", "duration_ms=5000"))

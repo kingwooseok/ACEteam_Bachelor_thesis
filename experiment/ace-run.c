@@ -338,6 +338,23 @@ static int prepare_environment(struct context *x)
 	int child=spawn(x,"environment-prepare",NULL,-1,SCHED_OTHER,0,0,args); if (child<0) return -1;
 	return wait_child(x,child,x->c.ready_ms,0);
 }
+static int capture_scheduler(struct context *x)
+{
+	char output[4096];
+	if (pathf(output,sizeof(output),"%s/scheduler-ready.json",x->run_dir)) return -1;
+	char *args[]={"bash","./monitor/capture_scheduler.sh",x->c.interface,output,NULL};
+	int child=spawn(x,"scheduler-ready",NULL,-1,SCHED_OTHER,0,0,args);
+	return child<0 ? -1 : wait_child(x,child,x->c.ready_ms,0);
+}
+/* A safety timeout, not the normal stop condition. The runner keeps load alive
+ * through settle/drain, calibration, receiver flush and the peer's final ACK.
+ * Include the bounded preparation and per-child shutdown waits on both sides. */
+static uint64_t load_lifetime_seconds(const struct run_config *c)
+{
+	uint64_t ms=c->duration_ms+c->warmup_ms+c->start_delay_ms+
+		c->settle_ms+c->drain_ms+8ULL*c->ready_ms+8ULL*c->stop_ms;
+	return (ms+999)/1000+5;
+}
 static int receiver_process(struct context *x,unsigned i)
 {
 	char name[32],ready[4096],stats[4096],output[4096],stage[4096],count[32],flow[16],port[16],drain[16];
@@ -365,7 +382,8 @@ static void envnum(const char *key,uint64_t value)
 static int monitor_process(struct context *x)
 {
 	if (!x->c.monitor && !x->c.cpu_percent && !x->c.memory_workers && !x->c.io_workers && !x->c.network_bps) return -2;
-	char directory[4096],ready[4096],cpu[16],duration[32]; pathf(directory,sizeof(directory),"%s/monitor",x->run_dir); pathf(ready,sizeof(ready),"%s/monitor.ready",x->run_dir);
+	char directory[4096],ready[4096],sampler[4096],cpu[16],duration[32]; pathf(directory,sizeof(directory),"%s/monitor",x->run_dir); pathf(ready,sizeof(ready),"%s/monitor.ready",x->run_dir);
+	if (pathf(sampler,sizeof(sampler),"%s/udp_socket/bin/cpu_sample",x->c.repo) || setenv("ACE_CPU_SAMPLER",sampler,1)) return -1;
 	setenv("ACE_RUN_DIR",directory,1); setenv("ACE_RUN_ID",x->run_id,1); setenv("ACE_SKIP_MANIFEST","1",1); setenv("ACE_INTERFACE",x->c.interface,1); setenv("ACE_READY_FILE",ready,1);
 	if (x->c.receiver_network_cpu<0) setenv("ACE_IPERF_CPU","inherit",1);
 	else envnum("ACE_IPERF_CPU",(unsigned)x->c.receiver_network_cpu);
@@ -373,7 +391,7 @@ static int monitor_process(struct context *x)
 	envnum("ACE_MEMORY_WORKERS",x->c.memory_workers); setenv("ACE_MEMORY_BYTES",x->c.memory_bytes,1); envnum("ACE_IO_WORKERS",x->c.io_workers); setenv("ACE_IO_PATH",x->c.io_path,1);
 	if (x->c.load_on_sec) { envnum("ACE_LOAD_ON_SEC",x->c.load_on_sec); envnum("ACE_LOAD_OFF_SEC",x->c.load_off_sec); } else { unsetenv("ACE_LOAD_ON_SEC"); unsetenv("ACE_LOAD_OFF_SEC"); }
 	snprintf(cpu,sizeof(cpu),"%u",x->c.cpu_percent);
-	snprintf(duration,sizeof(duration),"%llu",(unsigned long long)((x->c.duration_ms+x->c.warmup_ms+x->c.start_delay_ms+x->c.ready_ms+x->c.stop_ms+999)/1000+5));
+	snprintf(duration,sizeof(duration),"%llu",(unsigned long long)load_lifetime_seconds(&x->c));
 	char *args[]={"bash","./monitor/controller.sh",cpu,"1",duration,x->c.cpu_cpus,NULL};
 	int n=spawn(x,"monitor",ready,-1,SCHED_OTHER,0,1,args); if (n<0 || ready_child(x,n)) return -1; return n;
 }
@@ -390,6 +408,8 @@ static int receiver_run(struct context *x)
 		loader=spawn(x,"xdp-loader",ready,-1,SCHED_OTHER,0,1,args); if (loader<0 || ready_child(x,loader)) return -1;
 	}
 	for (unsigned i=0;i<3;i++) if (x->c.flows[i].enabled && (receivers[i]=receiver_process(x,i))<0) return -1;
+	/* CPUMAP threads exist only after loader setup; record before capture. */
+	if (capture_scheduler(x)) return -1;
 	monitor=monitor_process(x); if (monitor==-1) return -1;
 	if (message(x,RX_READY,1,x->c.ready_ms) || message(x,TX_READY,0,x->c.ready_ms)) return -1;
 	if (pause_ms(x,x->c.warmup_ms)) return -1;
@@ -415,7 +435,7 @@ static int network_process(struct context *x)
 	if (!x->c.network_bps) return -2;
 	char rate[32],duration[32],port[16],parallel[16];
 	snprintf(rate,sizeof(rate),"%llu",(unsigned long long)x->c.network_bps); snprintf(port,sizeof(port),"%u",x->c.network_port); snprintf(parallel,sizeof(parallel),"%u",x->c.network_parallel);
-	snprintf(duration,sizeof(duration),"%llu",(unsigned long long)((x->c.duration_ms+x->c.warmup_ms+x->c.start_delay_ms+x->c.ready_ms+x->c.stop_ms+999)/1000+5));
+	snprintf(duration,sizeof(duration),"%llu",(unsigned long long)load_lifetime_seconds(&x->c));
 	if (x->c.load_on_sec) { envnum("ACE_LOAD_ON_SEC",x->c.load_on_sec); envnum("ACE_LOAD_OFF_SEC",x->c.load_off_sec); } else { unsetenv("ACE_LOAD_ON_SEC"); unsetenv("ACE_LOAD_OFF_SEC"); }
 	char *args[]={"bash","./monitor/network_load.sh",x->c.address,rate,parallel,x->c.network_protocol,x->c.network_direction,port,duration,NULL};
 	return spawn(x,"network-load",NULL,x->c.sender_network_cpu,SCHED_OTHER,0,1,args);
@@ -492,6 +512,8 @@ static int preflight(struct context *x)
 	const char *required[]={"udp_socket/bin/sender","udp_socket/bin/receiver","udp_socket/bin/ace_clock",NULL};
 	for (unsigned i=0;required[i];i++) if (access(required[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",required[i]); return -1; }
 	if (access("monitor/capture_state.sh",R_OK)) { perror("missing state collector"); return -1; }
+	if (x->receiver && access("monitor/capture_scheduler.sh",R_OK)) { perror("missing scheduler collector"); return -1; }
+	if (x->receiver && x->c.monitor && access("udp_socket/bin/cpu_sample",X_OK)) { perror("missing CPU sampler"); return -1; }
 	if (access("monitor/prepare_env.sh",R_OK) || access("monitor/set_irq_affinity.sh",R_OK)) { perror("missing environment helpers"); return -1; }
 	if (x->receiver) for (unsigned m=0;m<x->c.mode_count;m++) if (strcmp(x->c.modes[m],"socket-only")) {
 		const char *bpf[]={"BPF/xdp_loader","udp_socket/bin/phc_calibrate",NULL};

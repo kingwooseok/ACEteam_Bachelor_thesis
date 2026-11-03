@@ -4,7 +4,7 @@ CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic
 
 BIN_DIR := bin
-TARGETS := $(BIN_DIR)/sender $(BIN_DIR)/receiver $(BIN_DIR)/phc_calibrate $(BIN_DIR)/ace_clock
+TARGETS := $(BIN_DIR)/sender $(BIN_DIR)/receiver $(BIN_DIR)/phc_calibrate $(BIN_DIR)/ace_clock $(BIN_DIR)/cpu_sample
 
 .PHONY: all clean
 
@@ -24,6 +24,9 @@ $(BIN_DIR)/phc_calibrate: src/phc_calibrate.c | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 $(BIN_DIR)/ace_clock: src/ace_clock.c ../include/ace_run_control.h | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(BIN_DIR)/cpu_sample: src/cpu_sample.c | $(BIN_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
 clean:

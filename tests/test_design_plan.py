@@ -1,5 +1,6 @@
 """실행표 중복 제거·미확정 값 차단·공통 실험 조건 회귀 검사."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -158,11 +159,18 @@ class DesignPlanTests(unittest.TestCase):
             profile = root / 'profile.json'
             profile.write_text(json.dumps(self.profile()))
             output = root / 'plan'
-            subprocess.run([str(wrapper), 'plan', '--profile', str(profile), '--output', str(output)],
+            # Exercise PC-side generation on Windows as well as Linux, then
+            # pass the unchanged files to the actual execution-plan loader.
+            subprocess.run([sys.executable, str(SCRIPT), '--d01-d11',
+                            '--profile', str(profile), '--output', str(output)],
                            check=True, capture_output=True)
             cases = module.load_cases(output)
             self.assertEqual(len(cases), 18)
             self.assertEqual(sum(c['expected_runs'] for c in cases), 180)
+            for case in cases:
+                data = (output / case['config']).read_bytes()
+                self.assertNotIn(b'\r', data)
+                self.assertEqual(hashlib.sha256(data).hexdigest(), case['sha256'])
             # Wrapper validates the entire plan before any native receiver is launched.
             with patch.object(module.subprocess, 'run') as validate, \
                  patch.object(module.subprocess, 'Popen') as popen:
@@ -173,7 +181,7 @@ class DesignPlanTests(unittest.TestCase):
                 self.assertEqual(validate.call_count, 18)
                 self.assertEqual(popen.call_count, 1)
                 self.assertEqual(popen.call_args.args[0][1], 'receiver')
-                self.assertTrue(popen.call_args.args[0][0].endswith('/experiment/ace-run'))
+                self.assertEqual(Path(popen.call_args.args[0][0]), ROOT / 'experiment/ace-run')
             (output / cases[0]['config']).write_text('changed')
             with self.assertRaisesRegex(ValueError, 'regenerate plan'):
                 module.load_cases(output)

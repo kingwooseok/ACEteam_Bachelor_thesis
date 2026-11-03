@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = (
     "BPF/xdp_loader", "BPF/afxdp_recv", "udp_socket/bin/sender",
     "udp_socket/bin/receiver", "udp_socket/bin/phc_calibrate",
-    "udp_socket/bin/ace_clock", "experiment/ace-run",
+    "udp_socket/bin/ace_clock", "udp_socket/bin/cpu_sample", "experiment/ace-run",
 )
 
 

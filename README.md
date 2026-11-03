@@ -55,7 +55,8 @@ UDP 도구만 빌드하려면 `make udp`, 오프라인 회귀 검사는 `make te
 생성 파일 정리는 `make clean`을 사용한다.
 
 CPU·메모리·I/O 부하에는 `stress-ng`, 네트워크 부하에는 `iperf3`,
-CPU·NIC 관측에는 `sysstat` 패키지의 `mpstat`·`sar`를 사용한다.
+`ace-run`의 CPU 관측에는 C 프로그램 `cpu_sample`, NIC 관측에는 `sysstat`의
+`sar`를 사용한다. 단독 controller의 기존 `mpstat` 관측도 유지한다.
 Python은 개발용 회귀 검사와 측정 종료 후 분석에 사용한다.
 
 ## 최소 실행: AF_XDP 수신
