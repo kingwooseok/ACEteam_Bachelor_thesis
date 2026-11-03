@@ -3,7 +3,8 @@
   "receiver_shared_cpus": [
     0,
     1,
-    2
+    2,
+    3
   ],
   "receiver_cpumap_cpu": 3,
   "receiver_policies": [

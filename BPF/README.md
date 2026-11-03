@@ -10,15 +10,18 @@ BPF/xdp_loader --output-dir "$RUN_DIR" --records "$TOTAL_RECORDS" \
 ```
 
 - `--mode mixed`가 기본값이다. UDP/9000은 PASS, UDP/9001은 CPUMAP CPU 3, UDP/9002는 AF_XDP COPY로 전달한다.
-- `--mode pass-xsk`는 UDP/9000·9001을 PASS, UDP/9002를 AF_XDP COPY로 전달한다. 기존 소켓 수신에 AF_XDP를 추가한 구성으로, 세 수신 앱은 모두 일반 CPU 0·1·2를 공유한다.
+- `--mode pass-xsk`는 UDP/9000·9001을 PASS, UDP/9002를 AF_XDP COPY로 전달한다. 기존 소켓 수신에 AF_XDP를 추가한 구성으로, 세 수신 앱은 모두 CPU 0·1·2·3을 공유한다.
 - `--mode all-pass`는 세 포트의 실험 패킷을 동일한 파서·타임스탬프·ingress map으로 기록한 뒤 모두 PASS로 전달한다. `flow_id`, `sequence`, 목적 포트와 패킷 본문은 유지한다. 기록의 `requested_path`는 PASS(0)다. 세 UDP 수신기를 실행하며 AF_XDP 수신기는 실행하지 않는다.
 - 모드는 BPF load 전에 read-only 설정으로 고정하고 runtime map의 `ALL_PASS` 또는 `PASS_XSK` flag에도 남긴다. 두 flag가 모두 없으면 mixed다. runtime ABI는 5이며 wire header는 기존 32바이트, runtime 구조는 기존 56바이트다.
 - CPUMAP 엔트리와 CPU 3 전달 워커는 mixed에서만 생성한다. all-pass와 pass-xsk는 빈 CPUMAP을 유지하며 ingress 기록과 종료 시 CSV 형식은 세 구성에서 같다.
 - 단일 RX queue 0, CPUMAP CPU 3·queue 256, AF_XDP COPY·4096 UMEM frames·RX ring 2048·batch 64를 유지한다. AF_XDP는 scatter/gather를 요청하지 않으며 다중 descriptor 패킷을 수신 오류로 처리한다.
 
-최신 실험에서 PASS와 AF_XDP 수신 앱은 `receiver.shared_cpus=0,1,2`를 함께 사용한다.
-mixed의 UDP/9001만 CPUMAP 커널 처리와 사용자 수신을 CPU 3에서 수행한다.
-앱의 CPU 허용 집합은 `ace-run`이 적용하며 수동 BPF 실행에서는 호출자의 배치를 따른다.
+최신 실험의 전체 CPU 집합은 `receiver.shared_cpus=0,1,2,3`이다.
+all-pass·pass-xsk에서는 일반 Linux 프로그램과 수신 앱이 네 CPU를 공유한다.
+mixed의 중요1이 활성화되면 `ace-run`이 CPU 3을 예약하여 UDP/9001의 CPUMAP 커널 처리와
+사용자 수신을 배치하고, 나머지는 CPU 0·1·2를 공유한다. 종료 후 네 CPU의 공유를 복원한다.
+단독 측정은 PASS/all-pass, CPUMAP/mixed, AF_XDP/pass-xsk를 사용한다.
+수동 BPF 실행에서는 호출자의 배치를 따른다.
 
 `--records`는 ingress 및 CPUMAP HASH의 용량이다. **세 흐름의 예상 총 패킷 수** 이상으로 설정한다. 기본 262144, 상한 1048576이며 기존 실행 동안 map을 교체하거나 기록을 덮어쓰지 않는다. 더 긴 측정은 이 용량 안의 개별 run으로 구성한다.
 

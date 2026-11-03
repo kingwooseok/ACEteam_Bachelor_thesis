@@ -95,9 +95,65 @@ def receiver_placement(descriptor: Mapping) -> dict:
     if target is not None and (isinstance(target, bool) or not isinstance(target, int)
                                or not 0 <= target < 1024):
         raise ExperimentError("receiver_cpumap_cpu must be a valid CPU")
-    return {"shared_cpus": shared, "cpumap_cpu": target,
-            "flows": [{"flow_id": flow["flow_id"], "rx_cpus": receiver_cpu_list(flow)}
-                      for flow in descriptor["flows"]]}
+    placement = {"shared_cpus": shared, "cpumap_cpu": target,
+                 "flows": [{"flow_id": flow["flow_id"], "rx_cpus": receiver_cpu_list(flow)}
+                           for flow in descriptor["flows"]]}
+    available = environment.get("receiver_available_cpus", "")
+    if not isinstance(available, str):
+        raise ExperimentError("receiver_available_cpus must be a CPU list")
+    if available:
+        available = canonical_cpu_list(available, "receiver_available_cpus")
+        if available == "inherit" or target is None or str(target) not in available.split(","):
+            raise ExperimentError("receiver_available_cpus must include the CPUMAP CPU")
+        active = environment.get("receiver_cpumap_active")
+        expected_active = descriptor["mode"] == "mixed" and any(
+            flow["flow_id"] == 2 and flow.get("requested_path") == "cpumap"
+            for flow in descriptor["flows"])
+        if type(active) is not bool or active != expected_active:
+            raise ExperimentError("receiver_cpumap_active disagrees with active flows")
+        expected_shared = ",".join(cpu for cpu in available.split(",")
+                                   if not active or cpu != str(target))
+        if not expected_shared or shared != expected_shared:
+            raise ExperimentError("receiver_shared_cpus disagrees with the mode's CPU reservation")
+        for flow in descriptor["flows"]:
+            expected = str(target) if active and flow["flow_id"] == 2 else shared
+            if receiver_cpu_list(flow) != expected:
+                raise ExperimentError("receiver flow CPU set disagrees with the mode's CPU reservation")
+        placement.update(available_cpus=available, cpumap_active=active)
+    return placement
+
+
+def receiver_partition_evidence(directory: Path, placement: Mapping) -> dict:
+    evidence = {}
+    for state in ("active", "restored"):
+        name = f"cpu-partition-{state}.json"
+        if (directory / name).exists():
+            evidence[state] = read_json(contained_file(directory, name))
+    if "cpumap_active" not in placement:
+        return evidence
+    if not placement["cpumap_active"]:
+        if evidence:
+            raise ExperimentError("CPU reservation evidence exists for a shared-only run")
+        return evidence
+    if set(evidence) != {"active", "restored"}:
+        raise ExperimentError("completed CPUMAP run requires reservation and restoration evidence")
+    active, restored = evidence["active"], evidence["restored"]
+    owner = active.get("owner_pid")
+    if isinstance(owner, bool) or not isinstance(owner, int) or owner <= 0 or restored.get("owner_pid") != owner:
+        raise ExperimentError("CPU partition evidence has inconsistent owner")
+    for state, record in evidence.items():
+        if (record.get("verified") is not True or record.get("reserved_cpu") != placement["cpumap_cpu"] or
+                canonical_cpu_list(record.get("available_cpus"), "partition available_cpus") != placement["available_cpus"]):
+            raise ExperimentError(f"CPU partition {state} evidence disagrees with configured CPUs")
+    if (active.get("partition") != "isolated" or
+            canonical_cpu_list(active.get("partition_cpus"), "partition_cpus") != str(placement["cpumap_cpu"]) or
+            canonical_cpu_list(active.get("general_cpus"), "partition general_cpus") != placement["shared_cpus"] or
+            canonical_cpu_list(active.get("root_cpus"), "partition root_cpus") != placement["shared_cpus"]):
+        raise ExperimentError("CPU partition was not isolated with the recorded general domain")
+    if (restored.get("partition") != "released" or
+            canonical_cpu_list(restored.get("root_cpus"), "restored root_cpus") != placement["available_cpus"]):
+        raise ExperimentError("CPU partition restoration did not return all available CPUs")
+    return evidence
 
 
 def receiver_cpu_label(flow: Mapping) -> str:
@@ -576,6 +632,7 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
         result["flows"] = descriptor["flows"]
         result["environment"] = descriptor.get("environment")
         result["receiver_placement"] = receiver_placement(descriptor)
+        result["cpu_partition"] = receiver_partition_evidence(directory, result["receiver_placement"])
         result["receiver_placements"] = {}
         for flow in descriptor["flows"]:
             name = f"receiver-flow{flow['flow_id']}.placement.json"
@@ -605,6 +662,7 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
         artifact_names += [f"sender-flow{flow['flow_id']}.json" for flow in descriptor["flows"]]
         artifact_names += [path.name for path in directory.glob("receiver-flow*.json")]
         artifact_names += [path.name for path in directory.glob("udp-flow*.bin")]
+        artifact_names += [f"cpu-partition-{state}.json" for state in result["cpu_partition"]]
         artifact_names += [name for name in ("monitor/mpstat.log", "monitor/cpu-samples.csv", "monitor/network.log")
                            if (directory / name).is_file()]
         result["input_artifacts"] = {
@@ -691,7 +749,7 @@ def build_report(directories: Sequence[Path]) -> dict:
                         "cpu_window": "receiver first XDP to last XDP/CPUMAP/userspace observation, CLOCK_MONOTONIC",
                         "cpu_average": "counter deltas weighted by overlapping time at sample boundaries; full window coverage required",
                         "cpu_observation": "legacy mpstat whole-observation average, excluded from measurement CPU aggregation",
-                        "receiver_affinity": "allowed CPU sets, not per-packet observed CPUs; separate affinity layouts are aggregated separately",
+                        "receiver_affinity": "allowed CPU sets; separate affinity and CPU reservation layouts are aggregated separately",
                         "deadline": "only explicitly supplied per-flow values",
                         "socket_only": "operational smoke validation only"}}
 
@@ -749,6 +807,19 @@ def render_html(report: Mapping) -> str:
             latency_bars.append((label+f' / flow {flow_id}', None if ci["mean"] is None else ci["mean"] / 1000))
             loss_bars.append((label+f' / flow {flow_id}', None if delivery["loss_rate"] is None else delivery["loss_rate"] * 100))
     parts.append('</table></div><p class="note">지연은 NIC 하드웨어 RX → 사용자 수신 구간입니다. Deadline 미지정 시 초과율은 계산하지 않습니다. 신뢰구간은 독립 run 통계이며 1회 실행은 CI 없이 표시합니다. 수신 PPS의 분모는 첫 송신 시도부터 마지막 송신 종료까지이며, 수신 개수에는 종료 후 drain 구간의 도착분도 포함됩니다.</p></section>')
+    layouts = set()
+    for condition in report["conditions"]:
+        placement = condition.get("receiver_placement", {})
+        if condition["status"] == "completed" and "available_cpus" in placement:
+            layouts.add((condition["mode"], placement["available_cpus"], placement["shared_cpus"],
+                         placement["cpumap_cpu"] if placement["cpumap_active"] else None))
+    if layouts:
+        parts.append('<section><h2>구성별 CPU 사용 영역</h2><table><tr><th>구성</th><th>전체 CPU</th><th>일반 작업·PASS·AF_XDP 공유</th><th>CPUMAP 중요 수신 전용</th></tr>')
+        for mode, available, shared, reserved in sorted(layouts, key=lambda row: tuple(str(value) for value in row)):
+            values = [mode, f'CPU {available}', f'CPU {shared}',
+                      f'CPU {reserved}' if reserved is not None else '없음 · 전체 CPU 공유']
+            parts.append('<tr>'+''.join(f'<td>{escape(value)}</td>' for value in values)+'</tr>')
+        parts.append('</table><p class="note">CPUMAP 중요 흐름을 실행하는 동안 전용 CPU를 예약하고, 실행이 끝나면 일반 공유 영역에 반환합니다.</p></section>')
     parts.append('<section><h2>구간별 지연과 수신 앱 실행 범위</h2><div class="scroll"><table><tr><th>조건 / 구성</th><th>Flow / 경로</th><th>수신 앱 허용 CPU</th><th>d₁ p99 µs</th><th>d₂ p99 µs</th><th>d₃ p99 µs</th><th>XDP 이후 p99 µs</th></tr>')
     for condition in report["conditions"]:
         if condition["status"] != "completed":

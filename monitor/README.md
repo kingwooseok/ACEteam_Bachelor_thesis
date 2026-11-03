@@ -20,7 +20,9 @@
 - `verify_irq_affinity.sh`
   - Case 2에서 NIC IRQ affinity가 실제 기대 CPU에서 동작하는지 검증
 - `check_cpu_partition.sh`
-  - 중요 수신 CPU 3의 예약과 일반 공유 영역, RPS·NAPI 실행 설정을 읽어 검사
+  - CPU 0~3의 일반 사용 가능 상태와 RPS·NAPI 실행 설정을 읽어 검사
+- `cpu_partition.sh`
+  - 실행기의 요청으로 CPU 3 전용 영역을 만들고, 종료·실패 정리 후 반환
 
 `controller.sh`는 시스템 부하와 상태를 관리·관찰하기 위한 스크립트이며, **애플리케이션의 OWD/latency 자체를 측정하는 도구는 아니다.** 핵심 latency 결과와 함께 시스템 로그를 비교하여 Case별 성능 차이와 이상 결과의 원인을 분석하는 용도로 사용한다.
 
@@ -32,20 +34,27 @@ PREEMPT_RT를 공통 실행 기반으로 두고 세 구성을 모든 A·B 부하
 
 | 구성 | 수신 경로와 실행 영역 |
 |---|---|
-| all-pass | 세 흐름 모두 Linux 소켓 수신, CPU 0·1·2 공유 |
-| pass-xsk | 중요2만 AF_XDP 추가, 수신 앱은 모두 CPU 0·1·2 공유 |
+| all-pass | 세 흐름 모두 Linux 소켓 수신, CPU 0·1·2·3 공유 |
+| pass-xsk | 중요2만 AF_XDP 추가, 수신 앱은 모두 CPU 0·1·2·3 공유 |
 | mixed | 중요1의 커널 처리·수신만 CPUMAP CPU 3, 나머지는 0·1·2 공유 |
 
-CPU 부하 워커는 세 구성 모두 CPU 0·1·2에서 실행한다. 배경 네트워크 수신과
-관리·관측도 이 공유 영역을 사용한다. CPU 3에는 mixed의 CPUMAP 중요 수신을 배치한다.
+CPU 부하는 세 구성 모두 같은 세 워커를 사용한다. 각 워커는 일반 실행 영역 전체를
+공유하며 all-pass·pass-xsk에서 CPU 0~3, 활성 CPUMAP 중요1이 있는 mixed에서 CPU 0~2를
+허용한다. 배경 네트워크·관리·관측과 일반 Linux 작업도 이 영역을 사용한다.
+CPU 3 전용 수신은 mixed의 중요1 실행 중에 적용하고 종료 후 반환한다.
 실행표와 165회 구성은 [실험 준비 안내](../experiment/design/배포전_준비사항.md)에 있다.
 
-수신 Pi의 부팅 설정은 `isolcpus=domain,3 irqaffinity=0-2`로 일반 작업에서
-CPU 3을 제외한다. 재부팅 후 다음 명령으로 검사하며, 실제 수신 실행도 같은 검사를 수행한다.
+수신 Pi는 CPU 0~3이 일반 스케줄링에 참여하는 상태로 준비한다.
+기존 `isolcpus=domain,3` 고정 격리가 있으면 제거하고 재부팅한다.
+실행 전에는 다음 읽기 전용 검사를 수행한다.
 
 ```bash
-bash monitor/check_cpu_partition.sh eth0 0,1,2 3
+bash monitor/check_cpu_partition.sh eth0 0,1,2,3 3
 ```
+
+`ace-run`은 cgroup v2 partition으로 CPU 3을 예약하며 실제 일반 작업의 허용 CPU도 함께
+전환한다. 예약·반환 기록은 해당 run의 `cpu-partition-active.json`,
+`cpu-partition-restored.json`에 남는다. 이 전환은 패킷 측정 전후에 수행한다.
 
 아래 환경 검증 도구의 Case 1(Vanilla)·Case 2(PREEMPT_RT)는 커널 도입 시의 검증 명칭이다.
 본실험의 세 수신 구성은 `mode`로 기록한다.
@@ -62,6 +71,7 @@ bash monitor/check_cpu_partition.sh eth0 0,1,2 3
 ├── run_load.sh
 ├── network_load.sh
 ├── check_cpu_partition.sh
+├── cpu_partition.sh
 ├── verify_cyclictest.sh
 ├── verify_irq_affinity.sh
 ├── LOG_GUIDE.md
@@ -83,7 +93,8 @@ results/
     └── stress_cpuN.log
 ```
 
-CPU 부하를 여러 코어에 적용하면 `stress_cpu0.log`, `stress_cpu1.log`처럼 CPU별 로그가 각각 생성된다.
+수동 CPU 고정 부하는 `stress_cpu0.log`, `stress_cpu1.log`처럼 CPU별 로그를 생성한다.
+최신 본실험의 공유 부하는 세 워커의 결과를 `stress_cpu_shared.log`에 기록한다.
 
 `ace-run`이 `ACE_SKIP_MANIFEST=1`로 호출하는 `run_load.sh` 경로에서는 실행 중
 `mpstat`, `sar`, `stress-ng`, 수신기 `iperf3`와 ON/OFF 단계 로그를
@@ -164,7 +175,7 @@ stress-ng CPU 부하 시작
 ./controller.sh <CPU_LOAD> <INTERVAL> <DURATION> <LOAD_CPUS>
 ```
 
-예시:
+수동 CPU 고정 부하 예시:
 
 ```bash
 ./controller.sh 50 1 60 0,1,2
@@ -180,6 +191,10 @@ stress-ng CPU 부하 시작
 | `INTERVAL` | `mpstat`, `sar` 측정 주기 | 1 이상의 정수, 단위: 초 |
 | `DURATION` | 전체 controller 실행 시간 | 1 이상의 정수, 단위: 초 |
 | `LOAD_CPUS` | `stress-ng`를 실행할 CPU 목록 | 예: `0`, `0,1,2`, `0,1,2,3` |
+
+최신 `ace-run`은 `run_load.sh`에 `ACE_CPU_PLACEMENT=shared`, `ACE_CPU_WORKERS=3`과
+구성별 CPU 허용 집합을 전달한다. 세 워커가 같은 허용 집합을 함께 사용하고,
+`CPU_LOAD`는 워커별 목표 강도가 된다. 실험 입력에서는 세 구성 모두 워커 수와 강도를 유지한다.
 
 현재 스크립트는 `INTERVAL`과 `DURATION`에 **정수 초만 허용**한다. 예를 들어 `0.001`과 같은 소수 단위 주기는 사용할 수 없다.
 
@@ -212,8 +227,8 @@ chmod +x verify_irq_affinity.sh
 | `iperf3` | 수신기 네트워크 부하용 서버 | `iperf3.log` |
 | `mpstat` | 전체 및 CPU별 사용률 측정 | `mpstat.log` |
 | `sar` | `eth0` 송수신 트래픽 측정 | `network.log` |
-| `stress-ng` | 지정 CPU에 목표 부하 생성 | `stress_cpuN.log` |
-| `taskset` | `stress-ng`를 지정 CPU에 고정 | 별도 로그 없음 |
+| `stress-ng` | 공유 영역 또는 지정 CPU에 목표 부하 생성 | `stress_cpu_shared.log` 또는 `stress_cpuN.log` |
+| `taskset` | `stress-ng`의 CPU 허용 집합 적용 | 별도 로그 없음 |
 
 `mpstat`와 `sar`는 일반적으로 `sysstat` 패키지에 포함된다.
 
@@ -233,6 +248,9 @@ duration=60
 ```
 
 실험 결과를 비교할 때 먼저 이 파일로 해당 run의 조건을 확인한다.
+
+최신 본실험의 공유 부하 기록에는 `cpu_placement=shared`, `cpu_workers=3`,
+실제 `load_cpus`와 워커별 `cpu_load`를 함께 남긴다.
 
 ### 5.2 iperf3.log
 
@@ -262,9 +280,12 @@ sar -n DEV --iface=eth0 <INTERVAL>
 
 `eth0`의 패킷 수와 송수신량을 기록한다. 설정한 송신 부하와 별개로 **수신기 인터페이스에서 실제로 관측된 트래픽**을 확인하는 용도이다.
 
-### 5.5 stress_cpuN.log
+### 5.5 CPU 부하 로그
 
-각 CPU에서 실행한 `stress-ng --metrics-brief` 결과를 저장한다.
+본실험은 `stress_cpu_shared.log`에 공유 영역에서 실행한 세 워커의 결과를 저장한다.
+`config.txt`의 허용 CPU 집합과 `monitor/cpu-samples.csv`의 실제 CPU 사용률을 함께 읽는다.
+
+수동 고정 배치에서는 각 CPU에서 실행한 `stress-ng --metrics-brief` 결과를 `stress_cpuN.log`에 저장한다.
 
 예를 들어 `LOAD_CPUS=0,1,2`이면 다음 파일이 생성된다.
 

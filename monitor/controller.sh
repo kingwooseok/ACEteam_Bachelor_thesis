@@ -19,6 +19,10 @@
 #   0       -> CPU0
 #   0,1,2   -> CPU0, CPU1, CPU2 각각 부하
 #   0,1,2,3 -> CPU0~CPU3 전체 부하
+#
+# ace-run uses ACE_SKIP_MANIFEST=1 to delegate to run_load.sh. Its shared
+# placement runs ACE_CPU_WORKERS workers on the complete LOAD_CPUS mask;
+# CPU_LOAD is the requested intensity per worker.
 # ============================================================
 
 set -Eeuo pipefail

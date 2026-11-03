@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 PROFILE = Path(__file__).with_name('profile.example.json')
-DESIGN_REVISION = 'shared-three-path-165-v2'
+DESIGN_REVISION = 'mode-partition-165-v3'
 REPEATS = 5
 
 
@@ -28,7 +28,7 @@ def rows(high=9000, full_design=False):
                 return
         result.append(dict(case_id=f'main-{len(result)+1:02d}', references=[label],
                            pass_pps=pps, cpu_percent=cpu, network=network,
-                           load_cpus='0,1,2', single_flow=None,
+                           load_cpus='per-mode-general', load_workers=3, single_flow=None,
                            modes=['all-pass', 'pass-xsk', 'mixed'],
                            _signature=signature))
     for cpu in (0, 100):
@@ -38,9 +38,10 @@ def rows(high=9000, full_design=False):
     for pps in dict.fromkeys(levels):
         for cpu in (0, 100):
             add(f'B-pass{pps}-cpu{cpu}', pps, cpu)
+    single_modes = ('all-pass', 'mixed', 'pass-xsk')
     singles = [dict(case_id=f'single-{i}', references=[f'D01-flow{i}'], pass_pps=1000,
-                    cpu_percent=0, network='none', load_cpus='0,1,2',
-                    single_flow=i, modes=['mixed']) for i in range(1, 4)]
+                    cpu_percent=0, network='none', load_cpus='per-mode-general', load_workers=3,
+                    single_flow=i, modes=[single_modes[i-1]]) for i in range(1, 4)]
     for row in result:
         del row['_signature']
     return singles + result
@@ -63,8 +64,8 @@ def validate(profile, full_design=False):
         if not isinstance(profile[name], list) or len(profile[name]) != 3:
             raise ValueError(f'{name} needs three values')
     shared = profile['receiver_shared_cpus']
-    if not isinstance(shared, list) or any(type(value) is not int for value in shared) or shared != [0, 1, 2]:
-        raise ValueError('receiver_shared_cpus must be [0,1,2] for the shared Pi execution domain')
+    if not isinstance(shared, list) or any(type(value) is not int for value in shared) or shared != [0, 1, 2, 3]:
+        raise ValueError('receiver_shared_cpus must be [0,1,2,3] for the available Pi execution domain')
     integer(profile['receiver_cpumap_cpu'], 3, 3, 'CPUMAP CPU')
     for side in ('receiver', 'sender'):
         for policy, priority in zip(profile[f'{side}_policies'], profile[f'{side}_priorities']):
@@ -101,7 +102,9 @@ def config(profile, row, index, full_design=False):
                    'receiver.network_cpu': profile['receiver_network_cpu'],
                    'sender.network_cpu': 3,
                    'environment.governor': 'performance', 'environment.rx_irq_cpu': 2,
-                   'load.cpu_percent': row['cpu_percent'], 'load.cpu_cpus': row['load_cpus'],
+                   'load.cpu_percent': row['cpu_percent'],
+                   'load.cpu_cpus': ','.join(map(str, profile['receiver_shared_cpus'])),
+                   'load.cpu_layout': 'shared', 'load.cpu_workers': row['load_workers'],
                    'load.cpu_method': 'all', 'load.memory_workers': 0, 'load.memory_bytes': 0,
                    'load.io_workers': 0, 'load.io_path': '/tmp',
                    'load.network_bps': 0 if row['network'] == 'none' else profile[f"network_{row['network']}_bps"],
@@ -121,8 +124,8 @@ def config(profile, row, index, full_design=False):
                        f'flow{i}.rx_policy': profile['receiver_policies'][i - 1],
                        f'flow{i}.tx_priority': profile['sender_priorities'][i - 1],
                        f'flow{i}.rx_priority': profile['receiver_priorities'][i - 1]})
-    # Every PASS/AF_XDP receiver shares the general domain. The native runner
-    # selects CPU3 only for the CPUMAP path in mixed mode.
+    # The native runner uses all CPUs until an enabled CPUMAP flow reserves CPU3.
+    # Receivers and the same three load workers share the current general domain.
     return '# Generated common config: copy identical bytes to both Pis.\n' + ''.join(
         f'{key}={value}\n' for key, value in values.items())
 
@@ -132,7 +135,7 @@ def main():
     parser.add_argument('--profile', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--d01-d11', action='store_true',
-                        help='compatibility flag: generate the shared-domain 165-run D01-D11 design')
+                        help='compatibility flag: generate the mode-partition 165-run D01-D11 design')
     args = parser.parse_args()
     profile = json.loads(args.profile.read_text()) if args.profile else None
     if profile is not None:
@@ -154,9 +157,11 @@ def main():
                    design='D01-D11', design_revision=DESIGN_REVISION,
                    main_conditions=len(plan)-3, main_runs=main_runs,
                    single_runs=single_runs, total_runs=main_runs+single_runs,
-                   all_pass_runs=50, pass_xsk_runs=50, mixed_main_runs=50,
+                   all_pass_runs=55, pass_xsk_runs=55, mixed_runs=55,
                    duration_ms=60000, warmup_ms=5000,
-                   note='No deployment or experiment execution. Draft PASS high=9000 is provisional.')
+                   cpu_domains={'shared': '0,1,2,3', 'cpumap_active_general': '0,1,2', 'cpumap': '3'},
+                   load_workers=3, load_cpu_layout='shared',
+                   note='CPU3 is reserved only for an enabled CPUMAP flow. Three workers share the active general domain. Draft PASS high=9000 is provisional.')
     write_json(args.output / 'plan.json', summary)
     if profile:
         write_json(args.output / 'profile.json', profile)

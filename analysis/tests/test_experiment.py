@@ -58,6 +58,14 @@ class ExperimentTests(unittest.TestCase):
         (monitor / "network.log").write_text("00:00:00 IFACE rxpck/s txpck/s rxkB/s txkB/s\nAverage: eth0 3.00 0.00 0.30 0.00\n", encoding="utf-8")
         return run
 
+    def add_partition_evidence(self, run: Path):
+        common = dict(owner_pid=42, available_cpus="0,1,2,3", reserved_cpu=3, verified=True)
+        (run / "cpu-partition-active.json").write_text(json.dumps(dict(
+            **common, general_cpus="0,1,2", partition="isolated", partition_cpus="3",
+            root_cpus="0,1,2", root_cpuset_added=True)))
+        (run / "cpu-partition-restored.json").write_text(json.dumps(dict(
+            **common, partition="released", root_cpus="0,1,2,3", root_cpuset_enabled=False)))
+
     def test_multiple_udp_join_flow_deadline_loss_and_html(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -96,14 +104,19 @@ class ExperimentTests(unittest.TestCase):
                     run = self.make_run(root, f'{mode}-{repeat}')
                     data = json.loads((run / "run.json").read_text())
                     data.update(mode=mode, repeat=repeat)
-                    data["environment"] = dict(receiver_shared_cpus="0,1,2", receiver_cpumap_cpu=3)
-                    data["flows"][0].update(rx_cpu=-1, rx_cpus="0,1,2")
+                    general = "0,1,2" if mode == "mixed" else "0,1,2,3"
+                    data["environment"] = dict(receiver_available_cpus="0,1,2,3",
+                        receiver_shared_cpus=general, receiver_cpumap_cpu=3, receiver_cpumap_active=mode == "mixed")
+                    data["load"].update(cpu_cpus=general, cpu_layout="shared", cpu_workers=3)
+                    data["flows"][0].update(rx_cpu=-1, rx_cpus=general)
                     data["flows"][1].update(rx_cpu=3 if mode == "mixed" else -1,
-                                            rx_cpus="3" if mode == "mixed" else "0,1,2",
+                                            rx_cpus="3" if mode == "mixed" else general,
                                             requested_path="cpumap" if mode == "mixed" else "pass")
                     data["flows"].append(dict(flow_id=3, port=9002, count=3, period_ns=1000000,
                                               deadline_ns=250, requested_path="pass" if mode == "all-pass" else "xsk",
-                                              rx_cpu=-1, rx_cpus="0,1,2"))
+                                              rx_cpu=-1, rx_cpus=general))
+                    if mode == "mixed":
+                        self.add_partition_evidence(run)
                     ingress = (run / "xdp-ingress_records.csv").read_text()
                     if mode != "mixed":
                         ingress = ingress.replace("2,0,0,1300,1300,19,1,0", "2,0,0,1300,1300,19,0,0")
@@ -133,8 +146,12 @@ class ExperimentTests(unittest.TestCase):
                 if condition["case_id"] == "single-2":
                     self.assertEqual(condition["statistics"]["flows"]["2"]["run_count"], 1)
                     continue
-                self.assertEqual(condition["flows"][1]["rx_cpus"], "3" if condition["mode"] == "mixed" else "0,1,2")
-                self.assertEqual(condition["receiver_placement"]["shared_cpus"], "0,1,2")
+                general = "0,1,2" if condition["mode"] == "mixed" else "0,1,2,3"
+                self.assertEqual(condition["flows"][1]["rx_cpus"], "3" if condition["mode"] == "mixed" else general)
+                self.assertEqual(condition["receiver_placement"]["shared_cpus"], general)
+                self.assertEqual(condition["receiver_placement"]["available_cpus"], "0,1,2,3")
+                self.assertEqual(condition["receiver_placement"]["cpumap_active"], condition["mode"] == "mixed")
+                self.assertEqual(condition["load"]["cpu_cpus"], general)
                 self.assertEqual(condition["environment"]["receiver_cpumap_cpu"], 3)
                 self.assertEqual(condition["statistics"]["flows"]["2"]["run_count"], 2)
                 self.assertEqual(len(condition["decomposition"]), 2)
@@ -144,8 +161,51 @@ class ExperimentTests(unittest.TestCase):
             self.assertIn("구간별 지연과 수신 앱 실행 범위", page)
             self.assertIn("수신 앱 허용 CPU", page)
             self.assertIn("CPU 0,1,2 · 공유 허용 범위", page)
+            self.assertIn("CPU 0,1,2,3 · 공유 허용 범위", page)
+            self.assertIn("구성별 CPU 사용 영역", page)
+            self.assertIn("없음 · 전체 CPU 공유", page)
             self.assertNotIn("CPU -1", page)
             self.assertIn("같은 패킷의 구간 합 검사", page)
+
+    def test_dynamic_partition_evidence_is_bound_to_result_and_restoration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.make_run(Path(directory), "dynamic")
+            data = json.loads((run / "run.json").read_text())
+            data["environment"] = dict(receiver_available_cpus="0,1,2,3", receiver_shared_cpus="0,1,2",
+                                       receiver_cpumap_cpu=3, receiver_cpumap_active=True)
+            data["flows"][0].update(rx_cpu=-1, rx_cpus="0,1,2")
+            data["flows"][1].update(rx_cpu=3, rx_cpus="3")
+            (run / "run.json").write_text(json.dumps(data))
+            result = experiment.build_report([run])["runs"][0]
+            self.assertEqual(result["status"], "analysis-failed")
+            self.assertIn("requires reservation and restoration evidence", result["reason"])
+            self.add_partition_evidence(run)
+            result = experiment.build_report([run])["runs"][0]
+            self.assertEqual(result["status"], "completed", result)
+            self.assertEqual(result["cpu_partition"]["restored"]["root_cpus"], "0,1,2,3")
+            self.assertIn("cpu-partition-active.json", result["input_artifacts"])
+            self.assertIn("cpu-partition-restored.json", result["input_artifacts"])
+            restored = run / "cpu-partition-restored.json"
+            evidence = json.loads(restored.read_text())
+            evidence["root_cpus"] = "0,1,2"
+            restored.write_text(json.dumps(evidence))
+            result = experiment.build_report([run])["runs"][0]
+            self.assertEqual(result["status"], "analysis-failed")
+            self.assertIn("did not return all available CPUs", result["reason"])
+
+    def test_dynamic_reservation_follows_active_cpumap_flow(self):
+        descriptor = dict(mode="mixed", flows=[dict(flow_id=1, requested_path="pass", rx_cpus="0,1,2,3")],
+                          environment=dict(receiver_available_cpus="0-3", receiver_shared_cpus="0-3",
+                                           receiver_cpumap_cpu=3, receiver_cpumap_active=False))
+        placement = experiment.receiver_placement(descriptor)
+        self.assertEqual(placement["shared_cpus"], "0,1,2,3")
+        self.assertFalse(placement["cpumap_active"])
+        descriptor["environment"]["receiver_cpumap_active"] = True
+        with self.assertRaisesRegex(experiment.ExperimentError, "disagrees with active flows"):
+            experiment.receiver_placement(descriptor)
+        descriptor["environment"].update(receiver_cpumap_active=False, receiver_shared_cpus="0-2")
+        with self.assertRaisesRegex(experiment.ExperimentError, "CPU reservation"):
+            experiment.receiver_placement(descriptor)
 
     def test_shared_and_legacy_pinned_layouts_are_separate_aggregation_groups(self):
         with tempfile.TemporaryDirectory() as directory:

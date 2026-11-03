@@ -90,6 +90,8 @@ IPERF_ENABLED=${ACE_IPERF_ENABLED:-0}
 IPERF_PORT=${ACE_IPERF_PORT:-5201}
 IPERF_CPU=${ACE_IPERF_CPU:-inherit}
 CPU_METHOD=${ACE_CPU_METHOD:-}
+CPU_PLACEMENT=${ACE_CPU_PLACEMENT:-pinned}
+CPU_WORKERS=${ACE_CPU_WORKERS:-0}
 MEMORY_WORKERS=${ACE_MEMORY_WORKERS:-0}
 MEMORY_BYTES=${ACE_MEMORY_BYTES:-}
 IO_WORKERS=${ACE_IO_WORKERS:-0}
@@ -105,6 +107,14 @@ uint "$IO_WORKERS" && ((10#$IO_WORKERS <= 256)) || die 'invalid I/O workers'
 MEMORY_WORKERS=$((10#$MEMORY_WORKERS)); IO_WORKERS=$((10#$IO_WORKERS))
 uint "$IPERF_PORT" && ((10#$IPERF_PORT >= 1024 && 10#$IPERF_PORT <= 65535)) || die 'invalid iperf port'
 [[ -z $CPU_METHOD || $CPU_METHOD =~ ^[A-Za-z0-9_-]+$ ]] || die 'invalid CPU method'
+[[ $CPU_PLACEMENT == pinned || $CPU_PLACEMENT == shared ]] || die 'invalid CPU placement'
+uint "$CPU_WORKERS" && ((10#$CPU_WORKERS <= 256)) || die 'invalid CPU workers'
+CPU_WORKERS=$((10#$CPU_WORKERS))
+if [[ $CPU_PLACEMENT == shared ]]; then
+    ((CPU_WORKERS > 0)) || die 'shared CPU placement requires CPU workers'
+else
+    ((CPU_WORKERS == 0)) || die 'pinned CPU placement derives workers from LOAD_CPUS'
+fi
 ((MEMORY_WORKERS == 0)) || [[ $MEMORY_BYTES =~ ^[1-9][0-9]*(%|[KMGkmg])?$ ]] || die 'memory bytes required'
 ((IO_WORKERS == 0)) || [[ $IO_PATH == /* && -d $IO_PATH && -w $IO_PATH ]] || die 'writable absolute I/O directory required'
 if [[ -n $ON_SEC || -n $OFF_SEC ]]; then
@@ -117,7 +127,14 @@ if [[ -n $LOAD_CPUS ]]; then
     IFS=',' read -ra CPU_ARRAY <<< "$LOAD_CPUS"
 fi
 ((CPU_LOAD == 0 || ${#CPU_ARRAY[@]} > 0)) || die 'CPU load needs LOAD_CPUS'
-for cpu in "${CPU_ARRAY[@]}"; do uint "$cpu" && ((10#$cpu < $(nproc --all))) || die "invalid CPU $cpu"; done
+declare -A CPU_SEEN=()
+for cpu in "${CPU_ARRAY[@]}"; do
+    uint "$cpu" && ((10#$cpu < $(nproc --all))) || die "invalid CPU $cpu"
+    canonical_cpu=$((10#$cpu))
+    [[ ! ${CPU_SEEN[$canonical_cpu]+present} ]] || die "duplicate CPU $cpu"
+    CPU_SEEN[$canonical_cpu]=1
+done
+if [[ $CPU_PLACEMENT == pinned ]]; then CPU_WORKERS=${#CPU_ARRAY[@]}; fi
 require setsid
 ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1))) || die 'Bash 5.1 or newer is required'
 for command in mktemp stat cat sync; do require "$command"; done
@@ -144,7 +161,7 @@ mkdir -p "$RESULT_DIR"
     set -o noclobber
     printf 'run_id=%s\ncpu_load=%s\nload_cpus=%s\nmeasurement_interval=%s\nduration=%s\ninterface=%s\nmemory_workers=%s\nmemory_bytes=%s\nio_workers=%s\nload_on_s=%s\nload_off_s=%s\n' "$RUN_ID" "$CPU_LOAD" "$LOAD_CPUS" "$INTERVAL" "$DURATION" "$INTERFACE" "$MEMORY_WORKERS" "$MEMORY_BYTES" "$IO_WORKERS" "$ON_SEC" "$OFF_SEC" > "$RESULT_DIR/config.txt"
 ) || die 'result directory already has config.txt'
-printf 'iperf_cpu=%s\n' "$IPERF_CPU" >> "$RESULT_DIR/config.txt"
+printf 'iperf_cpu=%s\ncpu_placement=%s\ncpu_workers=%s\n' "$IPERF_CPU" "$CPU_PLACEMENT" "$CPU_WORKERS" >> "$RESULT_DIR/config.txt"
 STAGING_DIR=$(mktemp -d "/dev/shm/ace-monitor.$RUN_ID.XXXXXX") || die 'cannot create log staging directory'
 launch() {
     local type=$1 log=$2
@@ -170,9 +187,13 @@ if ((MONITOR_ENABLED)); then
     launch observe network.log stdbuf -oL sar -n DEV --iface="$INTERFACE" "$INTERVAL"
 fi
 if ((CPU_LOAD)); then
-    args=(--cpu 1 --cpu-load "$CPU_LOAD" --metrics-brief)
+    args=(--cpu-load "$CPU_LOAD" --metrics-brief)
     [[ -z $CPU_METHOD ]] || args+=(--cpu-method "$CPU_METHOD")
-    for cpu in "${CPU_ARRAY[@]}"; do launch load "stress_cpu${cpu}.log" taskset -c "$cpu" stress-ng "${args[@]}"; done
+    if [[ $CPU_PLACEMENT == shared ]]; then
+        launch load stress_cpu_shared.log taskset -c "$LOAD_CPUS" stress-ng --cpu "$CPU_WORKERS" "${args[@]}"
+    else
+        for cpu in "${CPU_ARRAY[@]}"; do launch load "stress_cpu${cpu}.log" taskset -c "$cpu" stress-ng --cpu 1 "${args[@]}"; done
+    fi
 fi
 if ((MEMORY_WORKERS)); then launch load stress_memory.log stress-ng --vm "$MEMORY_WORKERS" --vm-bytes "$MEMORY_BYTES" --metrics-brief; fi
 if ((IO_WORKERS)); then

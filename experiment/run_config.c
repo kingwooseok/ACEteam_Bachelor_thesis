@@ -92,7 +92,7 @@ static int allowed(const char *key)
 		"environment.governor","environment.rx_irq_cpu",
 		"receiver.supervisor_cpu","sender.supervisor_cpu","receiver.network_cpu","sender.network_cpu",
 		"receiver.shared_cpus","receiver.cpumap_cpu",
-		"load.cpu_percent","load.cpu_cpus","load.cpu_method","load.memory_workers","load.memory_bytes",
+		"load.cpu_percent","load.cpu_cpus","load.cpu_layout","load.cpu_workers","load.cpu_method","load.memory_workers","load.memory_bytes",
 		"load.io_workers","load.io_path","load.network_bps","load.network_protocol","load.network_direction",
 		"load.network_port","load.network_parallel","load.on_sec","load.off_sec"};
 	for (unsigned i = 0; i < sizeof(keys) / sizeof(*keys); i++) if (!strcmp(key, keys[i])) return 1;
@@ -136,12 +136,28 @@ const char *run_flow_path(const char *mode, unsigned flow_index)
 }
 int run_rx_cpu(const struct run_flow *f, const char *mode)
 { return !strcmp(mode,"all-pass") ? f->all_pass_rx_cpu : f->rx_cpu; }
+int run_cpumap_active(const struct run_config *c,const char *mode)
+{ return *c->receiver_shared_cpus && !strcmp(mode,"mixed") && c->flows[1].enabled; }
+void run_general_cpu_set(const struct run_config *c,const char *mode,cpu_set_t *set)
+{
+	*set=c->receiver_shared_mask;
+	if (run_cpumap_active(c,mode)) CPU_CLR(c->receiver_cpumap_cpu,set);
+}
+int run_load_cpus(const struct run_config *c,const char *mode,char *text,size_t size)
+{
+	if (!strcmp(c->cpu_layout,"shared")) {
+		cpu_set_t set; run_general_cpu_set(c,mode,&set);
+		return run_format_cpus(&set,text,size);
+	}
+	if (strlen(c->cpu_cpus)>=size) return -1;
+	strcpy(text,c->cpu_cpus); return 0;
+}
 void run_rx_cpu_set(const struct run_config *c,unsigned flow_index,const char *mode,cpu_set_t *set)
 {
 	CPU_ZERO(set);
 	if (*c->receiver_shared_cpus) {
-		if (!strcmp(run_flow_path(mode,flow_index),"cpumap")) CPU_SET(c->receiver_cpumap_cpu,set);
-		else *set=c->receiver_shared_mask;
+		if (flow_index==1 && run_cpumap_active(c,mode)) CPU_SET(c->receiver_cpumap_cpu,set);
+		else run_general_cpu_set(c,mode,set);
 	} else {
 		int n=run_rx_cpu(&c->flows[flow_index],mode);
 		if (n>=0) CPU_SET(n,set);
@@ -217,8 +233,8 @@ int read_run_config(const char *file, struct run_config *c)
 			fprintf(stderr,"invalid CPU list: receiver.shared_cpus\n"); p.error=1;
 		}
 		/* The currently compiled BPF CPUMAP target is CPU 3. */
-		if (c->receiver_cpumap_cpu!=3 || CPU_ISSET(c->receiver_cpumap_cpu,&c->receiver_shared_mask)) {
-			fprintf(stderr,"CPUMAP CPU must be 3 and outside receiver.shared_cpus\n"); p.error=1;
+		if (c->receiver_cpumap_cpu!=3 || !CPU_ISSET(c->receiver_cpumap_cpu,&c->receiver_shared_mask) || CPU_COUNT(&c->receiver_shared_mask)<2) {
+			fprintf(stderr,"receiver.shared_cpus must include CPU3 and a general CPU; regenerate the execution plan\n"); p.error=1;
 		}
 		if (c->receiver_supervisor_cpu>=0 || c->receiver_network_cpu>=0) {
 			fprintf(stderr,"shared receiver supervisor/network CPU settings must be inherit\n"); p.error=1;
@@ -231,11 +247,18 @@ int read_run_config(const char *file, struct run_config *c)
 	string(&p,"environment.governor","performance",c->governor,sizeof(c->governor));
 	for (const char *q=c->governor;*q;q++) if (!isalnum((unsigned char)*q) && *q!='_' && *q!='-') p.error=1;
 	c->rx_irq_cpu=number(&p,"environment.rx_irq_cpu","2",0,CPU_SETSIZE-1);
-	if (*c->receiver_shared_cpus && !CPU_ISSET(c->rx_irq_cpu,&c->receiver_shared_mask)) {
-		fprintf(stderr,"RX IRQ CPU must belong to receiver.shared_cpus\n"); p.error=1;
+	if (*c->receiver_shared_cpus && (!CPU_ISSET(c->rx_irq_cpu,&c->receiver_shared_mask) || c->rx_irq_cpu==(unsigned)c->receiver_cpumap_cpu)) {
+		fprintf(stderr,"RX IRQ CPU must remain in the general domain when CPU3 is reserved\n"); p.error=1;
 	}
 	c->monitor=number(&p,"monitor",NULL,0,1);
 	c->cpu_percent=number(&p,"load.cpu_percent",NULL,0,100);
+	string(&p,"load.cpu_layout","pinned",c->cpu_layout,sizeof(c->cpu_layout));
+	int shared_load=!strcmp(c->cpu_layout,"shared");
+	if (!shared_load && strcmp(c->cpu_layout,"pinned")) { fprintf(stderr,"invalid load.cpu_layout\n"); p.error=1; }
+	c->cpu_workers=number(&p,"load.cpu_workers",shared_load?NULL:"0",shared_load?1:0,256);
+	if ((!shared_load && c->cpu_workers) || (shared_load && !*c->receiver_shared_cpus)) {
+		fprintf(stderr,"shared CPU load requires receiver.shared_cpus and an explicit worker count\n"); p.error=1;
+	}
 	const char *cpus=lookup(&p,"load.cpu_cpus",c->cpu_percent ? NULL : "");
 	if (strlen(cpus)>=sizeof(c->cpu_cpus)) p.error=1; else strcpy(c->cpu_cpus,cpus);
 	for (const char *q=cpus;*q;q++) if (!isdigit((unsigned char)*q) && *q!=',') p.error=1;
@@ -245,6 +268,13 @@ int read_run_config(const char *file, struct run_config *c)
 		if (run_parse_cpus(cpus,&workers)) p.error=1;
 		else for (unsigned n=0;n<CPU_SETSIZE;n++) if (CPU_ISSET(n,&workers) && !CPU_ISSET(n,&c->receiver_shared_mask)) {
 			fprintf(stderr,"CPU load workers must remain in receiver.shared_cpus\n"); p.error=1; break;
+		}
+		if (!shared_load) { fprintf(stderr,"dynamic receiver CPU domains require load.cpu_layout=shared\n"); p.error=1; }
+	}
+	if (shared_load) {
+		cpu_set_t workers;
+		if (run_parse_cpus(cpus,&workers) || !CPU_EQUAL(&workers,&c->receiver_shared_mask)) {
+			fprintf(stderr,"shared load.cpu_cpus must match the available receiver CPU set\n"); p.error=1;
 		}
 	}
 	string(&p,"load.cpu_method","all",c->cpu_method,sizeof(c->cpu_method));
@@ -318,13 +348,20 @@ void write_condition(FILE *out,const struct run_config *c,const char *mode,uint6
 		json_string(out,*rx_cpus?rx_cpus:"inherit");
 		fprintf(out,",\"tx_policy\":%d,\"rx_policy\":%d,\"tx_priority\":%d,\"rx_priority\":%d}",f->tx_policy,f->rx_policy,f->tx_priority,f->rx_priority);
 	}
-	fprintf(out,"],\"load\":{\"cpu_percent\":%u,\"cpu_cpus\":",c->cpu_percent); json_string(out,c->cpu_cpus);
+	char effective_load[RUN_CPU_LIST_SIZE], general_cpus[RUN_CPU_LIST_SIZE]; cpu_set_t general;
+	run_load_cpus(c,mode,effective_load,sizeof(effective_load));
+	run_general_cpu_set(c,mode,&general); run_format_cpus(&general,general_cpus,sizeof(general_cpus));
+	fprintf(out,"],\"load\":{\"cpu_percent\":%u,\"cpu_cpus\":",c->cpu_percent); json_string(out,effective_load);
+	fputs(",\"cpu_layout\":",out); json_string(out,c->cpu_layout);
+	fprintf(out,",\"cpu_workers\":%u",c->cpu_workers);
 	fprintf(out,",\"memory_workers\":%u,\"memory_bytes\":",c->memory_workers); json_string(out,c->memory_bytes);
 	fprintf(out,",\"io_workers\":%u,\"network_bps\":%llu,\"network_protocol\":\"%s\",\"network_direction\":\"%s\",\"network_parallel\":%u,\"on_sec\":%u,\"off_sec\":%u},\"environment\":{\"governor\":",c->io_workers,(unsigned long long)c->network_bps,c->network_protocol,c->network_direction,c->network_parallel,c->load_on_sec,c->load_off_sec);
 	json_string(out,c->governor);
 	fprintf(out,",\"alternate_mode_order\":%u",c->alternate_mode_order);
 	fprintf(out,",\"receiver_supervisor_cpu\":%d,\"sender_supervisor_cpu\":%d,\"receiver_network_cpu\":%d,\"sender_network_cpu\":%d",c->receiver_supervisor_cpu,c->sender_supervisor_cpu,c->receiver_network_cpu,c->sender_network_cpu);
-	fputs(",\"receiver_shared_cpus\":",out); json_string(out,c->receiver_shared_cpus);
+	fputs(",\"receiver_available_cpus\":",out); json_string(out,c->receiver_shared_cpus);
+	fputs(",\"receiver_shared_cpus\":",out); json_string(out,general_cpus);
+	fprintf(out,",\"receiver_cpumap_active\":%s",run_cpumap_active(c,mode)?"true":"false");
 	fputs(",\"receiver_cpumap_cpu\":",out);
 	if (*c->receiver_shared_cpus) fprintf(out,"%d",c->receiver_cpumap_cpu); else fputs("null",out);
 	fprintf(out,",\"rx_irq_cpu\":%u},\"config\":{\"sha256\":\"%s\",\"warmup_ms\":%llu,\"settle_ms\":%u,\"drain_ms\":%u,\"monitor\":%u}}",c->rx_irq_cpu,c->digest,(unsigned long long)c->warmup_ms,c->settle_ms,c->drain_ms,c->monitor);

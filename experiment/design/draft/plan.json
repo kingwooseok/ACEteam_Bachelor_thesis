@@ -1,15 +1,22 @@
 {
   "status": "draft-unresolved",
   "design": "D01-D11",
-  "design_revision": "shared-three-path-165-v2",
+  "design_revision": "mode-partition-165-v3",
   "main_conditions": 10,
   "main_runs": 150,
   "single_runs": 15,
   "total_runs": 165,
-  "all_pass_runs": 50,
-  "pass_xsk_runs": 50,
-  "mixed_main_runs": 50,
+  "all_pass_runs": 55,
+  "pass_xsk_runs": 55,
+  "mixed_runs": 55,
   "duration_ms": 60000,
   "warmup_ms": 5000,
-  "note": "No deployment or experiment execution. Draft PASS high=9000 is provisional."
+  "cpu_domains": {
+    "shared": "0,1,2,3",
+    "cpumap_active_general": "0,1,2",
+    "cpumap": "3"
+  },
+  "load_workers": 3,
+  "load_cpu_layout": "shared",
+  "note": "CPU3 is reserved only for an enabled CPUMAP flow. Three workers share the active general domain. Draft PASS high=9000 is provisional."
 }

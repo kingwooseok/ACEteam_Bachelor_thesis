@@ -31,7 +31,7 @@ class DesignPlanTests(unittest.TestCase):
 
     def profile(self):
         # 회귀 검사용 값이다. 연구에서 확정한 정책/네트워크 세기가 아니다.
-        return dict(receiver_address='192.168.10.10', receiver_shared_cpus=[0, 1, 2],
+        return dict(receiver_address='192.168.10.10', receiver_shared_cpus=[0, 1, 2, 3],
                     receiver_cpumap_cpu=3,
                     receiver_policies=['other']*3, receiver_priorities=[0]*3,
                     sender_policies=['other']*3, sender_priorities=[0]*3,
@@ -41,7 +41,7 @@ class DesignPlanTests(unittest.TestCase):
 
     def test_document_selected_starting_profile(self):
         profile = json.loads(plan.PROFILE.read_text())
-        self.assertEqual(profile['receiver_shared_cpus'], [0, 1, 2])
+        self.assertEqual(profile['receiver_shared_cpus'], [0, 1, 2, 3])
         self.assertEqual(profile['receiver_cpumap_cpu'], 3)
         self.assertEqual(profile['receiver_policies'], ['other']*3)
         self.assertEqual(profile['receiver_priorities'], [0]*3)
@@ -55,7 +55,7 @@ class DesignPlanTests(unittest.TestCase):
         plan.validate(profile)
         values = dict(line.split('=', 1) for line in plan.config(profile, plan.rows()[3], 3).splitlines()
                       if line and not line.startswith('#'))
-        self.assertEqual(values['receiver.shared_cpus'], '0,1,2')
+        self.assertEqual(values['receiver.shared_cpus'], '0,1,2,3')
         self.assertEqual(values['receiver.cpumap_cpu'], '3')
         self.assertEqual(values['receiver.supervisor_cpu'], 'inherit')
         self.assertEqual(values['receiver.network_cpu'], 'inherit')
@@ -75,9 +75,11 @@ class DesignPlanTests(unittest.TestCase):
         self.assertEqual(len(signatures), 10)
         shared_base = next(r for r in main if 'A-cpu100-none' in r['references'])
         self.assertEqual(shared_base['references'], ['A-cpu100-none', 'B-pass1000-cpu100'])
-        self.assertEqual(shared_base['load_cpus'], '0,1,2')
+        self.assertEqual(shared_base['load_cpus'], 'per-mode-general')
         self.assertTrue(all(row['modes'] == ['all-pass', 'pass-xsk', 'mixed'] for row in main))
-        self.assertTrue(all(row['load_cpus'] == '0,1,2' for row in rows))
+        self.assertTrue(all(row['load_cpus'] == 'per-mode-general' for row in rows))
+        self.assertTrue(all(row['load_workers'] == 3 for row in rows))
+        self.assertEqual([row['modes'] for row in rows[:3]], [['all-pass'], ['mixed'], ['pass-xsk']])
         self.assertFalse(any(label.startswith('C-') for row in rows for label in row['references']))
         self.assertTrue(all('pass_shares_cpu3' not in row for row in rows))
         self.assertEqual(sum(len(row['modes']) * 5 for row in rows), 165)
@@ -110,7 +112,9 @@ class DesignPlanTests(unittest.TestCase):
             for key, value in {'repeats':'5', 'duration_ms':'60000', 'warmup_ms':'5000',
                                'flow2.deadline_ns':'100000', 'flow3.deadline_ns':'100000',
                                'sender.network_cpu':'3', 'receiver.network_cpu':'inherit',
-                               'receiver.shared_cpus':'0,1,2', 'receiver.cpumap_cpu':'3',
+                               'receiver.shared_cpus':'0,1,2,3', 'receiver.cpumap_cpu':'3',
+                               'load.cpu_cpus':'0,1,2,3', 'load.cpu_layout':'shared',
+                               'load.cpu_workers':'3',
                                'load.memory_workers':'0', 'load.io_workers':'0',
                                'alternate_mode_order':'1'}.items():
                 self.assertEqual(values[key], value)
@@ -127,6 +131,7 @@ class DesignPlanTests(unittest.TestCase):
         for key, value in [('network_high_bps', True), ('network_middle_bps', 900000000),
                            ('receiver_network_cpu', 3), ('receiver_supervisor_cpu', 0),
                            ('receiver_shared_cpus', [0, 1, 3]), ('receiver_shared_cpus', [0, 1]),
+                           ('receiver_shared_cpus', [0, 1, 2]),
                            ('receiver_shared_cpus', [False, 1, 2]), ('receiver_cpumap_cpu', 2),
                            ('receiver_cpus', [0, 3, 1]),
                            ('receiver_priorities', [80, 80, 80]), ('pass_high_pps', 16000)]:
@@ -174,7 +179,7 @@ class DesignPlanTests(unittest.TestCase):
                             self.assertEqual(packets, 60000)
                 self.assertLessEqual(capacity, 1048576)
         legacy = plan.config(self.profile(), plan.rows()[0], 0)
-        self.assertIn('modes=mixed\n', legacy)
+        self.assertIn('modes=all-pass\n', legacy)
         self.assertIn('verify_placement=1', legacy)
         self.assertEqual(plan.rows(), plan.rows(full_design=True))
         for high in (3000, 15477):
@@ -208,8 +213,10 @@ class DesignPlanTests(unittest.TestCase):
             self.assertEqual(summary['single_runs'], 15)
             self.assertEqual(summary['main_runs'], 150)
             self.assertEqual(summary['total_runs'], 165)
-            self.assertEqual(summary['design_revision'], 'shared-three-path-165-v2')
-            self.assertEqual([summary[key] for key in ('all_pass_runs', 'pass_xsk_runs', 'mixed_main_runs')], [50]*3)
+            self.assertEqual(summary['design_revision'], 'mode-partition-165-v3')
+            self.assertEqual([summary[key] for key in ('all_pass_runs', 'pass_xsk_runs', 'mixed_runs')], [55]*3)
+            self.assertEqual(summary['cpu_domains'], {'shared':'0,1,2,3', 'cpumap_active_general':'0,1,2', 'cpumap':'3'})
+            self.assertEqual(summary['load_workers'], 3)
             for case in cases:
                 data = (output / case['config']).read_bytes()
                 self.assertNotIn(b'\r', data)
@@ -252,7 +259,7 @@ class DesignPlanTests(unittest.TestCase):
                     {'expected_modes': ['mixed', 'mixed'], 'expected_runs': 10},
                     {'expected_modes': ['invalid']}, {'repeats': True},
                     {'expected_runs': 10},
-                    {'expected_modes': ['all-pass']},
+                    {'expected_modes': ['mixed']},
                     {'repeats': 4, 'expected_runs': 4}):
                 execution = copy.deepcopy(original)
                 execution['cases'][0].update(change)

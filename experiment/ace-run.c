@@ -10,10 +10,15 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <sys/random.h>
+#include <sys/file.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+
+#ifndef ACE_CGROUP_ROOT
+#define ACE_CGROUP_ROOT "/sys/fs/cgroup"
+#endif
 
 /* Direct Pi-to-Pi phase control. There is no control traffic during capture. */
 enum { HELLO=1, RX_READY, TX_READY, START, STARTED, STOP, DONE, ACK, FAIL };
@@ -36,6 +41,9 @@ struct context {
 	struct child child[16];
 	unsigned children, index;
 	int fd, receiver, owns_run;
+	int partition_lock, partition_attempted, partition_active;
+	unsigned partition_release_attempts;
+	char partition_group[4096];
 	unsigned char nonce[16];
 	char suite[4096], run_dir[4096], run_id[128], mode[16];
 	unsigned repeat;
@@ -73,6 +81,19 @@ static int scheduler(int cpu,int policy,int priority)
 	cpu_set_t set; CPU_ZERO(&set); if (cpu>=0) CPU_SET(cpu,&set);
 	return scheduler_mask(cpu>=0?&set:NULL,policy,priority);
 }
+static int join_receiver_partition(const struct context *x,const char *name)
+{
+	if (!x->partition_active || strcmp(name,"receiver-flow2")) return 0;
+	char path[4096],pid[32];
+	if (pathf(path,sizeof(path),"%s/cgroup.procs",x->partition_group)) return -1;
+	int fd=open(path,O_WRONLY|O_CLOEXEC|O_NOFOLLOW); if (fd<0) return -1;
+	int length=snprintf(pid,sizeof(pid),"%ld\n",(long)getpid()); ssize_t written;
+	do { written=write(fd,pid,(size_t)length); } while (written<0 && errno==EINTR);
+	int error=written!=length;
+	if (close(fd)) error=1;
+	if (error) { errno=EIO; return -1; }
+	return 0;
+}
 static int reap(struct context *x)
 {
 	int failed=0;
@@ -99,6 +120,7 @@ static int spawn_pipe_mask(struct context *x,const char *name,const char *ready,
 		dup2(fd,STDOUT_FILENO); dup2(fd,STDERR_FILENO); close(fd);
 		if (x->fd>=0) close(x->fd);
 		if (notify_fd>=0 && fcntl(notify_fd,F_SETFD,0)) { perror("completion pipe"); _exit(126); }
+		if (join_receiver_partition(x,name)) { perror("receiver CPU partition"); _exit(126); }
 		if (scheduler_mask(&expected,policy,priority)) { perror("child scheduler"); _exit(126); }
 		execvp(args[0],args); perror("exec child"); _exit(127);
 	}
@@ -318,7 +340,7 @@ static int marker(struct context *x,const char *name)
 }
 static int begin_run(struct context *x)
 {
-	x->children=0; x->owns_run=0;
+	x->children=0; x->owns_run=0; x->partition_release_attempts=0;
 	if (pathf(x->run_id,sizeof(x->run_id),"%s-%s-r%04u",x->c.run_id,x->mode,x->repeat) ||
 	    pathf(x->run_dir,sizeof(x->run_dir),"%s/runs/%s",x->suite,x->run_id)) return -1;
 	if (mkdir(x->run_dir,0755)) return -1;
@@ -348,6 +370,34 @@ static int capture_state(struct context *x,const char *phase)
 	int child=spawn(x,name,NULL,-1,SCHED_OTHER,0,0,args); if (child<0) return -1;
 	return wait_child(x,child,x->c.ready_ms,0);
 }
+static int restore_cpu_partition(struct context *x)
+{
+	if (!x->partition_attempted) return 0;
+	char owner[32],name[32]; snprintf(owner,sizeof(owner),"%ld",(long)getpid());
+	snprintf(name,sizeof(name),"cpu-partition-release%u",++x->partition_release_attempts);
+	char *args[]={"bash","./monitor/cpu_partition.sh","release",owner,x->run_dir,NULL};
+	int child=spawn(x,name,NULL,-1,SCHED_OTHER,0,0,args);
+	/* Restoration runs after children stop, including a SIGINT/SIGTERM path. */
+	if (child<0 || wait_child(x,child,x->c.stop_ms,1)) return -1;
+	if (scheduler_mask(&x->c.receiver_shared_mask,SCHED_OTHER,0)) return -1;
+	x->partition_active=0; x->partition_attempted=0; x->partition_group[0]=0;
+	return 0;
+}
+static int reserve_cpu_partition(struct context *x)
+{
+	if (!run_cpumap_active(&x->c,x->mode)) return 0;
+	char owner[32],target[16]; snprintf(owner,sizeof(owner),"%ld",(long)getpid());
+	snprintf(target,sizeof(target),"%d",x->c.receiver_cpumap_cpu);
+	if (pathf(x->partition_group,sizeof(x->partition_group),"%s/ace-rx-%s",ACE_CGROUP_ROOT,owner)) return -1;
+	char *args[]={"bash","./monitor/cpu_partition.sh","acquire",owner,
+	              x->c.receiver_shared_cpus,target,x->run_dir,NULL};
+	x->partition_attempted=1;
+	int child=spawn(x,"cpu-partition-acquire",NULL,-1,SCHED_OTHER,0,0,args);
+	if (child<0 || wait_child(x,child,x->c.ready_ms,0)) return -1;
+	x->partition_active=1;
+	cpu_set_t general; run_general_cpu_set(&x->c,x->mode,&general);
+	return scheduler_mask(&general,SCHED_OTHER,0);
+}
 static int prepare_environment(struct context *x)
 {
 	if (!strcmp(x->mode,"socket-only")) return 0;
@@ -357,6 +407,7 @@ static int prepare_environment(struct context *x)
 		               x->c.receiver_shared_cpus,target,NULL};
 		int partition=spawn(x,"cpu-partition-check",NULL,-1,SCHED_OTHER,0,0,check);
 		if (partition<0 || wait_child(x,partition,x->c.ready_ms,0)) return -1;
+		if (reserve_cpu_partition(x)) return -1;
 	}
 	char cpu[16]; snprintf(cpu,sizeof(cpu),"%u",x->c.rx_irq_cpu);
 	char *args[]={"bash","./monitor/prepare_env.sh",x->receiver?"receiver":"sender",
@@ -410,17 +461,19 @@ static void envnum(const char *key,uint64_t value)
 static int monitor_process(struct context *x)
 {
 	if (!x->c.monitor && !x->c.cpu_percent && !x->c.memory_workers && !x->c.io_workers && !x->c.network_bps) return -2;
-	char directory[4096],ready[4096],sampler[4096],cpu[16],duration[32]; pathf(directory,sizeof(directory),"%s/monitor",x->run_dir); pathf(ready,sizeof(ready),"%s/monitor.ready",x->run_dir);
+	char directory[4096],ready[4096],sampler[4096],cpu[16],duration[32],load_cpus[RUN_CPU_LIST_SIZE]; pathf(directory,sizeof(directory),"%s/monitor",x->run_dir); pathf(ready,sizeof(ready),"%s/monitor.ready",x->run_dir);
+	if (run_load_cpus(&x->c,x->mode,load_cpus,sizeof(load_cpus))) return -1;
 	if (pathf(sampler,sizeof(sampler),"%s/udp_socket/bin/cpu_sample",x->c.repo) || setenv("ACE_CPU_SAMPLER",sampler,1)) return -1;
 	setenv("ACE_RUN_DIR",directory,1); setenv("ACE_RUN_ID",x->run_id,1); setenv("ACE_SKIP_MANIFEST","1",1); setenv("ACE_INTERFACE",x->c.interface,1); setenv("ACE_READY_FILE",ready,1);
 	if (x->c.receiver_network_cpu<0) setenv("ACE_IPERF_CPU","inherit",1);
 	else envnum("ACE_IPERF_CPU",(unsigned)x->c.receiver_network_cpu);
 	envnum("ACE_MONITOR_ENABLED",x->c.monitor); envnum("ACE_IPERF_ENABLED",!!x->c.network_bps); envnum("ACE_IPERF_PORT",x->c.network_port); setenv("ACE_CPU_METHOD",x->c.cpu_method,1);
+	setenv("ACE_CPU_PLACEMENT",x->c.cpu_layout,1); envnum("ACE_CPU_WORKERS",x->c.cpu_workers);
 	envnum("ACE_MEMORY_WORKERS",x->c.memory_workers); setenv("ACE_MEMORY_BYTES",x->c.memory_bytes,1); envnum("ACE_IO_WORKERS",x->c.io_workers); setenv("ACE_IO_PATH",x->c.io_path,1);
 	if (x->c.load_on_sec) { envnum("ACE_LOAD_ON_SEC",x->c.load_on_sec); envnum("ACE_LOAD_OFF_SEC",x->c.load_off_sec); } else { unsetenv("ACE_LOAD_ON_SEC"); unsetenv("ACE_LOAD_OFF_SEC"); }
 	snprintf(cpu,sizeof(cpu),"%u",x->c.cpu_percent);
 	snprintf(duration,sizeof(duration),"%llu",(unsigned long long)load_lifetime_seconds(&x->c));
-	char *args[]={"bash","./monitor/controller.sh",cpu,"1",duration,x->c.cpu_cpus,NULL};
+	char *args[]={"bash","./monitor/controller.sh",cpu,"1",duration,load_cpus,NULL};
 	int n=spawn(x,"monitor",ready,-1,SCHED_OTHER,0,1,args); if (n<0 || ready_child(x,n)) return -1; return n;
 }
 static int wait_completions(struct context *x,const int children[3],unsigned timeout_ms);
@@ -455,7 +508,7 @@ static int receiver_run(struct context *x)
 	/* DONE releases sender flush; ACK confirms its network client has stopped. */
 	if (message(x,DONE,1,x->c.stop_ms) || message(x,ACK,0,x->c.stop_ms)) return -1;
 	/* Keep the iperf server alive until the peer has shut down its client. */
-	if (stop_child(x,monitor) || capture_state(x,"after") || write_run(x,"completed")) return -1;
+	if (stop_child(x,monitor) || capture_state(x,"after") || restore_cpu_partition(x) || write_run(x,"completed")) return -1;
 	return marker(x,".complete");
 }
 static int network_process(struct context *x)
@@ -538,13 +591,9 @@ static int sender_run(struct context *x)
 static int preflight(struct context *x)
 {
 	if (x->receiver && *x->c.receiver_shared_cpus) {
-		/* Test the complete requested domain before environment setup/capture.
-		 * A CPUMAP child may expand from its parent's shared affinity to CPU 3. */
+		/* The ordinary baseline must be able to use the complete device domain. */
 		cpu_set_t original, required=x->c.receiver_shared_mask;
 		if (sched_getaffinity(0,sizeof(original),&original)) return -1;
-		for (unsigned m=0;m<x->c.mode_count;m++)
-			if (!strcmp(x->c.modes[m],"mixed"))
-				CPU_SET(x->c.receiver_cpumap_cpu,&required);
 		int error=apply_cpu_set(&required), saved=errno;
 		if (apply_cpu_set(&original)) return -1;
 		if (error) { errno=saved; fprintf(stderr,"requested receiver CPUs are not all available\n"); return -1; }
@@ -556,7 +605,7 @@ static int preflight(struct context *x)
 	if (x->receiver && x->c.monitor && access("udp_socket/bin/cpu_sample",X_OK)) { perror("missing CPU sampler"); return -1; }
 	if (access("monitor/prepare_env.sh",R_OK) || access("monitor/set_irq_affinity.sh",R_OK)) { perror("missing environment helpers"); return -1; }
 	if (x->receiver) for (unsigned m=0;m<x->c.mode_count;m++) if (strcmp(x->c.modes[m],"socket-only")) {
-		if (*x->c.receiver_shared_cpus && access("monitor/check_cpu_partition.sh",R_OK)) {
+		if (*x->c.receiver_shared_cpus && (access("monitor/check_cpu_partition.sh",R_OK) || access("monitor/cpu_partition.sh",R_OK))) {
 			perror("missing CPU partition check"); return -1;
 		}
 		const char *bpf[]={"BPF/xdp_loader","udp_socket/bin/phc_calibrate",NULL};
@@ -567,12 +616,27 @@ static int preflight(struct context *x)
 	}
 	return 0;
 }
+static int lock_cpu_partition(struct context *x)
+{
+	if (!x->receiver || !*x->c.receiver_shared_cpus) return 0;
+	unsigned devices=0;
+	for (unsigned m=0;m<x->c.mode_count;m++) devices+=strcmp(x->c.modes[m],"socket-only")!=0;
+	if (!devices) return 0;
+	x->partition_lock=open("/run/lock/ace-cpu-partition.lock",O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW,0600);
+	if (x->partition_lock<0) return -1;
+	struct stat st;
+	if (fstat(x->partition_lock,&st) || !S_ISREG(st.st_mode) || st.st_uid!=geteuid() ||
+	    flock(x->partition_lock,LOCK_EX|LOCK_NB)) {
+		close(x->partition_lock); x->partition_lock=-1; errno=EBUSY; return -1;
+	}
+	return 0;
+}
 int main(int argc,char **argv)
 {
 	if (argc!=4 || strcmp(argv[2],"--config") || (strcmp(argv[1],"receiver") && strcmp(argv[1],"sender") && strcmp(argv[1],"plan"))) {
 		fprintf(stderr,"Usage: ace-run {receiver|sender|plan} --config FILE\n"); return 2;
 	}
-	struct context x={.fd=-1};
+	struct context x={.fd=-1,.partition_lock=-1};
 	if (read_run_config(argv[3],&x.c)) { perror("configuration"); return 2; }
 	if (!strcmp(argv[1],"plan")) {
 		printf("run_id=%s sha256=%s repeats=%u\n",x.c.run_id,x.c.digest,x.c.repeats);
@@ -591,6 +655,7 @@ int main(int argc,char **argv)
 		scheduler(x.receiver?x.c.receiver_supervisor_cpu:x.c.sender_supervisor_cpu,SCHED_OTHER,0);
 	if (placement) { perror("runner CPU placement"); return 1; }
 	if (preflight(&x)) { perror("preflight"); return 1; }
+	if (lock_cpu_partition(&x)) { perror("receiver CPU partition lock"); return 1; }
 	if (x.c.output[0]!='/') { if (pathf(output,sizeof(output),"%s/%s",x.c.repo,x.c.output)) return 1; strcpy(x.c.output,output); }
 	if (pathf(x.suite,sizeof(x.suite),"%s/%s/%s",x.c.output,x.c.run_id,argv[1])) return 1;
 	char runs[4096]; if (pathf(runs,sizeof(runs),"%s/runs",x.suite) || mkdir_parents(runs)) { perror("create run directories"); return 1; }
@@ -604,8 +669,9 @@ int main(int argc,char **argv)
 		else { printf("%s: %s\n",argv[1],x.run_id); fflush(stdout); if (x.receiver?receiver_run(&x):sender_run(&x)) { perror("run failed"); failed=1; } }
 		if (failed) {
 			(void)message(&x,FAIL,1,1000); cleanup_children(&x);
+			if (restore_cpu_partition(&x)) perror("CPU partition restoration failed");
 			if (x.owns_run) { (void)write_run(&x,"failed"); (void)marker(&x,".failed"); }
 		}
 	}
-	close(x.fd); return failed?1:0;
+	close(x.fd); if (x.partition_lock>=0) close(x.partition_lock); return failed?1:0;
 }

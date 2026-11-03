@@ -129,7 +129,12 @@ class NativeRunnerTests(unittest.TestCase):
             self.assertTrue(conditions)
             self.assertEqual(conditions[0]['environment']['sender_network_cpu'], 3)
             self.assertEqual(conditions[0]['environment']['receiver_supervisor_cpu'], -1)
-            self.assertEqual(conditions[0]['environment']['receiver_shared_cpus'], '0,1,2')
+            self.assertEqual(conditions[0]['environment']['receiver_available_cpus'], '0,1,2,3')
+            for condition in conditions:
+                active = condition['mode']=='mixed' and any(f['flow_id']==2 for f in condition['flows'])
+                self.assertEqual(condition['environment']['receiver_cpumap_active'], active)
+                self.assertEqual(condition['environment']['receiver_shared_cpus'],
+                                 '0,1,2' if active else '0,1,2,3')
 
     def test_mismatched_configuration_is_rejected(self):
         other = self.directory / "other.conf"
@@ -203,18 +208,21 @@ int main(int argc, char **argv) {
 
     def test_shared_mask_paths_and_plan_validation(self):
         base = self.base.replace('modes=socket-only', 'modes=all-pass,pass-xsk,mixed')
-        shared = base + 'receiver.shared_cpus=0-2\nreceiver.cpumap_cpu=3\n'
+        shared = base + 'receiver.shared_cpus=0-3\nreceiver.cpumap_cpu=3\n'
         self.config.write_text(shared)
         conditions = [json.loads(line) for line in self.complete(self.launch('plan')).splitlines()[1:]]
         for condition in conditions:
-            self.assertEqual(condition['environment']['receiver_shared_cpus'], '0,1,2')
+            general = '0,1,2' if condition['mode']=='mixed' else '0,1,2,3'
+            self.assertEqual(condition['environment']['receiver_available_cpus'], '0,1,2,3')
+            self.assertEqual(condition['environment']['receiver_shared_cpus'], general)
+            self.assertEqual(condition['environment']['receiver_cpumap_active'], condition['mode']=='mixed')
             self.assertEqual(condition['environment']['receiver_cpumap_cpu'], 3)
-            expected = ['0,1,2', '3' if condition['mode'] == 'mixed' else '0,1,2', '0,1,2']
+            expected = [general, '3' if condition['mode'] == 'mixed' else general, general]
             self.assertEqual([flow['rx_cpus'] for flow in condition['flows']], expected)
             self.assertEqual([flow['rx_cpu'] for flow in condition['flows']],
                              [-1, 3 if condition['mode'] == 'mixed' else -1, -1])
-        for value in ('', '0,,1', '2-0', '0,0', '0-2,2', '0-3', '0,1,1024', 'inherit', '0,1,'):
-            self.config.write_text(shared.replace('receiver.shared_cpus=0-2', 'receiver.shared_cpus='+value))
+        for value in ('', '0,,1', '2-0', '0,0', '0-2,2', '0-2', '3', '0,1,1024', 'inherit', '0,1,'):
+            self.config.write_text(shared.replace('receiver.shared_cpus=0-3', 'receiver.shared_cpus='+value))
             self.complete(self.launch('plan'), False)
         for text in (
             shared.replace('receiver.cpumap_cpu=3', 'receiver.cpumap_cpu=2'),
@@ -230,14 +238,37 @@ int main(int argc, char **argv) {
             self.config.write_text(text)
             self.complete(self.launch('plan'), False)
 
+        # A mixed classifier without its CPUMAP flow leaves every CPU shared.
+        self.config.write_text(shared.replace('flow2.enabled=1', 'flow2.enabled=0'))
+        conditions = [json.loads(line) for line in self.complete(self.launch('plan')).splitlines()[1:]]
+        for condition in conditions:
+            self.assertFalse(condition['environment']['receiver_cpumap_active'])
+            self.assertEqual(condition['environment']['receiver_shared_cpus'], '0,1,2,3')
+            self.assertEqual([flow['rx_cpus'] for flow in condition['flows']], ['0,1,2,3']*2)
+
+        text = shared.replace('load.cpu_cpus=', 'load.cpu_cpus=0,1,2,3')
+        text += 'load.cpu_layout=shared\nload.cpu_workers=3\n'
+        self.config.write_text(text)
+        conditions = [json.loads(line) for line in self.complete(self.launch('plan')).splitlines()[1:]]
+        for condition in conditions:
+            self.assertEqual(condition['load']['cpu_workers'], 3)
+            self.assertEqual(condition['load']['cpu_layout'], 'shared')
+            self.assertEqual(condition['load']['cpu_cpus'], condition['environment']['receiver_shared_cpus'])
+        for invalid in (text.replace('load.cpu_workers=3', 'load.cpu_workers=0'),
+                        text.replace('load.cpu_workers=3\n', ''),
+                        text.replace('load.cpu_cpus=0,1,2,3', 'load.cpu_cpus=0,1,2')):
+            self.config.write_text(invalid)
+            self.complete(self.launch('plan'), False)
+
     def test_shared_receiver_mask_is_applied_to_live_socket_children(self):
-        shared = [cpu for cpu in sorted(os.sched_getaffinity(0)) if cpu != 3][:3]
-        if len(shared) < 2:
-            self.skipTest('two non-CPUMAP CPUs are required for shared-affinity checks')
+        available = sorted(os.sched_getaffinity(0))
+        shared = sorted([cpu for cpu in available if cpu != 3][:3] + [3])
+        if 3 not in available or len(shared) < 2:
+            self.skipTest('CPU3 and a general CPU are required for shared-affinity checks')
         cpulist = ','.join(map(str, shared))
         self.config.write_text(self.base.replace('duration_ms=100', 'duration_ms=1000') +
                                f'receiver.shared_cpus={cpulist}\nreceiver.cpumap_cpu=3\n'
-                               f'environment.rx_irq_cpu={shared[0]}\nverify_placement=1\n')
+                               f'environment.rx_irq_cpu={next(cpu for cpu in shared if cpu!=3)}\nverify_placement=1\n')
         receiver = self.launch('receiver')
         sender = self.launch('sender')
         deadline = time.monotonic()+8
@@ -264,12 +295,12 @@ int main(int argc, char **argv) {
 
     def test_cpumap_only_moves_the_important_receiver_out_of_shared_mask(self):
         available = sorted(os.sched_getaffinity(0))
-        shared = [cpu for cpu in available if cpu != 3][:3]
-        if len(shared) < 2:
-            self.skipTest('two shared CPUs are required')
+        shared = sorted([cpu for cpu in available if cpu != 3][:3]+[3])
+        if 3 not in available or len(shared) < 2:
+            self.skipTest('CPU3 and a general CPU are required')
         self.config.write_text(self.base.replace('repo=AUTO', f'repo={ROOT}') +
                                f'receiver.shared_cpus={",".join(map(str, shared))}\n'
-                               f'receiver.cpumap_cpu=3\nenvironment.rx_irq_cpu={shared[0]}\n'
+                               f'receiver.cpumap_cpu=3\nenvironment.rx_irq_cpu={next(cpu for cpu in shared if cpu!=3)}\n'
                                'verify_placement=1\n')
         source = self.directory/'shared-receiver.c'
         source.write_text(r'''
@@ -295,8 +326,7 @@ int main(int argc, char **argv) {
                         '-I', str(ROOT/'include'), str(source), str(ROOT/'experiment/run_config.c'),
                         str(ROOT/'experiment/ace_manifest.c'), '-o', str(binary)], check=True)
         modes = [('all-pass', shared), ('pass-xsk', shared)]
-        if 3 in available:
-            modes.append(('mixed', [3]))
+        modes.append(('mixed', [3]))
         for mode, expected in modes:
             run = self.directory/mode
             run.mkdir()
@@ -313,7 +343,7 @@ int main(int argc, char **argv) {
         if not available or 1023 in available:
             self.skipTest('requires an available general CPU and unavailable CPU1023')
         self.config.write_text(self.base +
-                               f'receiver.shared_cpus={available[0]},1023\n'
+                               f'receiver.shared_cpus={available[0]},3,1023\n'
                                f'receiver.cpumap_cpu=3\nenvironment.rx_irq_cpu={available[0]}\n')
         output = self.complete(self.launch('receiver'), False)
         self.assertIn('runner CPU placement', output)
@@ -330,7 +360,7 @@ int main(int argc, char **argv) {
     assert(argc==4);
     struct context x={.fd=-1,.receiver=1};
     x.c.ready_ms=1000; x.c.stop_ms=1000; x.c.receiver_cpumap_cpu=3;
-    strcpy(x.c.receiver_shared_cpus,"0,1,2");
+    strcpy(x.c.receiver_shared_cpus,"0,1,2,3");
     strcpy(x.c.interface,"eth0"); strcpy(x.c.governor,"performance");
     x.c.rx_irq_cpu=2;
     strcpy(x.mode,argv[1]); strcpy(x.run_dir,argv[2]);
@@ -353,7 +383,7 @@ int main(int argc, char **argv) {
         rejected.mkdir()
         subprocess.run([str(binary), 'mixed', str(rejected), '0'], cwd=fixture,
                        check=True, timeout=5, capture_output=True)
-        self.assertEqual((fixture/'checked').read_text().strip(), 'eth0 0,1,2 3')
+        self.assertEqual((fixture/'checked').read_text().strip(), 'eth0 0,1,2,3 3')
         self.assertFalse((fixture/'mutated').exists())
         # Operational socket smoke skips machine-level checks and mutation.
         smoke = self.directory/'smoke-partition'
@@ -367,6 +397,102 @@ int main(int argc, char **argv) {
         subprocess.run([str(binary), 'mixed', str(accepted), '1'], cwd=fixture,
                        check=True, timeout=5, capture_output=True)
         self.assertTrue((fixture/'mutated').exists())
+
+    def test_dynamic_partition_child_join_and_signal_cleanup(self):
+        available = sorted(os.sched_getaffinity(0))
+        if 3 not in available or len(available)<2:
+            self.skipTest('CPU3 and a general CPU are required')
+        shared = sorted([cpu for cpu in available if cpu!=3][:3]+[3])
+        irq = next(cpu for cpu in shared if cpu!=3)
+        cpulist = ','.join(map(str,shared))
+        fixture = self.directory/'dynamic-fixture'
+        (fixture/'monitor').mkdir(parents=True)
+        (fixture/'udp_socket').symlink_to(ROOT/'udp_socket', target_is_directory=True)
+        # Source-path fixtures keep machine settings untouched while exercising
+        # the real C lifecycle, real receiver child, and interrupt cleanup.
+        (fixture/'monitor/check_cpu_partition.sh').write_text('#!/bin/bash\nexit 0\n')
+        (fixture/'monitor/prepare_env.sh').write_text('#!/bin/bash\nexit 0\n')
+        helper = fixture/'monitor/cpu_partition.sh'
+        helper.write_text('''#!/bin/bash
+set -e
+if [[ $1 == acquire ]]; then
+  printf acquired > "$5/acquired"
+  [[ ! -e fail-acquire ]]
+else
+  if [[ -s "$3/cgroup.procs" ]]; then
+    pid=$(cat "$3/cgroup.procs")
+    if kill -0 "$pid" 2>/dev/null; then exit 25; fi
+  fi
+  printf released > "$3/released"
+  [[ ! -e fail-release ]]
+fi
+''')
+        self.config.write_text(self.base.replace('repo=AUTO', f'repo={fixture}')+
+                               f'receiver.shared_cpus={cpulist}\nreceiver.cpumap_cpu=3\n'
+                               f'environment.rx_irq_cpu={irq}\nverify_placement=1\n')
+        source = self.directory/'dynamic-cleanup.c'
+        source.write_text(r'''
+#define main native_runner_main
+#include "experiment/ace-run.c"
+#undef main
+#include <assert.h>
+int main(int argc,char **argv) {
+    assert(argc==5);
+    struct context x={.fd=-1,.receiver=1,.index=1,.partition_lock=-1};
+    assert(read_run_config(argv[1],&x.c)==0);
+    assert(chdir(x.c.repo)==0);
+    strcpy(x.mode,"mixed"); strcpy(x.run_dir,argv[2]);
+    assert(scheduler_mask(&x.c.receiver_shared_mask,SCHED_OTHER,0)==0);
+    int prepared=prepare_environment(&x);
+    assert((prepared==0)==atoi(argv[3]));
+    assert(x.partition_attempted);
+    if (prepared==0) {
+        cpu_set_t general,actual;
+        run_general_cpu_set(&x.c,x.mode,&general);
+        assert(sched_getaffinity(0,sizeof(actual),&actual)==0 && CPU_EQUAL(&general,&actual));
+        /* Only this private fixture substitutes a normal cgroup.procs file. */
+        strcpy(x.partition_group,x.run_dir);
+        int child=receiver_process(&x,1); assert(child>=0);
+        char path[4096]; pathf(path,sizeof(path),"%s/cgroup.procs",x.run_dir);
+        FILE *in=fopen(path,"r"); long moved=0;
+        assert(in && fscanf(in,"%ld",&moved)==1); fclose(in);
+        assert(moved==x.child[child].pid);
+    }
+    stopping=1;
+    cleanup_children(&x);
+    int restored=restore_cpu_partition(&x);
+    assert((restored==0)==atoi(argv[4]));
+    if (restored==0) {
+        cpu_set_t actual; assert(!x.partition_attempted && !x.partition_active);
+        assert(sched_getaffinity(0,sizeof(actual),&actual)==0);
+        assert(CPU_EQUAL(&actual,&x.c.receiver_shared_mask));
+        assert(restore_cpu_partition(&x)==0);
+    } else assert(x.partition_attempted);
+    return 0;
+}
+''')
+        binary = self.directory/'dynamic-cleanup'
+        subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-I',str(ROOT),
+                        '-I',str(ROOT/'include'),str(source),str(ROOT/'experiment/run_config.c'),
+                        str(ROOT/'experiment/ace_manifest.c'),'-o',str(binary)],check=True)
+        for scenario, prepared, restored in (('success',1,1),('fail-acquire',0,1),('fail-release',1,0)):
+            with self.subTest(scenario=scenario):
+                run = self.directory/scenario
+                run.mkdir()
+                (run/'cgroup.procs').touch()
+                if scenario!='success':
+                    (fixture/scenario).touch()
+                result = subprocess.run([str(binary),str(self.config),str(run),str(prepared),str(restored)],
+                                        cwd=fixture,capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertTrue((run/'acquired').exists())
+                self.assertTrue((run/'released').exists())
+                if prepared:
+                    placement=json.loads((run/'receiver-flow2.placement.json').read_text())
+                    self.assertEqual(placement['cpus'],[3])
+                    self.assertTrue(placement['verified'])
+                if scenario!='success':
+                    (fixture/scenario).unlink()
 
     def test_pass_xsk_preflight_requires_direct_receiver_only_when_enabled(self):
         source = self.directory / 'preflight.c'
@@ -543,7 +669,7 @@ int main(int argc, char **argv) {
                     self.assertEqual(flow['tx_priority'], [0, 80, 70][index])
                     expected_rx_cpu = 3 if index == 1 and mode['mode'] == 'mixed' else -1
                     self.assertEqual(flow['rx_cpu'], expected_rx_cpu)
-                    self.assertEqual(flow['rx_cpus'], '3' if expected_rx_cpu==3 else '0,1,2')
+                    self.assertEqual(flow['rx_cpus'], '3' if expected_rx_cpu==3 else mode['environment']['receiver_shared_cpus'])
 
     def test_native_partial_control_frame_timeout_and_placement_mismatch(self):
         # Exercise production C helpers with socketpair and the current process;
@@ -606,7 +732,7 @@ int main(void) {
                               expected_modes=['socket-only'], repeats=2,
                               references=['operational-test'], sha256=hashlib.sha256(text.encode()).hexdigest()))
         (plan_dir/'execution.json').write_text(json.dumps(dict(
-            design='D01-D11', design_revision='shared-three-path-165-v2', cases=cases)))
+            design='D01-D11', design_revision='mode-partition-165-v3', cases=cases)))
         wrapper = str(ROOT/'experiment/run_matrix.sh')
         for role in ('receiver', 'sender'):
             process = subprocess.Popen([wrapper, role, '--plan-dir', str(plan_dir)], cwd=ROOT,

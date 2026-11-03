@@ -54,6 +54,46 @@ class LoadControllerTests(unittest.TestCase):
         self.assertNotEqual(p.returncode,0)
         self.assertFalse(self.ready.exists())
 
+    def test_shared_workers_inherit_the_complete_general_cpu_set(self):
+        available = sorted(os.sched_getaffinity(0))
+        selected = available[:min(4, len(available))]
+        cpus = ','.join(map(str, selected))
+        evidence = self.folder/'worker-evidence'
+        # This child stands in for stress-ng and inherits taskset's actual mask.
+        self.fake('stress-ng', f'''printf '%s\\n' "$@" > "{evidence}.args"
+grep Cpus_allowed_list /proc/$$/status > "{evidence}.cpus"
+trap 'exit 0' TERM INT
+while :; do sleep 1; done''')
+        self.env.update(ACE_CPU_PLACEMENT='shared', ACE_CPU_WORKERS='3')
+        p = self.start(['100', '1', '10', cpus])
+        self.await_ready(p)
+        args = Path(str(evidence)+'.args').read_text().splitlines()
+        self.assertEqual(args[args.index('--cpu')+1], '3')
+        self.assertEqual(args[args.index('--cpu-load')+1], '100')
+        actual = Path(str(evidence)+'.cpus').read_text().split(':', 1)[1].strip()
+        parsed = set()
+        for part in actual.split(','):
+            bounds = part.split('-')
+            parsed.update(range(int(bounds[0]), int(bounds[-1])+1))
+        self.assertEqual(parsed, set(selected))
+        p.terminate(); out, err = p.communicate(timeout=6)
+        self.assertEqual(p.returncode, 0, (out, err))
+        result = self.folder/'result'
+        self.assertTrue((result/'stress_cpu_shared.log').is_file())
+        self.assertEqual(len(list(result.glob('stress_cpu*.log'))), 1)
+        config = dict(line.split('=', 1) for line in (result/'config.txt').read_text().splitlines())
+        self.assertEqual(config['cpu_workers'], '3')
+        self.assertEqual(config['cpu_placement'], 'shared')
+        self.assertEqual(config['load_cpus'], cpus)
+
+    def test_invalid_shared_worker_count_fails_before_output(self):
+        self.env.update(ACE_CPU_PLACEMENT='shared', ACE_CPU_WORKERS='0')
+        p = self.start(['100', '1', '2', str(min(os.sched_getaffinity(0)))])
+        out, err = p.communicate(timeout=3)
+        self.assertNotEqual(p.returncode, 0, (out, err))
+        self.assertFalse((self.folder/'result').exists())
+        self.assertIn('shared CPU placement requires CPU workers', err)
+
     def test_failed_child_never_reports_ready(self):
         self.fake('iperf3','echo preparation-failed; exit 7')
         self.env['ACE_IPERF_ENABLED']='1'
