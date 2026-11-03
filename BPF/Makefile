@@ -65,11 +65,11 @@ xdp_kern.skel.h: xdp_kern.o | check-bpf-tools
 
 xdp_loader: xdp_loader.c xdp_kern.skel.h config.h metadata.h \
 		../include/ace_packet_abi.h ../include/ace_hwtstamp.h \
-		../include/ace_process.h | check-libbpf
+		../include/ace_process.h ../include/ace_run_control.h | check-libbpf
 	$(CC) $(CFLAGS) $(WARNINGS) $(LIBBPF_CFLAGS) $< -o $@ $(LIBBPF_LIBS)
 
 afxdp_recv: afxdp_recv.c config.h metadata.h ../include/ace_packet_abi.h \
-		../include/ace_process.h | check-libbpf check-libxdp
+		../include/ace_process.h ../include/ace_run_control.h afxdp_run_control.h | check-libbpf check-libxdp
 	$(CC) $(CFLAGS) $(WARNINGS) $(LIBBPF_CFLAGS) $(LIBXDP_CFLAGS) $< -o $@ \
 		$(LIBXDP_LIBS) $(LIBBPF_LIBS)
 

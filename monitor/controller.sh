@@ -19,12 +19,19 @@
 #   0       -> CPU0
 #   0,1,2   -> CPU0, CPU1, CPU2 각각 부하
 #   0,1,2,3 -> CPU0~CPU3 전체 부하
+#
+# ace-run uses ACE_SKIP_MANIFEST=1 to delegate to run_load.sh. Its shared
+# placement runs ACE_CPU_WORKERS workers on the complete LOAD_CPUS mask;
+# CPU_LOAD is the requested intensity per worker.
 # ============================================================
 
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
+if [ "${ACE_SKIP_MANIFEST:-0}" = 1 ]; then
+    exec bash "${SCRIPT_DIR}/run_load.sh" "$@"
+fi
 RESULT_ROOT=${ACE_RESULT_ROOT:-"${PROJECT_DIR}/results"}
 INTERFACE=${ACE_INTERFACE:-eth0}
 

@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-29",
+  "scope": "temporary RAM copy; offline and loopback only",
+  "deployed_to_experiment_directory": false,
+  "system_settings_changed": false,
+  "offline_script": "tests/run_offline.sh",
+  "python_suites": [
+    42,
+    41,
+    7
+  ],
+  "python_tests_passed": 90,
+  "raw_log_sha256": "e53a72d6879f9c52fa7987bef52e27b6b65f428d0d5559ac9aee414ab3c8962d",
+  "checks": [
+    "native parser accepts 18 generated fixture configs",
+    "role-specific supervisor CPU affinity",
+    "real loopback iperf server/client CPU affinity",
+    "unresolved profile rejection",
+    "draft contains no executable configs",
+    "deduplicated 15 main conditions"
+  ],
+  "formal_profile_status": "unresolved",
+  "note": "Fixture policy/priority/load values are test inputs, not adopted experimental values."
+}

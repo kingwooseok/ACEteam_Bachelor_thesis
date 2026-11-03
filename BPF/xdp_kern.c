@@ -5,6 +5,7 @@
 //   UDP/9000 -> requested PASS path
 //   UDP/9001 -> requested CPUMAP path (CPU 3)
 //   UDP/9002 -> requested XSK path (current receiver uses XDP_COPY)
+// pass-xsk keeps UDP/9001 on PASS; all-pass keeps all three on PASS.
 //
 // requested_path records the classifier decision.  It is not proof that a
 // redirect was delivered; consumers and redirect/error counters provide that
@@ -23,6 +24,9 @@
 
 #include "config.h"
 #include "metadata.h"
+
+/* Set by the loader before load; immutable throughout one measured run. */
+const volatile __u32 forwarding_mode = ACE_FORWARD_MIXED;
 
 #define ETH_P_IP                0x0800
 #define ACE_IPV4_FRAGMENT_MASK  0x3fff /* MF plus fragment offset; DF excluded */
@@ -351,6 +355,8 @@ int xdp_dispatch(struct xdp_md *ctx)
 
 	count_stat(ACE_XDP_STAT_TOTAL);
 	parsed = parse_experiment_packet(ctx, &packet_key, &requested_path);
+	requested_path = ace_effective_requested_path(forwarding_mode,
+						     requested_path);
 	if (parsed > 0 &&
 	    !prepare_measurement_metadata(ctx, &packet_key, requested_path,
 					  initial_xdp_ns))

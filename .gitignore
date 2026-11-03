@@ -126,6 +126,7 @@ BPF/*.o
 BPF/xdp_kern.skel.h
 BPF/xdp_loader
 BPF/afxdp_recv
+experiment/ace-run
 __pycache__/
 *.py[cod]
 results/

@@ -2,38 +2,67 @@
 
 이 디렉터리는 졸업논문 성능 실험에서 사용하는 **실험 실행 자동화**, **실험 환경 검증**, **이상 결과 원인 분석** 도구를 정리한다.
 
-핵심 자동화 스크립트는 `controller.sh`이며, 수신기에서 다음 작업을 한 번에 수행한다.
+정식 실험의 준비·송수신·종료는 `experiment/ace-run`이 제어하며,
+이 디렉터리의 `run_load.sh`와 `network_load.sh`를 통해 부하·관측을 실행한다.
+`controller.sh`는 다음 작업을 묶어 사용하는 단독 실행 도구다.
 
 - `iperf3` 서버 실행
-- `mpstat` 기반 CPU 사용률 측정
+- 단독 controller는 `mpstat`, `ace-run`은 MONOTONIC 기반 C 관측기로 CPU 사용률 측정
 - `sar` 기반 `eth0` 네트워크 사용량 측정
 - `stress-ng` 기반 지정 CPU 부하 생성
 - 실험 설정 및 로그 자동 저장
 - 실험 종료 또는 `Ctrl+C` 입력 시 실행한 프로세스 정리
 
-실험 환경 검증에는 다음 두 스크립트를 사용한다.
+실험 환경 검증에는 다음 스크립트를 사용한다.
 
 - `verify_cyclictest.sh`
   - Case 1과 Case 2의 scheduling latency 비교
 - `verify_irq_affinity.sh`
   - Case 2에서 NIC IRQ affinity가 실제 기대 CPU에서 동작하는지 검증
+- `check_cpu_partition.sh`
+  - CPU 0~3의 일반 사용 가능 상태와 RPS·NAPI 실행 설정을 읽어 검사
+- `cpu_partition.sh`
+  - 실행기의 요청으로 CPU 3 전용 영역을 만들고, 종료·실패 정리 후 반환
 
 `controller.sh`는 시스템 부하와 상태를 관리·관찰하기 위한 스크립트이며, **애플리케이션의 OWD/latency 자체를 측정하는 도구는 아니다.** 핵심 latency 결과와 함께 시스템 로그를 비교하여 Case별 성능 차이와 이상 결과의 원인을 분석하는 용도로 사용한다.
 
 ---
 
-## 1. 실험 Case
+## 1. 현재 본실험 구성
 
-현재 실험은 다음 Case를 기준으로 비교한다.
+PREEMPT_RT를 공통 실행 기반으로 두고 세 계측 흐름을 각각 1,000 PPS로 유지한다.
+CPU 연산 부하 끔/켬 × iperf3 배경 네트워크 부하 끔/고부하의 네 조건에서
+아래 세 수신 구성을 비교한다.
 
-| Case | 구성 |
+| 구성 | 수신 경로와 실행 영역 |
 |---|---|
-| Case 1 | Vanilla |
-| Case 2 | PREEMPT_RT + IRQ affinity |
-| Case 3 | PREEMPT_RT + XDP + CPUMAP |
-| Case 4 | AF_XDP |
+| all-pass | 세 흐름 모두 Linux 소켓 수신, CPU 0·1·2·3 공유 |
+| pass-xsk | 중요2만 AF_XDP 추가, 수신 앱은 모두 CPU 0·1·2·3 공유 |
+| mixed | 중요1의 커널 처리·수신만 CPUMAP CPU 3, 나머지는 0·1·2 공유 |
 
-`controller.sh`는 특정 Case에 종속되지 않으며 각 Case에서 동일한 방식으로 기본 부하와 시스템 모니터링을 수행할 수 있다.
+CPU 부하는 세 구성 모두 같은 세 워커를 사용한다. 각 워커는 일반 실행 영역 전체를
+공유하며 all-pass·pass-xsk에서 CPU 0~3, 활성 CPUMAP 중요1이 있는 mixed에서 CPU 0~2를
+허용한다. 배경 네트워크·관리·관측과 일반 Linux 작업도 이 영역을 사용한다.
+CPU 3 전용 수신은 mixed의 중요1 실행 중에 적용하고 종료 후 반환한다.
+iperf3의 UDP/5201 트래픽은 PASS로 일반 커널 스택에서 처리한다.
+실제 일반 통신 부하는 9000번 계측 흐름과 iperf3 배경 트래픽을 합한 양이다.
+실행표는 본실험 60회와 단독 15회, 총 75회이며
+[실험 준비 안내](../experiment/design/배포전_준비사항.md)에 있다.
+
+수신 Pi는 CPU 0~3이 일반 스케줄링에 참여하는 상태로 준비한다.
+기존 `isolcpus=domain,3` 고정 격리가 있으면 제거하고 재부팅한다.
+실행 전에는 다음 읽기 전용 검사를 수행한다.
+
+```bash
+bash monitor/check_cpu_partition.sh eth0 0,1,2,3 3
+```
+
+`ace-run`은 cgroup v2 partition으로 CPU 3을 예약하며 실제 일반 작업의 허용 CPU도 함께
+전환한다. 예약·반환 기록은 해당 run의 `cpu-partition-active.json`,
+`cpu-partition-restored.json`에 남는다. 이 전환은 패킷 측정 전후에 수행한다.
+
+아래 환경 검증 도구의 Case 1(Vanilla)·Case 2(PREEMPT_RT)는 커널 도입 시의 검증 명칭이다.
+본실험의 세 수신 구성은 `mode`로 기록한다.
 
 ---
 
@@ -44,6 +73,10 @@
 ```text
 .
 ├── controller.sh
+├── run_load.sh
+├── network_load.sh
+├── check_cpu_partition.sh
+├── cpu_partition.sh
 ├── verify_cyclictest.sh
 ├── verify_irq_affinity.sh
 ├── LOG_GUIDE.md
@@ -65,7 +98,22 @@ results/
     └── stress_cpuN.log
 ```
 
-CPU 부하를 여러 코어에 적용하면 `stress_cpu0.log`, `stress_cpu1.log`처럼 CPU별 로그가 각각 생성된다.
+수동 CPU 고정 부하는 `stress_cpu0.log`, `stress_cpu1.log`처럼 CPU별 로그를 생성한다.
+최신 본실험의 공유 부하는 세 워커의 결과를 `stress_cpu_shared.log`에 기록한다.
+
+`ace-run`이 `ACE_SKIP_MANIFEST=1`로 호출하는 `run_load.sh` 경로에서는 실행 중
+`mpstat`, `sar`, `stress-ng`, 수신기 `iperf3`와 ON/OFF 단계 로그를
+`/dev/shm/ace-monitor.<run_id>.*`의 전용 tmpfs 디렉터리에 기록한다.
+모든 native 자식 프로세스를 종료한 뒤 최종 결과 디렉터리에 로그를 배타적으로
+생성하고 저장한다. `config.txt`와 READY 표시는 준비 단계에 기록한다.
+기존 로그가 있거나 저장에 실패하면 덮어쓰지 않고 비정상 종료하며, 복구할 수
+있도록 tmpfs 원본과 그 경로를 남긴다. tmpfs는 재부팅 시 사라지므로 오류에 나온
+경로의 로그를 재부팅 전에 복사한다.
+
+송신기의 `network_load.sh`도 iperf 출력과 ON/OFF 단계 로그를
+`/dev/shm/ace-network.*`에 기록한 뒤 종료 시 원래 stdout으로 내보낸다.
+따라서 측정 중 관측 로그 저장에 따른 디스크 쓰기는 발생하지 않는다.
+설정한 `stress-ng` 메모리·I/O 부하는 실험 조건에 따라 그대로 실행한다.
 
 ### verify_cyclictest.sh 결과
 
@@ -132,7 +180,7 @@ stress-ng CPU 부하 시작
 ./controller.sh <CPU_LOAD> <INTERVAL> <DURATION> <LOAD_CPUS>
 ```
 
-예시:
+수동 CPU 고정 부하 예시:
 
 ```bash
 ./controller.sh 50 1 60 0,1,2
@@ -148,6 +196,10 @@ stress-ng CPU 부하 시작
 | `INTERVAL` | `mpstat`, `sar` 측정 주기 | 1 이상의 정수, 단위: 초 |
 | `DURATION` | 전체 controller 실행 시간 | 1 이상의 정수, 단위: 초 |
 | `LOAD_CPUS` | `stress-ng`를 실행할 CPU 목록 | 예: `0`, `0,1,2`, `0,1,2,3` |
+
+최신 `ace-run`은 `run_load.sh`에 `ACE_CPU_PLACEMENT=shared`, `ACE_CPU_WORKERS=3`과
+구성별 CPU 허용 집합을 전달한다. 세 워커가 같은 허용 집합을 함께 사용하고,
+`CPU_LOAD`는 워커별 목표 강도가 된다. 실험 입력에서는 세 구성 모두 워커 수와 강도를 유지한다.
 
 현재 스크립트는 `INTERVAL`과 `DURATION`에 **정수 초만 허용**한다. 예를 들어 `0.001`과 같은 소수 단위 주기는 사용할 수 없다.
 
@@ -180,8 +232,8 @@ chmod +x verify_irq_affinity.sh
 | `iperf3` | 수신기 네트워크 부하용 서버 | `iperf3.log` |
 | `mpstat` | 전체 및 CPU별 사용률 측정 | `mpstat.log` |
 | `sar` | `eth0` 송수신 트래픽 측정 | `network.log` |
-| `stress-ng` | 지정 CPU에 목표 부하 생성 | `stress_cpuN.log` |
-| `taskset` | `stress-ng`를 지정 CPU에 고정 | 별도 로그 없음 |
+| `stress-ng` | 공유 영역 또는 지정 CPU에 목표 부하 생성 | `stress_cpu_shared.log` 또는 `stress_cpuN.log` |
+| `taskset` | `stress-ng`의 CPU 허용 집합 적용 | 별도 로그 없음 |
 
 `mpstat`와 `sar`는 일반적으로 `sysstat` 패키지에 포함된다.
 
@@ -201,6 +253,9 @@ duration=60
 ```
 
 실험 결과를 비교할 때 먼저 이 파일로 해당 run의 조건을 확인한다.
+
+최신 본실험의 공유 부하 기록에는 `cpu_placement=shared`, `cpu_workers=3`,
+실제 `load_cpus`와 워커별 `cpu_load`를 함께 남긴다.
 
 ### 5.2 iperf3.log
 
@@ -230,9 +285,12 @@ sar -n DEV --iface=eth0 <INTERVAL>
 
 `eth0`의 패킷 수와 송수신량을 기록한다. 설정한 송신 부하와 별개로 **수신기 인터페이스에서 실제로 관측된 트래픽**을 확인하는 용도이다.
 
-### 5.5 stress_cpuN.log
+### 5.5 CPU 부하 로그
 
-각 CPU에서 실행한 `stress-ng --metrics-brief` 결과를 저장한다.
+본실험은 `stress_cpu_shared.log`에 공유 영역에서 실행한 세 워커의 결과를 저장한다.
+`config.txt`의 허용 CPU 집합과 `monitor/cpu-samples.csv`의 실제 CPU 사용률을 함께 읽는다.
+
+수동 고정 배치에서는 각 CPU에서 실행한 `stress-ng --metrics-brief` 결과를 `stress_cpuN.log`에 저장한다.
 
 예를 들어 `LOAD_CPUS=0,1,2`이면 다음 파일이 생성된다.
 
@@ -267,11 +325,11 @@ less results/<timestamp>/network.log
 less results/<timestamp>/stress_cpu0.log
 ```
 
-실험 중 실시간으로 확인하려면 다음처럼 사용할 수 있다.
+최종 로그는 controller 종료 후 확인한다.
 
 ```bash
-tail -f results/<timestamp>/mpstat.log
-tail -f results/<timestamp>/network.log
+less results/<timestamp>/mpstat.log
+less results/<timestamp>/network.log
 ```
 
 각 로그 및 검증 결과 파일의 상세한 해석 방법은 `LOG_GUIDE.md`를 참고한다.
@@ -485,6 +543,11 @@ CPU 부하는 `controller.sh`가 담당한다.
 ### Ctrl+C로 종료 가능
 
 실험 도중 `Ctrl+C` 또는 종료 신호를 받으면 cleanup 로직이 실행되어 controller가 시작한 `stress-ng`, `mpstat`, `sar`, `iperf3` 프로세스를 종료하고 결과 경로를 출력한다.
+
+실행 시간은 준비 단계에서 시작한 native `sleep` 하나와 Bash의 차단형 `wait -n -p`로
+관리한다. 측정 중 1초마다 새 프로세스를 만들어 상태를 조회하지 않는다.
+부하·관측 도구가 타이머보다 먼저 종료하면 실패로 처리하고 로그를 보존한다.
+이 제어 기능에는 Bash 5.1 이상이 필요하다.
 
 ### 추가 분석 도구는 필요할 때만 사용
 

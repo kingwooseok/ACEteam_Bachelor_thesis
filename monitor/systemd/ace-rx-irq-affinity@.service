@@ -1,0 +1,23 @@
+# 수신 Pi 전용. 설치/활성화는 monitor/install_irq_service.sh에서 명시적으로 수행한다.
+# instance는 interface 이름이다(예: ace-rx-irq-affinity@eth0.service).
+# irqbalance가 같은 IRQ를 다시 이동시키는 환경은 해당 데몬 정책도 별도 점검한다.
+[Unit]
+Description=ACE receive IRQ affinity for %i
+Wants=network-online.target
+After=network-online.target sys-subsystem-net-devices-%i.device
+Requires=sys-subsystem-net-devices-%i.device
+StartLimitIntervalSec=30
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+Environment=ACE_RX_IRQ_CPU=2
+EnvironmentFile=-/etc/default/ace-rx-irq-affinity
+ExecStart=/usr/bin/bash /usr/local/libexec/ace/set_irq_affinity.sh %I ${ACE_RX_IRQ_CPU}
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target

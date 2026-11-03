@@ -170,19 +170,23 @@ class JoinResultsTest(unittest.TestCase):
             self.assertEqual(by_key[(1, 3)]["user_source"], "afxdp")
             self.assertEqual(by_key[(1, 3)]["xdp_hw_ns"], "15")
             self.assertEqual(by_key[(1, 3)]["user_xdp_ns"], "20")
-            self.assertEqual(by_key[(1, 3)]["user_hw_ns"], "37")
+            self.assertEqual(by_key[(1, 3)]["user_hw_ns"], "35")
             self.assertEqual(by_key[(1, 4)]["user_source"], "udp")
             self.assertEqual(by_key[(1, 4)]["user_xdp_ns"], "40")
-            self.assertEqual(by_key[(1, 4)]["user_hw_ns"], "64")
+            self.assertEqual(by_key[(1, 4)]["user_hw_ns"], "60")
             self.assertEqual(by_key[(1, 5)]["cpumap_xdp_ns"], "30")
             self.assertEqual(by_key[(1, 5)]["user_cpumap_ns"], "20")
-            self.assertEqual(by_key[(1, 5)]["user_hw_ns"], "55")
+            self.assertEqual(by_key[(1, 5)]["user_hw_ns"], "50")
             self.assertEqual(by_key[(9, 9)]["ingress_present"], "0")
             self.assertEqual(by_key[(9, 9)]["cpumap_ns"], "5000")
             self.assertTrue(all(row["inconsistency_flags"] == "0" for row in rows))
 
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            self.assertEqual(summary["schema_version"], 3)
+            self.assertEqual(summary["schema_version"], 4)
+            self.assertEqual(summary["calibration"]["hw_timestamp_policy"], join_results.HW_TIMESTAMP_POLICY)
+            self.assertEqual(summary["decomposition"]["counts"],
+                             {"complete": 3, "incomplete": 2, "invalid": 1, "mismatch": 0})
+            self.assertEqual(summary["decomposition"]["max_abs_residual_ns"], 0)
             self.assertEqual(summary["run"]["run_id"], "run-001")
             self.assertEqual(summary["joined_rows"], 6)
             self.assertEqual(summary["duplicates"]["ingress"], 1)
@@ -204,7 +208,7 @@ class JoinResultsTest(unittest.TestCase):
             self.assertEqual(marker["completion_schema_version"], 2)
             self.assertEqual(marker["artifact_kind"], "ace-joined-run")
             self.assertEqual(marker["run_id"], "run-001")
-            self.assertEqual(marker["summary_schema_version"], 3)
+            self.assertEqual(marker["summary_schema_version"], 4)
             self.assertEqual(marker["inputs"], summary["input_artifacts"])
             self.assertEqual(len(marker["inputs"]["phc_calibration"]), 2)
             for name, path in (
@@ -266,7 +270,9 @@ class JoinResultsTest(unittest.TestCase):
             self.assertEqual(clamped["calibration_offset_at_xdp_ns"], "100")
             self.assertEqual(clamped["calibration_offset_at_user_ns"], "300")
             self.assertEqual(clamped["xdp_hw_ns"], "0")
-            self.assertEqual(clamped["user_hw_ns"], "3200")
+            self.assertEqual(clamped["user_hw_ns"], "3000")
+            self.assertEqual(clamped["hw_calibration_offset_ns"], "100")
+            self.assertEqual(clamped["segment_residual_ns"], "0")
             clamp_summary = json.loads((run / "clamp.json").read_text())
             self.assertEqual(
                 clamp_summary["calibration"]["outside_range_policy"],
@@ -317,7 +323,10 @@ class JoinResultsTest(unittest.TestCase):
             self.assertEqual(valid["initial_xdp_ns"], "1500")
             self.assertEqual(valid["xdp_hw_ns"], "0")
             self.assertEqual(valid["user_xdp_ns"], "100")
-            self.assertEqual(valid["user_hw_ns"], "110")
+            self.assertEqual(valid["user_hw_ns"], "100")
+            self.assertEqual(valid["hw_rx_source"], "afxdp")
+            self.assertEqual(valid["hw_calibration_reference"], "xdp")
+            self.assertEqual(valid["segment_status"], "complete")
 
             invalid = by_sequence[2]
             self.assertEqual(invalid["afxdp_initial_xdp_ns"], "1550")
@@ -565,6 +574,71 @@ class JoinResultsTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(join_results.InputError, "system span"):
                 join_results.load_calibration(bad_calibration)
+
+
+class SharedHardwareClockTest(unittest.TestCase):
+    def setUp(self):
+        self.calibration = join_results.Calibration(
+            (join_results.CalibrationPoint(1000, 100), join_results.CalibrationPoint(3000, 300)),
+            (1000, 3000), (), 2, 2, 0)
+
+    def row(self, path=1, *, cpumap_time=1800, xdp=1500, user=2000, hw=1600,
+            ingress_present=True, user_present=True):
+        ingress = dict(requested_path=path, flags=19, initial_xdp_ns=xdp,
+                       hw_rx_ns=hw, timestamp_error=0, rx_queue=0) if ingress_present else None
+        cpumap = dict(requested_path=1, flags=23, cpumap_ns=cpumap_time, cpu=3) if cpumap_time is not None and path == 1 else None
+        udp = dict(user_rx_mono_ns=user, hw_rx_ns=hw, flags=1, packet_length=96) if user_present else None
+        return join_results.joined_row((2, 7), ingress, cpumap, None, udp, self.calibration)
+
+    def test_drift_uses_one_corrected_hw_value_for_all_segments(self):
+        row = self.row()
+        self.assertEqual(row["calibration_offset_at_xdp_ns"], 150)
+        self.assertEqual(row["calibration_offset_at_user_ns"], 200)
+        self.assertEqual(row["hw_rx_mono_ns"], 1450)
+        self.assertEqual(row["hw_calibration_reference"], "xdp")
+        self.assertEqual((row["d1_ns"], row["d2_ns"], row["d3_ns"]), (50, 300, 200))
+        self.assertEqual(row["user_hw_ns"], 550)
+        self.assertEqual(row["segment_sum_ns"], row["user_hw_ns"])
+        self.assertEqual(row["segment_residual_ns"], 0)
+        self.assertEqual(row["segment_status"], "complete")
+
+    def test_pass_zero_dispatch_and_missing_cpumap_stays_missing(self):
+        row = self.row(path=0)
+        self.assertEqual((row["d1_ns"], row["d2_ns"], row["d3_ns"]), (50, 0, 500))
+        self.assertIsNone(row["cpumap_xdp_ns"])
+        self.assertEqual(row["segment_status"], "complete")
+        row = self.row(cpumap_time=None)
+        self.assertIsNone(row["d2_ns"])
+        self.assertIsNone(row["d3_ns"])
+        self.assertIsNone(row["segment_residual_ns"])
+        self.assertEqual(row["segment_status"], "incomplete")
+
+    def test_udp_without_xdp_uses_user_reference_only_for_total(self):
+        row = self.row(path=0, ingress_present=False)
+        self.assertEqual(row["hw_rx_source"], "udp")
+        self.assertEqual(row["hw_calibration_reference"], "user")
+        self.assertEqual(row["hw_rx_mono_ns"], 1400)
+        self.assertEqual(row["user_hw_ns"], 600)
+        self.assertIsNone(row["d1_ns"])
+        self.assertIsNone(row["d2_ns"])
+        self.assertIsNone(row["d3_ns"])
+        self.assertEqual(row["segment_status"], "incomplete")
+
+    def test_outside_xdp_does_not_switch_to_in_range_user_offset(self):
+        row = self.row(path=0, xdp=900)
+        self.assertEqual(row["hw_calibration_reference"], "xdp")
+        self.assertIsNone(row["hw_rx_mono_ns"])
+        self.assertIsNone(row["user_hw_ns"])
+        self.assertEqual(row["user_xdp_ns"], 1100)
+
+    def test_negative_stage_is_invalid_even_when_sum_closes(self):
+        row = self.row(cpumap_time=1400)
+        self.assertEqual(row["d2_ns"], -100)
+        self.assertEqual(row["segment_residual_ns"], 0)
+        self.assertEqual(row["segment_status"], "invalid")
+        summary = join_results.decomposition_summary([row, self.row(user_present=False)])
+        self.assertEqual(summary["counts"]["invalid"], 1)
+        self.assertEqual(summary["counts"]["incomplete"], 1)
 
 
 if __name__ == "__main__":

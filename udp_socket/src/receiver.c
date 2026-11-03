@@ -35,6 +35,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/vfs.h>
 #include <time.h>
 #include <unistd.h>
@@ -42,6 +43,7 @@
 #include "config.h"
 #include "protocol.h"
 #include "ace_hwtstamp.h"
+#include "ace_run_control.h"
 
 /** @brief 한 번의 receiver run에 적용할 CLI와 저장 경로 설정. */
 struct receiver_config {
@@ -49,16 +51,24 @@ struct receiver_config {
 	const char *tmpfs_path;
 	const char *result_path;
 	const char *interface_name;
+	const char *ready_file;
+	const char *stats_json;
 	uint16_t port;
 	uint32_t flow_id;
 	uint32_t payload_size;
 	uint64_t expected_samples;
+	uint64_t drain_ms;
+	uint64_t idle_timeout_ms;
 	bool require_hwts;
 	bool flow_id_set;
+	bool defer_flush;
+	int completion_fd;
 };
 
 /** @brief SIGINT/SIGTERM 수신 시 수신 loop 종료를 요청하는 플래그. */
 static volatile sig_atomic_t stop;
+static volatile sig_atomic_t flush_requested;
+static void on_flush(int signo) { (void)signo; flush_requested = 1; }
 
 /* =========================================================================
  * #### 종료 신호 처리
@@ -89,8 +99,12 @@ static int install_signal_handlers(void)
 	};
 
 	sigemptyset(&action.sa_mask);
-	return sigaction(SIGINT, &action, NULL) ||
-		sigaction(SIGTERM, &action, NULL);
+	if (sigaction(SIGINT, &action, NULL) || sigaction(SIGTERM, &action, NULL)) return -1;
+	action.sa_handler = on_flush;
+	if (sigaction(SIGUSR1, &action, NULL)) return -1;
+	sigset_t handled;
+	sigemptyset(&handled); sigaddset(&handled,SIGINT); sigaddset(&handled,SIGTERM); sigaddset(&handled,SIGUSR1);
+	return sigprocmask(SIG_UNBLOCK,&handled,NULL);
 }
 
 /* =========================================================================
@@ -117,7 +131,13 @@ static void usage(const char *program)
 		"  -t, --tmpfs PATH         staging file (default: %s)\n"
 		"  -o, --output PATH        final binary file (default: %s)\n"
 		"  -I, --interface IFACE    set RX HW timestamp filter on interface\n"
-		"  -H, --require-hwts       fail run if any valid packet lacks HWTS\n",
+		"  -H, --require-hwts       fail run if any valid packet lacks HWTS\n"
+		"      --ready-file PATH   atomically publish setup completion\n"
+		"      --stats-json PATH   exclusive JSON summary after measurement\n"
+		"      --drain-ms MS       bounded receive grace after signal (default: 100)\n"
+		"      --idle-timeout-ms MS stop after no valid packet (default: 0, disabled)\n"
+		"      --defer-flush       hold full records until INT/TERM before saving\n"
+		"      --completion-fd N  notify capture end; defer-flush then waits for USR1\n",
 		program, ACE_DEFAULT_BIND_ADDRESS, ACE_DEFAULT_UDP_PORT,
 		ACE_DEFAULT_PAYLOAD_SIZE,
 		ACE_DEFAULT_SAMPLE_COUNT, ACE_DEFAULT_TMPFS_PATH,
@@ -172,6 +192,12 @@ static int parse_arguments(int argc, char **argv, struct receiver_config *config
 		{"output", required_argument, NULL, 'o'},
 		{"interface", required_argument, NULL, 'I'},
 		{"require-hwts", no_argument, NULL, 'H'},
+		{"ready-file", required_argument, NULL, 1000},
+		{"stats-json", required_argument, NULL, 1001},
+		{"drain-ms", required_argument, NULL, 1002},
+		{"idle-timeout-ms", required_argument, NULL, 1003},
+		{"defer-flush", no_argument, NULL, 1004},
+		{"completion-fd", required_argument, NULL, 1005},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0},
 	};
@@ -180,6 +206,27 @@ static int parse_arguments(int argc, char **argv, struct receiver_config *config
 
 	while ((option = getopt_long(argc, argv, "a:p:f:s:n:t:o:I:Hh", options, NULL)) != -1) {
 		switch (option) {
+		case 1005:
+			if (ace_parse_u64(optarg, 3, INT_MAX, &value)) return -1;
+			config->completion_fd = (int)value;
+			break;
+		case 1004:
+			config->defer_flush = true;
+			break;
+		case 1000:
+			if (!*optarg) return -1;
+			config->ready_file = optarg;
+			break;
+		case 1001:
+			if (!*optarg) return -1;
+			config->stats_json = optarg;
+			break;
+		case 1002:
+			if (ace_parse_u64(optarg, 0, UINT32_MAX, &config->drain_ms)) return -1;
+			break;
+		case 1003:
+			if (ace_parse_u64(optarg, 0, UINT32_MAX, &config->idle_timeout_ms)) return -1;
+			break;
 		case 'a':
 			config->bind_address = optarg;
 			break;
@@ -387,6 +434,8 @@ int main(int argc, char **argv)
 		.port = ACE_DEFAULT_UDP_PORT,
 		.payload_size = ACE_DEFAULT_PAYLOAD_SIZE,
 		.expected_samples = ACE_DEFAULT_SAMPLE_COUNT,
+		.drain_ms = 100,
+		.completion_fd = -1,
 	};
 	struct sockaddr_in local_address = {
 		.sin_family = AF_INET,
@@ -397,6 +446,10 @@ int main(int argc, char **argv)
 	uint64_t received = 0, invalid = 0, truncated = 0;
 	uint64_t missing_hwts = 0, receive_errors = 0;
 	uint32_t socket_drops = 0;
+	int64_t start_ns = 0, end_ns = 0, last_valid_ns = 0, drain_start_ns = 0;
+	const char *reason = "setup_error";
+	FILE *stats = NULL;
+	bool records_saved = false;
 	size_t expected_packet_size, mapped_bytes, result_bytes;
 	int timestamping_flags = SOF_TIMESTAMPING_RX_HARDWARE |
 		SOF_TIMESTAMPING_RAW_HARDWARE;
@@ -406,6 +459,15 @@ int main(int argc, char **argv)
 	if (parse_arguments(argc, argv, &config)) {
 		usage(argv[0]);
 		return 2;
+	}
+	if (config.completion_fd >= 0) {
+		struct stat status;
+		int access_mode = fcntl(config.completion_fd, F_GETFL);
+		if (access_mode < 0 || (access_mode & O_ACCMODE) == O_RDONLY ||
+		    fstat(config.completion_fd, &status) || !S_ISFIFO(status.st_mode)) {
+			fprintf(stderr, "completion-fd must be an inherited pipe\n"); return 2;
+		}
+		signal(SIGPIPE, SIG_IGN);
 	}
 	if (!strcmp(config.tmpfs_path, config.result_path)) {
 		fprintf(stderr, "tmpfs and output paths must be different\n");
@@ -431,6 +493,14 @@ int main(int argc, char **argv)
 	socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (socket_fd < 0) {
 		perror("socket");
+		goto out;
+	}
+	/* Bounded blocking retains recvmsg as the timestamp endpoint and closes the
+	 * signal-between-condition-and-syscall race. Check intervals are <= 10 ms. */
+	struct timeval receive_timeout = {.tv_sec = 0, .tv_usec = 10000};
+	if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO,
+		&receive_timeout, sizeof(receive_timeout))) {
+		perror("setsockopt(SO_RCVTIMEO)");
 		goto out;
 	}
 	/*
@@ -523,6 +593,10 @@ int main(int argc, char **argv)
 		perror("create result file");
 		goto out;
 	}
+	if (config.stats_json) {
+		stats = ace_open_exclusive_stream(config.stats_json);
+		if (!stats) { perror("create stats JSON"); goto out; }
+	}
 
 	printf("role: receiver\n"
 	       "source/bind: %s\n"
@@ -542,9 +616,31 @@ int main(int argc, char **argv)
 	if (config.interface_name)
 		printf("HWTSTAMP interface: %s, effective RX filter: %d\n",
 			hwtstamp.interface_name, hwtstamp.effective.rx_filter);
+	if (ace_publish_ready(config.ready_file, "receiver")) {
+		perror("publish ready file");
+		goto out;
+	}
+	start_ns = ace_mono_ns();
+	if (start_ns < 0) { perror("CLOCK_MONOTONIC"); goto out; }
+	last_valid_ns = start_ns;
+	reason = "count";
 
 	/* 측정 구간: recvmsg 직후 시각을 얻고 header 확인과 메모리 기록을 수행함. */
-	while (received < config.expected_samples && !stop) {
+	while (received < config.expected_samples) {
+		if (stop || config.idle_timeout_ms) {
+			int64_t now = ace_mono_ns();
+			if (now < 0) { receive_errors++; reason = "clock_error"; break; }
+			if (stop) {
+				if (!drain_start_ns) drain_start_ns = now;
+				if ((uint64_t)(now - drain_start_ns) >= config.drain_ms * 1000000ULL) {
+					reason = "signal_drain";
+					break;
+				}
+			} else if ((uint64_t)(now - last_valid_ns) >= config.idle_timeout_ms * 1000000ULL) {
+				reason = "idle_timeout";
+				break;
+			}
+		}
 		union {
 			struct cmsghdr alignment;
 			uint8_t bytes[CMSG_SPACE(sizeof(struct scm_timestamping)) +
@@ -569,9 +665,10 @@ int main(int argc, char **argv)
 		struct sample_record record = {0};
 
 		if (length < 0) {
-			if (errno == EINTR)
+			if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
 				continue;
 			receive_errors++;
+			reason = "receive_error";
 			break;
 		}
 		/*
@@ -583,11 +680,13 @@ int main(int argc, char **argv)
 		user_rx_mono_ns = monotonic_ns();
 		if (user_rx_mono_ns < 0) {
 			receive_errors++;
+			reason = "clock_error";
 			break;
 		}
 		user_rx_real_ns = realtime_ns();
 		if (user_rx_real_ns < 0) {
 			receive_errors++;
+			reason = "clock_error";
 			break;
 		}
 		(void)extract_rxq_overflow(&message, &socket_drops);
@@ -636,6 +735,41 @@ int main(int argc, char **argv)
 			record.flags |= ACE_SAMPLE_F_CMSG_TRUNCATED;
 		records[received] = record;
 		received++;
+		last_valid_ns = user_rx_mono_ns;
+	}
+	end_ns = ace_mono_ns();
+	if (end_ns < 0) { receive_errors++; reason = "clock_error"; end_ns = start_ns; }
+	/* A faster flow must not flush to storage while another flow is capturing.
+	 * Keep its preallocated records resident until the supervisor stops the run.
+	 * Blocking INT/TERM before checking the flag makes sigsuspend race-free. */
+	if (config.defer_flush && received == config.expected_samples) {
+		sigset_t blocked, previous;
+		sigemptyset(&blocked); sigaddset(&blocked, SIGINT); sigaddset(&blocked, SIGTERM);
+		if (sigprocmask(SIG_BLOCK, &blocked, &previous)) {
+			receive_errors++; reason = "signal_error";
+		} else {
+			sigset_t wait_mask=previous; sigdelset(&wait_mask,SIGINT); sigdelset(&wait_mask,SIGTERM);
+			while (!stop) sigsuspend(&wait_mask);
+			sigprocmask(SIG_SETMASK, &previous, NULL);
+		}
+	}
+	if (config.completion_fd >= 0) {
+		unsigned char outcome = receive_errors || (config.require_hwts && missing_hwts) ? 1 : 0;
+		ssize_t n;
+		do { n = write(config.completion_fd, &outcome, 1); } while (n < 0 && errno == EINTR);
+		close(config.completion_fd);
+		if (n != 1) { receive_errors++; reason = "completion_error"; }
+		else if (config.defer_flush && !outcome) {
+			sigset_t blocked, previous;
+			sigemptyset(&blocked); sigaddset(&blocked, SIGUSR1);
+			if (sigprocmask(SIG_BLOCK, &blocked, &previous)) { receive_errors++; reason = "signal_error"; }
+			else {
+				/* TERM ended capture; only the supervisor's USR1 permits I/O. */
+				sigset_t wait_mask=previous; sigdelset(&wait_mask,SIGUSR1);
+				while (!flush_requested) sigsuspend(&wait_mask);
+				sigprocmask(SIG_SETMASK, &previous, NULL);
+			}
+		}
 	}
 
 	/*
@@ -665,6 +799,7 @@ int main(int argc, char **argv)
 		perror("truncate tmpfs file to recorded samples");
 		goto out;
 	}
+	records_saved = true;
 
 	printf("completed: samples=%llu invalid=%llu truncated=%llu "
 	       "missing_hwts=%llu socket_drops=%u receive_errors=%llu bytes=%zu\n",
@@ -703,5 +838,26 @@ out:
 		exit_status = 1;
 	}
 	munlockall();
+	if (stats) {
+		if (!end_ns) end_ns = ace_mono_ns();
+		if (start_ns < 0) start_ns = 0;
+		if (end_ns < 0) end_ns = start_ns;
+		fprintf(stats, "{\"schema_version\":1,\"role\":\"receiver\",\"flow_id\":%u,"
+			"\"expected_count\":%llu,\"received\":%llu,\"invalid\":%llu,"
+			"\"truncated\":%llu,\"missing_hwts\":%llu,\"socket_drops\":%u,"
+			"\"receive_errors\":%llu,\"errors\":%llu,\"start_mono_ns\":%lld,\"end_mono_ns\":%lld,"
+			"\"elapsed_ns\":%lld,\"drain_ms\":%llu,\"idle_timeout_ms\":%llu,"
+			"\"capacity_reached\":%s,\"records_saved\":%s,\"exit_status\":%d,"
+			"\"termination_reason\":\"%s\"}\n", config.flow_id,
+			(unsigned long long)config.expected_samples, (unsigned long long)received,
+			(unsigned long long)invalid, (unsigned long long)truncated,
+			(unsigned long long)missing_hwts, socket_drops,
+			(unsigned long long)receive_errors, (unsigned long long)receive_errors,
+			(long long)start_ns, (long long)end_ns, (long long)(start_ns ? end_ns - start_ns : 0),
+			(unsigned long long)config.drain_ms, (unsigned long long)config.idle_timeout_ms,
+			received == config.expected_samples ? "true" : "false",
+			records_saved ? "true" : "false", exit_status, reason);
+		if (ace_finish_stream(stats)) { perror("save stats JSON"); exit_status = 1; }
+	}
 	return exit_status;
 }
