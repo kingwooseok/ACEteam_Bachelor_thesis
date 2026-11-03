@@ -1,14 +1,14 @@
 {
   "status": "draft-unresolved",
   "design": "D01-D11",
-  "design_revision": "mode-partition-165-v3",
-  "main_conditions": 10,
-  "main_runs": 150,
+  "design_revision": "fixed-1000pps-75-v4",
+  "main_conditions": 4,
+  "main_runs": 60,
   "single_runs": 15,
-  "total_runs": 165,
-  "all_pass_runs": 55,
-  "pass_xsk_runs": 55,
-  "mixed_runs": 55,
+  "total_runs": 75,
+  "all_pass_runs": 25,
+  "pass_xsk_runs": 25,
+  "mixed_runs": 25,
   "duration_ms": 60000,
   "warmup_ms": 5000,
   "cpu_domains": {
@@ -18,5 +18,6 @@
   },
   "load_workers": 3,
   "load_cpu_layout": "shared",
-  "note": "CPU3 is reserved only for an enabled CPUMAP flow. Three workers share the active general domain. Draft PASS high=9000 is provisional."
+  "flow_pps": 1000,
+  "note": "Each active measurement flow sends 1000 PPS. CPU and iperf3 load form four main conditions. CPU3 is reserved only for an enabled CPUMAP flow; three workers share the active general domain."
 }

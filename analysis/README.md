@@ -80,7 +80,7 @@ Joined CSV와 summary JSON을 `O_EXCL`로 생성하고 파일/디렉터리를
 ## 반복 run aggregation
 
 통합 보고서는 `all-pass`, `pass-xsk`(PASS/PASS/AF_XDP), `mixed`를 각각 표시한다.
-반복 집계는 `(case_id, mode)` 단위로 수행해 단독·A/B 조건을 섞지 않는다.
+반복 집계는 `(case_id, mode)` 단위로 수행해 단독 측정과 네 부하 조건을 각각 집계한다.
 `run.json`의 수신 CPU 허용 집합(`rx_cpus`)과 경로를 구간별 표에 표시한다.
 all-pass·pass-xsk의 앱은 `0,1,2,3`을 공유한다. 활성 CPUMAP 중요1이 있는 mixed에서는
 중요1 앱이 `3`, PASS·AF_XDP 앱이 `0,1,2`를 사용한다.
@@ -90,8 +90,11 @@ all-pass → pass-xsk는 공유 영역의 AF_XDP 추가 효과를, pass-xsk → 
 중요 흐름의 커널 처리·수신을 전용 CPU로 분리한 효과를 비교한다.
 두 비교 모두 총 네 CPU를 사용하며, CPU 부하 워커 수는 세 개로 유지한다.
 실제 일반 CPU 영역과 예약 상태, 워커 수·강도를 run 조건과 함께 읽는다.
-모든 A·B 조건에서 세 구성의 총지연·기한 초과·손실·일반 처리량을 나란히 읽고,
+CPU 부하 끔/켬 × iperf3 배경 부하 끔/고부하의 네 조건에서 세 구성의
+총지연·기한 초과·손실·일반 처리량을 나란히 읽고,
 같은 패킷의 d₁·d₂·d₃로 변화가 나타난 구간을 설명한다.
+세 계측 흐름은 각각 1,000 PPS다. 일반 9000의 수신 PPS·손실과 함께
+PASS로 처리하는 iperf3 배경 트래픽의 실제 송수신량·손실도 읽는다.
 
 HTML의 **구성별 CPU 사용 영역** 표에는 전체 CPU, 일반 영역과 CPUMAP 전용 CPU를 표시한다.
 `report.json`에 전체 사용 가능 CPU(`receiver_available_cpus`), 실제 공유 집합과 예약 여부를

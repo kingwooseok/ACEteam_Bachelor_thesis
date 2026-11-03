@@ -2,13 +2,7 @@ case_id,references,pass_pps,cpu_percent,network,load_cpus,load_workers,single_fl
 single-1,D01-flow1,1000,0,none,per-mode-general,3,1,all-pass
 single-2,D01-flow2,1000,0,none,per-mode-general,3,2,mixed
 single-3,D01-flow3,1000,0,none,per-mode-general,3,3,pass-xsk
-main-01,A-cpu0-none;B-pass1000-cpu0,1000,0,none,per-mode-general,3,,all-pass;pass-xsk;mixed
+main-01,A-cpu0-none,1000,0,none,per-mode-general,3,,all-pass;pass-xsk;mixed
 main-02,A-cpu0-high,1000,0,high,per-mode-general,3,,all-pass;pass-xsk;mixed
-main-03,A-cpu100-none;B-pass1000-cpu100,1000,100,none,per-mode-general,3,,all-pass;pass-xsk;mixed
+main-03,A-cpu100-none,1000,100,none,per-mode-general,3,,all-pass;pass-xsk;mixed
 main-04,A-cpu100-high,1000,100,high,per-mode-general,3,,all-pass;pass-xsk;mixed
-main-05,B-pass0-cpu0,0,0,none,per-mode-general,3,,all-pass;pass-xsk;mixed
-main-06,B-pass0-cpu100,0,100,none,per-mode-general,3,,all-pass;pass-xsk;mixed
-main-07,B-pass3000-cpu0,3000,0,none,per-mode-general,3,,all-pass;pass-xsk;mixed
-main-08,B-pass3000-cpu100,3000,100,none,per-mode-general,3,,all-pass;pass-xsk;mixed
-main-09,B-pass9000-cpu0,9000,0,none,per-mode-general,3,,all-pass;pass-xsk;mixed
-main-10,B-pass9000-cpu100,9000,100,none,per-mode-general,3,,all-pass;pass-xsk;mixed

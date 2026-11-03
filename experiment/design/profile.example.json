@@ -31,6 +31,5 @@
   "sender_supervisor_cpu": 3,
   "receiver_network_cpu": "inherit",
   "network_high_bps": null,
-  "pass_high_pps": null,
   "settle_ms": null
 }

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 PROFILE = Path(__file__).with_name('profile.example.json')
-DESIGN_REVISION = 'mode-partition-165-v3'
+DESIGN_REVISION = 'fixed-1000pps-75-v4'
 REPEATS = 5
 
 
@@ -16,34 +16,21 @@ def write_json(path, value):
     path.write_bytes((json.dumps(value, indent=2) + '\n').encode('utf-8'))
 
 
-def rows(high=9000, full_design=False):
-    # full_design is retained for callers of the previous generator. Both entry
-    # points now use the same revised table; identical A/B conditions are reused.
+def rows(full_design=False):
+    # The compatibility flag generates the same fixed-rate four-condition design.
     result = []
-    def add(label, pps, cpu, network='none'):
-        signature = (pps, cpu, network)
-        for row in result:
-            if row['_signature'] == signature:
-                row['references'].append(label)
-                return
+    def add(label, cpu, network):
         result.append(dict(case_id=f'main-{len(result)+1:02d}', references=[label],
-                           pass_pps=pps, cpu_percent=cpu, network=network,
+                           pass_pps=1000, cpu_percent=cpu, network=network,
                            load_cpus='per-mode-general', load_workers=3, single_flow=None,
-                           modes=['all-pass', 'pass-xsk', 'mixed'],
-                           _signature=signature))
+                           modes=['all-pass', 'pass-xsk', 'mixed']))
     for cpu in (0, 100):
         for network in ('none', 'high'):
-            add(f'A-cpu{cpu}-{network}', 1000, cpu, network)
-    levels = (0, 1000, 3000, high)
-    for pps in dict.fromkeys(levels):
-        for cpu in (0, 100):
-            add(f'B-pass{pps}-cpu{cpu}', pps, cpu)
+            add(f'A-cpu{cpu}-{network}', cpu, network)
     single_modes = ('all-pass', 'mixed', 'pass-xsk')
     singles = [dict(case_id=f'single-{i}', references=[f'D01-flow{i}'], pass_pps=1000,
                     cpu_percent=0, network='none', load_cpus='per-mode-general', load_workers=3,
                     single_flow=i, modes=[single_modes[i-1]]) for i in range(1, 4)]
-    for row in result:
-        del row['_signature']
     return singles + result
 
 
@@ -78,7 +65,6 @@ def validate(profile, full_design=False):
         if profile[name] != 'inherit':
             raise ValueError(f'{name} must inherit the shared execution domain')
     integer(profile['network_high_bps'], 1, 1000000000, 'network high bps')
-    integer(profile['pass_high_pps'], 3001, 15476, 'PASS high PPS (record capacity limit)')
     integer(profile['settle_ms'], 0, 60000, 'settle ms')
 
 
@@ -112,7 +98,7 @@ def config(profile, row, index, full_design=False):
                    'load.network_port': 5201, 'load.network_parallel': 1,
                    'load.on_sec': 0, 'load.off_sec': 0})
     for i in range(1, 4):
-        pps = row['pass_pps'] if i == 1 else 1000
+        pps = 1000
         if row['single_flow']:
             pps = 1000 if i == row['single_flow'] else 0
         values.update({f'flow{i}.enabled': int(pps > 0),
@@ -135,7 +121,7 @@ def main():
     parser.add_argument('--profile', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--d01-d11', action='store_true',
-                        help='compatibility flag: generate the mode-partition 165-run D01-D11 design')
+                        help='compatibility flag: generate the fixed-1000-PPS 75-run D01-D11 design')
     args = parser.parse_args()
     profile = json.loads(args.profile.read_text()) if args.profile else None
     if profile is not None:
@@ -143,7 +129,7 @@ def main():
             validate(profile, args.d01_d11)
         except (ValueError, TypeError) as error:
             parser.error(str(error))
-    plan = rows(profile['pass_high_pps'] if profile else 9000, args.d01_d11)
+    plan = rows(full_design=args.d01_d11)
     # 기존 산출물/설정을 덮어쓰지 않고 새 폴더만 생성한다.
     args.output.mkdir(parents=True, exist_ok=False)
     with (args.output / 'matrix.csv').open('w', encoding='utf-8', newline='') as stream:
@@ -157,11 +143,12 @@ def main():
                    design='D01-D11', design_revision=DESIGN_REVISION,
                    main_conditions=len(plan)-3, main_runs=main_runs,
                    single_runs=single_runs, total_runs=main_runs+single_runs,
-                   all_pass_runs=55, pass_xsk_runs=55, mixed_runs=55,
+                   all_pass_runs=25, pass_xsk_runs=25, mixed_runs=25,
                    duration_ms=60000, warmup_ms=5000,
                    cpu_domains={'shared': '0,1,2,3', 'cpumap_active_general': '0,1,2', 'cpumap': '3'},
                    load_workers=3, load_cpu_layout='shared',
-                   note='CPU3 is reserved only for an enabled CPUMAP flow. Three workers share the active general domain. Draft PASS high=9000 is provisional.')
+                   flow_pps=1000,
+                   note='Each active measurement flow sends 1000 PPS. CPU and iperf3 load form four main conditions. CPU3 is reserved only for an enabled CPUMAP flow; three workers share the active general domain.')
     write_json(args.output / 'plan.json', summary)
     if profile:
         write_json(args.output / 'profile.json', profile)

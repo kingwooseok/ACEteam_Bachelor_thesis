@@ -653,9 +653,9 @@ int main(int argc, char **argv) {
     def test_full_design_configs_use_native_policy_and_capacity_checks(self):
         from tests.test_design_plan import DesignPlanTests, plan
         profile = DesignPlanTests().profile()
-        profile.update(pass_high_pps=15476, sender_policies=['other', 'fifo', 'rr'],
+        profile.update(sender_policies=['other', 'fifo', 'rr'],
                        sender_priorities=[0, 80, 70])
-        for index, row in enumerate(plan.rows(15476, full_design=True)):
+        for index, row in enumerate(plan.rows(full_design=True)):
             self.config.write_text(plan.config(profile, row, index, full_design=True))
             output = self.complete(self.launch('plan'))
             modes = [json.loads(line) for line in output.splitlines()[1:]]
@@ -663,6 +663,7 @@ int main(int argc, char **argv) {
             for mode in modes:
                 self.assertLessEqual(sum(f['count'] for f in mode['flows']), 1048576)
                 for flow in mode['flows']:
+                    self.assertEqual(flow['count'], 60000)
                     index = flow['flow_id'] - 1
                     self.assertEqual(flow['tx_cpu'], index)
                     self.assertEqual(flow['tx_policy'], [os.SCHED_OTHER, os.SCHED_FIFO, os.SCHED_RR][index])
@@ -670,6 +671,17 @@ int main(int argc, char **argv) {
                     expected_rx_cpu = 3 if index == 1 and mode['mode'] == 'mixed' else -1
                     self.assertEqual(flow['rx_cpu'], expected_rx_cpu)
                     self.assertEqual(flow['rx_cpus'], '3' if expected_rx_cpu==3 else mode['environment']['receiver_shared_cpus'])
+        # The general native runner still checks its recording capacity for
+        # arbitrary manual configs independently of the fixed-rate study plan.
+        text = plan.config(profile, plan.rows()[-1], 0, full_design=True)
+        self.config.write_text(text.replace('flow1.period_ns=1000000', 'flow1.period_ns=64616'))
+        output = self.complete(self.launch('plan'))
+        for mode in map(json.loads, output.splitlines()[1:]):
+            total = sum(flow['count'] for flow in mode['flows'])
+            self.assertGreater(total, 1048500)
+            self.assertLessEqual(total, 1048576)
+        self.config.write_text(text.replace('flow1.period_ns=1000000', 'flow1.period_ns=64612'))
+        self.complete(self.launch('plan'), False)
 
     def test_native_partial_control_frame_timeout_and_placement_mismatch(self):
         # Exercise production C helpers with socketpair and the current process;
@@ -732,7 +744,7 @@ int main(void) {
                               expected_modes=['socket-only'], repeats=2,
                               references=['operational-test'], sha256=hashlib.sha256(text.encode()).hexdigest()))
         (plan_dir/'execution.json').write_text(json.dumps(dict(
-            design='D01-D11', design_revision='mode-partition-165-v3', cases=cases)))
+            design='D01-D11', design_revision='fixed-1000pps-75-v4', cases=cases)))
         wrapper = str(ROOT/'experiment/run_matrix.sh')
         for role in ('receiver', 'sender'):
             process = subprocess.Popen([wrapper, role, '--plan-dir', str(plan_dir)], cwd=ROOT,
