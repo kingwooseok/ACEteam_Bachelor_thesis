@@ -38,14 +38,19 @@ class CPUSampleTests(unittest.TestCase):
             file.close()
         self.temp.cleanup()
 
-    def launch(self, *, fixture=FIXTURE, interval=3600000):
+    def launch(self, *, fixture=FIXTURE, interval=3600000, network=None):
         stat = self.directory / 'stat'
         stat.write_text(fixture)
         output = self.directory / 'samples.csv'
         file = output.open('wb')
         self.files.append(file)
-        process = subprocess.Popen([str(SAMPLER), '--interval-ms', str(interval),
-                                    '--stat-file', str(stat)], stdout=file,
+        args = [str(SAMPLER), '--interval-ms', str(interval), '--stat-file', str(stat)]
+        if network is not None:
+            net = self.directory / 'net-dev'
+            net.write_text(network)
+            args += ['--interface', 'eth0', '--net-dev-file', str(net),
+                     '--network-output', str(self.directory / 'network.csv')]
+        process = subprocess.Popen(args, stdout=file,
                                    stderr=subprocess.PIPE)
         self.processes.append(process)
         return process, output, stat
@@ -53,6 +58,11 @@ class CPUSampleTests(unittest.TestCase):
     def wait_rows(self, process, output, count):
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
+            if not output.exists():
+                if process.poll() is not None:
+                    self.fail(f'sampler stopped before creating output: {process.communicate()[1].decode()}')
+                time.sleep(.01)
+                continue
             text = output.read_text()
             rows = list(csv.DictReader(io.StringIO(text)))
             if len(rows) >= count and text.endswith('\n'):
@@ -112,6 +122,48 @@ class CPUSampleTests(unittest.TestCase):
             with self.subTest(value=value):
                 result = subprocess.run([str(SAMPLER), '--interval-ms', value], capture_output=True)
                 self.assertEqual(result.returncode, 2)
+
+    def test_nic_final_snapshot_uses_selected_interface_and_cumulative_counters(self):
+        fixture = ('Inter-| Receive | Transmit\n'
+                   'eth01: ' + ' '.join(['999'] * 16) + '\n'
+                   '  eth0: ' + ' '.join(map(str, range(1, 17))) + '\n')
+        process, _, _ = self.launch(network=fixture)
+        output = self.directory / 'network.csv'
+        first = self.wait_rows(process, output, 1)
+        self.assertEqual(first[0]['interface'], 'eth0')
+        keys = ['rx_bytes', 'rx_packets', 'rx_errors', 'rx_dropped',
+                'tx_bytes', 'tx_packets', 'tx_errors', 'tx_dropped']
+        self.assertEqual([int(first[0][key]) for key in keys], [1, 2, 3, 4, 9, 10, 11, 12])
+        updated = self.directory / 'next-net'
+        updated.write_text('eth0: ' + ' '.join(map(str, range(101, 117))) + '\n')
+        updated.replace(self.directory / 'net-dev')
+        process.send_signal(signal.SIGTERM)
+        _, error = process.communicate(timeout=2)
+        self.assertEqual(process.returncode, 0, error.decode())
+        rows = list(csv.DictReader(io.StringIO(output.read_text())))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([int(rows[-1][key]) for key in keys], [101, 102, 103, 104, 109, 110, 111, 112])
+        self.assertGreater(int(rows[-1]['monotonic_ns']), int(first[0]['monotonic_ns']))
+
+    def test_malformed_nic_snapshot_is_not_published(self):
+        process, _, _ = self.launch(network='eth0: 1 2 3 4\n')
+        _, error = process.communicate(timeout=2)
+        self.assertEqual(process.returncode, 1)
+        self.assertIn('NIC snapshot', error.decode())
+        rows = list(csv.DictReader(io.StringIO((self.directory / 'network.csv').read_text())))
+        self.assertEqual(rows, [])
+
+    def test_nic_output_refuses_overwrite_and_interface_requires_output(self):
+        output = self.directory / 'existing.csv'
+        output.write_bytes(b'original\n')
+        result = subprocess.run([str(SAMPLER), '--interface', 'lo', '--network-output', str(output)],
+                                capture_output=True, timeout=2)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(output.read_bytes(), b'original\n')
+        for args in (['--interface', 'eth0'], ['--network-output', str(output)],
+                     ['--interface', '../eth0', '--network-output', str(output)]):
+            result = subprocess.run([str(SAMPLER), *args], capture_output=True, timeout=2)
+            self.assertEqual(result.returncode, 2)
 
 
 if __name__ == '__main__':

@@ -180,7 +180,9 @@ if ((IPERF_ENABLED)); then
 fi
 if ((MONITOR_ENABLED)); then
     if [[ -n $CPU_SAMPLER ]]; then
-        launch observe cpu-samples.csv "$CPU_SAMPLER" --interval-ms "$((INTERVAL * 1000))"
+        LOG_NAMES+=(network-samples.csv)
+        launch observe cpu-samples.csv "$CPU_SAMPLER" --interval-ms "$((INTERVAL * 1000))" \
+            --interface "$INTERFACE" --network-output "$STAGING_DIR/network-samples.csv"
     else
         launch observe mpstat.log stdbuf -oL mpstat -P ALL "$INTERVAL"
     fi
