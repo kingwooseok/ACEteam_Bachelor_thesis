@@ -2,7 +2,9 @@
 
 이 디렉터리는 졸업논문 성능 실험에서 사용하는 **실험 실행 자동화**, **실험 환경 검증**, **이상 결과 원인 분석** 도구를 정리한다.
 
-핵심 자동화 스크립트는 `controller.sh`이며, 수신기에서 다음 작업을 한 번에 수행한다.
+정식 실험의 준비·송수신·종료는 `experiment/ace-run`이 제어하며,
+이 디렉터리의 `run_load.sh`와 `network_load.sh`를 통해 부하·관측을 실행한다.
+`controller.sh`는 다음 작업을 묶어 사용하는 단독 실행 도구다.
 
 - `iperf3` 서버 실행
 - 단독 controller는 `mpstat`, `ace-run`은 MONOTONIC 기반 C 관측기로 CPU 사용률 측정
@@ -11,29 +13,42 @@
 - 실험 설정 및 로그 자동 저장
 - 실험 종료 또는 `Ctrl+C` 입력 시 실행한 프로세스 정리
 
-실험 환경 검증에는 다음 두 스크립트를 사용한다.
+실험 환경 검증에는 다음 스크립트를 사용한다.
 
 - `verify_cyclictest.sh`
   - Case 1과 Case 2의 scheduling latency 비교
 - `verify_irq_affinity.sh`
   - Case 2에서 NIC IRQ affinity가 실제 기대 CPU에서 동작하는지 검증
+- `check_cpu_partition.sh`
+  - 중요 수신 CPU 3의 예약과 일반 공유 영역, RPS·NAPI 실행 설정을 읽어 검사
 
 `controller.sh`는 시스템 부하와 상태를 관리·관찰하기 위한 스크립트이며, **애플리케이션의 OWD/latency 자체를 측정하는 도구는 아니다.** 핵심 latency 결과와 함께 시스템 로그를 비교하여 Case별 성능 차이와 이상 결과의 원인을 분석하는 용도로 사용한다.
 
 ---
 
-## 1. 실험 Case
+## 1. 현재 본실험 구성
 
-현재 실험은 다음 Case를 기준으로 비교한다.
+PREEMPT_RT를 공통 실행 기반으로 두고 세 구성을 모든 A·B 부하 조건에서 비교한다.
 
-| Case | 구성 |
+| 구성 | 수신 경로와 실행 영역 |
 |---|---|
-| Case 1 | Vanilla |
-| Case 2 | PREEMPT_RT + IRQ affinity |
-| Case 3 | PREEMPT_RT + XDP + CPUMAP |
-| Case 4 | AF_XDP |
+| all-pass | 세 흐름 모두 Linux 소켓 수신, CPU 0·1·2 공유 |
+| pass-xsk | 중요2만 AF_XDP 추가, 수신 앱은 모두 CPU 0·1·2 공유 |
+| mixed | 중요1의 커널 처리·수신만 CPUMAP CPU 3, 나머지는 0·1·2 공유 |
 
-`controller.sh`는 특정 Case에 종속되지 않으며 각 Case에서 동일한 방식으로 기본 부하와 시스템 모니터링을 수행할 수 있다.
+CPU 부하 워커는 세 구성 모두 CPU 0·1·2에서 실행한다. 배경 네트워크 수신과
+관리·관측도 이 공유 영역을 사용한다. CPU 3에는 mixed의 CPUMAP 중요 수신을 배치한다.
+실행표와 165회 구성은 [실험 준비 안내](../experiment/design/배포전_준비사항.md)에 있다.
+
+수신 Pi의 부팅 설정은 `isolcpus=domain,3 irqaffinity=0-2`로 일반 작업에서
+CPU 3을 제외한다. 재부팅 후 다음 명령으로 검사하며, 실제 수신 실행도 같은 검사를 수행한다.
+
+```bash
+bash monitor/check_cpu_partition.sh eth0 0,1,2 3
+```
+
+아래 환경 검증 도구의 Case 1(Vanilla)·Case 2(PREEMPT_RT)는 커널 도입 시의 검증 명칭이다.
+본실험의 세 수신 구성은 `mode`로 기록한다.
 
 ---
 
@@ -44,6 +59,9 @@
 ```text
 .
 ├── controller.sh
+├── run_load.sh
+├── network_load.sh
+├── check_cpu_partition.sh
 ├── verify_cyclictest.sh
 ├── verify_irq_affinity.sh
 ├── LOG_GUIDE.md

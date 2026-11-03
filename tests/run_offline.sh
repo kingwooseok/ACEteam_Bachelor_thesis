@@ -255,6 +255,7 @@ python3 -m unittest -v \
 	analysis.tests.test_experiment \
 	tests.test_capture_manifest \
 	tests.test_environment \
+	tests.test_cpu_partition \
 	tests.test_scheduler_capture \
 	tests.test_design_plan
 

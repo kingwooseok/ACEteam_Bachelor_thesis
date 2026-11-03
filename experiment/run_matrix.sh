@@ -19,7 +19,7 @@ def load_cases(directory):
     directory = directory.resolve(strict=True)
     execution = json.loads((directory / 'execution.json').read_text())
     if (execution.get('design') != 'D01-D11' or
-            execution.get('design_revision') != 'minimal-135-v1' or not execution.get('cases')):
+            execution.get('design_revision') != 'shared-three-path-165-v2' or not execution.get('cases')):
         raise ValueError('requires a current configured D01-D11 plan; regenerate plan')
     seen = set()
     cases = execution['cases']

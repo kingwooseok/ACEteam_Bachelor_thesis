@@ -40,6 +40,42 @@ static int cpu(struct parser *p, const char *key, const char *fallback)
 	if (ace_parse_u64(value, 0, CPU_SETSIZE - 1, &n)) { p->error = 1; fprintf(stderr, "invalid CPU: %s\n", key); return -1; }
 	return (int)n;
 }
+/* Strict CPU list parsing: malformed, overlapping and descending ranges fail. */
+int run_parse_cpus(const char *text, cpu_set_t *set)
+{
+	CPU_ZERO(set);
+	if (!text || !*text) return -1;
+	const char *q=text;
+	while (*q) {
+		unsigned first=0,last;
+		if (!isdigit((unsigned char)*q)) return -1;
+		do { first=first*10+(unsigned)(*q++-'0'); if (first>=CPU_SETSIZE) return -1; }
+		while (isdigit((unsigned char)*q));
+		last=first;
+		if (*q=='-') {
+			q++; last=0; if (!isdigit((unsigned char)*q)) return -1;
+			do { last=last*10+(unsigned)(*q++-'0'); if (last>=CPU_SETSIZE) return -1; }
+			while (isdigit((unsigned char)*q));
+		}
+		if (last<first) return -1;
+		for (unsigned n=first;n<=last;n++) { if (CPU_ISSET(n,set)) return -1; CPU_SET(n,set); }
+		if (!*q) return 0;
+		if (*q++!=',' || !*q) return -1;
+	}
+	return -1;
+}
+int run_format_cpus(const cpu_set_t *set, char *text, size_t size)
+{
+	size_t used=0;
+	if (!size) return -1;
+	text[0]=0;
+	for (unsigned n=0;n<CPU_SETSIZE;n++) if (CPU_ISSET(n,set)) {
+		int written=snprintf(text+used,size-used,"%s%u",used?",":"",n);
+		if (written<0 || (size_t)written>=size-used) return -1;
+		used+=(size_t)written;
+	}
+	return 0;
+}
 static int policy(struct parser *p, const char *key)
 {
 	const char *value = lookup(p, key, NULL);
@@ -55,6 +91,7 @@ static int allowed(const char *key)
 		"start_delay_ms","drain_ms","settle_ms","supervisor_cpu","monitor",
 		"environment.governor","environment.rx_irq_cpu",
 		"receiver.supervisor_cpu","sender.supervisor_cpu","receiver.network_cpu","sender.network_cpu",
+		"receiver.shared_cpus","receiver.cpumap_cpu",
 		"load.cpu_percent","load.cpu_cpus","load.cpu_method","load.memory_workers","load.memory_bytes",
 		"load.io_workers","load.io_path","load.network_bps","load.network_protocol","load.network_direction",
 		"load.network_port","load.network_parallel","load.on_sec","load.off_sec"};
@@ -99,6 +136,17 @@ const char *run_flow_path(const char *mode, unsigned flow_index)
 }
 int run_rx_cpu(const struct run_flow *f, const char *mode)
 { return !strcmp(mode,"all-pass") ? f->all_pass_rx_cpu : f->rx_cpu; }
+void run_rx_cpu_set(const struct run_config *c,unsigned flow_index,const char *mode,cpu_set_t *set)
+{
+	CPU_ZERO(set);
+	if (*c->receiver_shared_cpus) {
+		if (!strcmp(run_flow_path(mode,flow_index),"cpumap")) CPU_SET(c->receiver_cpumap_cpu,set);
+		else *set=c->receiver_shared_mask;
+	} else {
+		int n=run_rx_cpu(&c->flows[flow_index],mode);
+		if (n>=0) CPU_SET(n,set);
+	}
+}
 unsigned run_mode_index(const struct run_config *c, unsigned repeat, unsigned position)
 {
 	/* Two modes alternate; three comparison modes rotate their starting order. */
@@ -161,16 +209,44 @@ int read_run_config(const char *file, struct run_config *c)
 	c->sender_supervisor_cpu=cpu(&p,"sender.supervisor_cpu",common);
 	c->receiver_network_cpu=cpu(&p,"receiver.network_cpu","inherit");
 	c->sender_network_cpu=cpu(&p,"sender.network_cpu","inherit");
+	const char *shared=lookup(&p,"receiver.shared_cpus","");
+	c->receiver_cpumap_cpu=(int)number(&p,"receiver.cpumap_cpu","3",0,CPU_SETSIZE-1);
+	if (*shared) {
+		if (run_parse_cpus(shared,&c->receiver_shared_mask) ||
+		    run_format_cpus(&c->receiver_shared_mask,c->receiver_shared_cpus,sizeof(c->receiver_shared_cpus))) {
+			fprintf(stderr,"invalid CPU list: receiver.shared_cpus\n"); p.error=1;
+		}
+		/* The currently compiled BPF CPUMAP target is CPU 3. */
+		if (c->receiver_cpumap_cpu!=3 || CPU_ISSET(c->receiver_cpumap_cpu,&c->receiver_shared_mask)) {
+			fprintf(stderr,"CPUMAP CPU must be 3 and outside receiver.shared_cpus\n"); p.error=1;
+		}
+		if (c->receiver_supervisor_cpu>=0 || c->receiver_network_cpu>=0) {
+			fprintf(stderr,"shared receiver supervisor/network CPU settings must be inherit\n"); p.error=1;
+		}
+	} else if (*lookup(&p,"receiver.cpumap_cpu","") ||
+	           !strcmp(lookup(&p,"receiver.shared_cpus","absent"),"")) {
+		fprintf(stderr,"receiver.cpumap_cpu requires a nonempty receiver.shared_cpus\n"); p.error=1;
+	}
 	/* C08/C10은 실제 측정 준비에서 적용한다. socket-only 검증은 장치를 바꾸지 않는다. */
 	string(&p,"environment.governor","performance",c->governor,sizeof(c->governor));
 	for (const char *q=c->governor;*q;q++) if (!isalnum((unsigned char)*q) && *q!='_' && *q!='-') p.error=1;
 	c->rx_irq_cpu=number(&p,"environment.rx_irq_cpu","2",0,CPU_SETSIZE-1);
+	if (*c->receiver_shared_cpus && !CPU_ISSET(c->rx_irq_cpu,&c->receiver_shared_mask)) {
+		fprintf(stderr,"RX IRQ CPU must belong to receiver.shared_cpus\n"); p.error=1;
+	}
 	c->monitor=number(&p,"monitor",NULL,0,1);
 	c->cpu_percent=number(&p,"load.cpu_percent",NULL,0,100);
 	const char *cpus=lookup(&p,"load.cpu_cpus",c->cpu_percent ? NULL : "");
 	if (strlen(cpus)>=sizeof(c->cpu_cpus)) p.error=1; else strcpy(c->cpu_cpus,cpus);
 	for (const char *q=cpus;*q;q++) if (!isdigit((unsigned char)*q) && *q!=',') p.error=1;
 	if ((c->cpu_percent && !*cpus) || (*cpus && (*cpus==',' || cpus[strlen(cpus)-1]==',' || strstr(cpus,",,")))) p.error=1;
+	if (*c->receiver_shared_cpus && c->cpu_percent) {
+		cpu_set_t workers;
+		if (run_parse_cpus(cpus,&workers)) p.error=1;
+		else for (unsigned n=0;n<CPU_SETSIZE;n++) if (CPU_ISSET(n,&workers) && !CPU_ISSET(n,&c->receiver_shared_mask)) {
+			fprintf(stderr,"CPU load workers must remain in receiver.shared_cpus\n"); p.error=1; break;
+		}
+	}
 	string(&p,"load.cpu_method","all",c->cpu_method,sizeof(c->cpu_method));
 	for (const char *q=c->cpu_method;*q;q++) if (!isalnum((unsigned char)*q) && *q!='_' && *q!='-') p.error=1;
 	c->memory_workers=number(&p,"load.memory_workers","0",0,256);
@@ -210,6 +286,9 @@ int read_run_config(const char *file, struct run_config *c)
 		char rx_cpu[16];
 		if (f->rx_cpu<0) strcpy(rx_cpu,"inherit"); else snprintf(rx_cpu,sizeof(rx_cpu),"%d",f->rx_cpu);
 		f->all_pass_rx_cpu=cpu(&p,FIELD("all_pass_rx_cpu"),rx_cpu);
+		if (*c->receiver_shared_cpus && (f->rx_cpu>=0 || f->all_pass_rx_cpu>=0)) {
+			fprintf(stderr,"shared receiver flows must use rx_cpu=inherit without fixed mode pins\n"); p.error=1;
+		}
 		f->tx_policy=policy(&p,FIELD("tx_policy")); f->rx_policy=policy(&p,FIELD("rx_policy"));
 		f->tx_priority=number(&p,FIELD("tx_priority"),NULL,f->tx_policy==SCHED_OTHER?0:1,f->tx_policy==SCHED_OTHER?0:99);
 		f->rx_priority=number(&p,FIELD("rx_priority"),NULL,f->rx_policy==SCHED_OTHER?0:1,f->rx_policy==SCHED_OTHER?0:99);
@@ -232,7 +311,12 @@ void write_condition(FILE *out,const struct run_config *c,const char *mode,uint6
 	for (unsigned i=0;i<3;i++) { const struct run_flow *f=&c->flows[i]; if (!f->enabled) continue;
 		fprintf(out,"%s{\"flow_id\":%u,\"port\":%u,\"count\":%llu,\"period_ns\":%llu,\"deadline_ns\":",emitted++?",":"",i+1,9000+i,(unsigned long long)flow_count(f,duration_ms),(unsigned long long)f->period_ns);
 		if (f->deadline_ns) fprintf(out,"%llu",(unsigned long long)f->deadline_ns); else fputs("null",out);
-		fprintf(out,",\"requested_path\":\"%s\",\"tx_cpu\":%d,\"rx_cpu\":%d,\"tx_policy\":%d,\"rx_policy\":%d,\"tx_priority\":%d,\"rx_priority\":%d}",run_flow_path(mode,i),f->tx_cpu,run_rx_cpu(f,mode),f->tx_policy,f->rx_policy,f->tx_priority,f->rx_priority);
+		cpu_set_t set; char rx_cpus[RUN_CPU_LIST_SIZE]; int rx_cpu=-1;
+		run_rx_cpu_set(c,i,mode,&set); run_format_cpus(&set,rx_cpus,sizeof(rx_cpus));
+		if (CPU_COUNT(&set)==1) for (unsigned n=0;n<CPU_SETSIZE;n++) if (CPU_ISSET(n,&set)) { rx_cpu=(int)n; break; }
+		fprintf(out,",\"requested_path\":\"%s\",\"tx_cpu\":%d,\"rx_cpu\":%d,\"rx_cpus\":",run_flow_path(mode,i),f->tx_cpu,rx_cpu);
+		json_string(out,*rx_cpus?rx_cpus:"inherit");
+		fprintf(out,",\"tx_policy\":%d,\"rx_policy\":%d,\"tx_priority\":%d,\"rx_priority\":%d}",f->tx_policy,f->rx_policy,f->tx_priority,f->rx_priority);
 	}
 	fprintf(out,"],\"load\":{\"cpu_percent\":%u,\"cpu_cpus\":",c->cpu_percent); json_string(out,c->cpu_cpus);
 	fprintf(out,",\"memory_workers\":%u,\"memory_bytes\":",c->memory_workers); json_string(out,c->memory_bytes);
@@ -240,5 +324,8 @@ void write_condition(FILE *out,const struct run_config *c,const char *mode,uint6
 	json_string(out,c->governor);
 	fprintf(out,",\"alternate_mode_order\":%u",c->alternate_mode_order);
 	fprintf(out,",\"receiver_supervisor_cpu\":%d,\"sender_supervisor_cpu\":%d,\"receiver_network_cpu\":%d,\"sender_network_cpu\":%d",c->receiver_supervisor_cpu,c->sender_supervisor_cpu,c->receiver_network_cpu,c->sender_network_cpu);
+	fputs(",\"receiver_shared_cpus\":",out); json_string(out,c->receiver_shared_cpus);
+	fputs(",\"receiver_cpumap_cpu\":",out);
+	if (*c->receiver_shared_cpus) fprintf(out,"%d",c->receiver_cpumap_cpu); else fputs("null",out);
 	fprintf(out,",\"rx_irq_cpu\":%u},\"config\":{\"sha256\":\"%s\",\"warmup_ms\":%llu,\"settle_ms\":%u,\"drain_ms\":%u,\"monitor\":%u}}",c->rx_irq_cpu,c->digest,(unsigned long long)c->warmup_ms,c->settle_ms,c->drain_ms,c->monitor);
 }

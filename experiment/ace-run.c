@@ -55,10 +55,23 @@ static int mkdir_parents(const char *path)
 	if (mkdir(copy,0755) && errno!=EEXIST) return -1;
 	struct stat st; if (stat(copy,&st) || !S_ISDIR(st.st_mode)) { errno=ENOTDIR; return -1; } return 0;
 }
+static int apply_cpu_set(const cpu_set_t *set)
+{
+	cpu_set_t actual;
+	if (sched_setaffinity(0,sizeof(*set),set) || sched_getaffinity(0,sizeof(actual),&actual)) return -1;
+	/* Linux may silently intersect a request with online/cgroup-allowed CPUs. */
+	if (!CPU_EQUAL(set,&actual)) { errno=EINVAL; return -1; }
+	return 0;
+}
+static int scheduler_mask(const cpu_set_t *set,int policy,int priority)
+{
+	if (set && apply_cpu_set(set)) return -1;
+	struct sched_param p={.sched_priority=priority}; return sched_setscheduler(0,policy,&p);
+}
 static int scheduler(int cpu,int policy,int priority)
 {
-	if (cpu>=0) { cpu_set_t set; CPU_ZERO(&set); CPU_SET(cpu,&set); if (sched_setaffinity(0,sizeof(set),&set)) return -1; }
-	struct sched_param p={.sched_priority=priority}; return sched_setscheduler(0,policy,&p);
+	cpu_set_t set; CPU_ZERO(&set); if (cpu>=0) CPU_SET(cpu,&set);
+	return scheduler_mask(cpu>=0?&set:NULL,policy,priority);
 }
 static int reap(struct context *x)
 {
@@ -72,9 +85,12 @@ static int reap(struct context *x)
 	}
 	return failed ? -1 : 0;
 }
-static int spawn_pipe(struct context *x,const char *name,const char *ready,int cpu,int policy,int priority,int persistent,char *const args[],int notify_fd)
+static int spawn_pipe_mask(struct context *x,const char *name,const char *ready,const cpu_set_t *requested,int policy,int priority,int persistent,char *const args[],int notify_fd)
 {
 	if (x->children>=16) { errno=E2BIG; return -1; }
+	cpu_set_t expected;
+	if (requested) expected=*requested;
+	else if (sched_getaffinity(0,sizeof(expected),&expected)) return -1;
 	char log[4096]; if (pathf(log,sizeof(log),"%s/%s.log",x->run_dir,name)) return -1;
 	int fd=open(log,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0644); if (fd<0) return -1;
 	pid_t pid=fork();
@@ -83,7 +99,7 @@ static int spawn_pipe(struct context *x,const char *name,const char *ready,int c
 		dup2(fd,STDOUT_FILENO); dup2(fd,STDERR_FILENO); close(fd);
 		if (x->fd>=0) close(x->fd);
 		if (notify_fd>=0 && fcntl(notify_fd,F_SETFD,0)) { perror("completion pipe"); _exit(126); }
-		if (scheduler(cpu,policy,priority)) { perror("child scheduler"); _exit(126); }
+		if (scheduler_mask(&expected,policy,priority)) { perror("child scheduler"); _exit(126); }
 		execvp(args[0],args); perror("exec child"); _exit(127);
 	}
 	close(fd); if (pid<0) return -1;
@@ -91,13 +107,16 @@ static int spawn_pipe(struct context *x,const char *name,const char *ready,int c
 	unsigned index=x->children++; struct child *c=&x->child[index]; memset(c,0,sizeof(*c));
 	c->pid=pid; c->persistent=persistent;
 	c->expected_policy=policy; c->expected_priority=priority;
-	CPU_ZERO(&c->expected_cpus);
-	if (cpu>=0) CPU_SET(cpu,&c->expected_cpus);
+	c->expected_cpus=expected;
 	c->completion_fd=-1; c->barrier=notify_fd>=0;
 	pathf(c->name,sizeof(c->name),"%s",name);
 	if (ready) pathf(c->ready,sizeof(c->ready),"%s",ready);
-	if (cpu<0 && x->c.verify_placement && sched_getaffinity(0,sizeof(c->expected_cpus),&c->expected_cpus)) return -1;
 	return (int)index;
+}
+static int spawn_pipe(struct context *x,const char *name,const char *ready,int cpu,int policy,int priority,int persistent,char *const args[],int notify_fd)
+{
+	cpu_set_t set; CPU_ZERO(&set); if (cpu>=0) CPU_SET(cpu,&set);
+	return spawn_pipe_mask(x,name,ready,cpu>=0?&set:NULL,policy,priority,persistent,args,notify_fd);
 }
 static int spawn(struct context *x,const char *name,const char *ready,int cpu,int policy,int priority,int persistent,char *const args[])
 { return spawn_pipe(x,name,ready,cpu,policy,priority,persistent,args,-1); }
@@ -332,6 +351,13 @@ static int capture_state(struct context *x,const char *phase)
 static int prepare_environment(struct context *x)
 {
 	if (!strcmp(x->mode,"socket-only")) return 0;
+	if (x->receiver && *x->c.receiver_shared_cpus) {
+		char target[16]; snprintf(target,sizeof(target),"%d",x->c.receiver_cpumap_cpu);
+		char *check[]={"bash","./monitor/check_cpu_partition.sh",x->c.interface,
+		               x->c.receiver_shared_cpus,target,NULL};
+		int partition=spawn(x,"cpu-partition-check",NULL,-1,SCHED_OTHER,0,0,check);
+		if (partition<0 || wait_child(x,partition,x->c.ready_ms,0)) return -1;
+	}
 	char cpu[16]; snprintf(cpu,sizeof(cpu),"%u",x->c.rx_irq_cpu);
 	char *args[]={"bash","./monitor/prepare_env.sh",x->receiver?"receiver":"sender",
 	              x->c.interface,x->c.governor,cpu,NULL};
@@ -359,7 +385,8 @@ static int receiver_process(struct context *x,unsigned i)
 {
 	char name[32],ready[4096],stats[4096],output[4096],stage[4096],count[32],flow[16],port[16],drain[16];
 	struct run_flow *f=&x->c.flows[i];
-	int rx_cpu=run_rx_cpu(f,x->mode);
+	cpu_set_t cpus; run_rx_cpu_set(&x->c,i,x->mode,&cpus);
+	const cpu_set_t *requested=CPU_COUNT(&cpus)?&cpus:NULL;
 	pathf(name,sizeof(name),"receiver-flow%u",i+1); pathf(ready,sizeof(ready),"%s/%s.ready",x->run_dir,name); pathf(stats,sizeof(stats),"%s/%s.json",x->run_dir,name);
 	snprintf(count,sizeof(count),"%llu",(unsigned long long)flow_count(f,x->c.duration_ms)); snprintf(flow,sizeof(flow),"%u",i+1); snprintf(port,sizeof(port),"%u",9000+i); snprintf(drain,sizeof(drain),"%u",x->c.drain_ms);
 	int n;
@@ -367,11 +394,11 @@ static int receiver_process(struct context *x,unsigned i)
 	if (!strcmp(run_flow_path(x->mode,i),"xsk")) {
 		pathf(output,sizeof(output),"%s/afxdp.csv",x->run_dir);
 		char *args[]={"./BPF/afxdp_recv","--output",output,"--records",count,"--ready-file",ready,"--stats-json",stats,"--drain-ms",drain,"--completion-fd",notify,"--defer-flush",x->c.interface,NULL};
-		n=spawn_pipe(x,name,ready,rx_cpu,f->rx_policy,f->rx_priority,1,args,pipes[1]);
+		n=spawn_pipe_mask(x,name,ready,requested,f->rx_policy,f->rx_priority,1,args,pipes[1]);
 	} else {
 		pathf(output,sizeof(output),"%s/udp-flow%u.bin",x->run_dir,i+1); pathf(stage,sizeof(stage),"/dev/shm/ace-%ld-%u-%u.tmp",(long)getpid(),x->index,i+1);
 		char *args[]={"./udp_socket/bin/receiver","--flow-id",flow,"--port",port,"--count",count,"--tmpfs",stage,"--output",output,"--ready-file",ready,"--stats-json",stats,"--drain-ms",drain,"--completion-fd",notify,"--defer-flush",NULL};
-		n=spawn_pipe(x,name,ready,rx_cpu,f->rx_policy,f->rx_priority,1,args,pipes[1]);
+		n=spawn_pipe_mask(x,name,ready,requested,f->rx_policy,f->rx_priority,1,args,pipes[1]);
 		if (n>=0) pathf(x->child[n].staging,sizeof(x->child[n].staging),"%s",stage);
 	}
 	close(pipes[1]); if (n<0) { close(pipes[0]); return -1; } x->child[n].completion_fd=pipes[0];
@@ -510,6 +537,18 @@ static int sender_run(struct context *x)
 }
 static int preflight(struct context *x)
 {
+	if (x->receiver && *x->c.receiver_shared_cpus) {
+		/* Test the complete requested domain before environment setup/capture.
+		 * A CPUMAP child may expand from its parent's shared affinity to CPU 3. */
+		cpu_set_t original, required=x->c.receiver_shared_mask;
+		if (sched_getaffinity(0,sizeof(original),&original)) return -1;
+		for (unsigned m=0;m<x->c.mode_count;m++)
+			if (!strcmp(x->c.modes[m],"mixed"))
+				CPU_SET(x->c.receiver_cpumap_cpu,&required);
+		int error=apply_cpu_set(&required), saved=errno;
+		if (apply_cpu_set(&original)) return -1;
+		if (error) { errno=saved; fprintf(stderr,"requested receiver CPUs are not all available\n"); return -1; }
+	}
 	const char *required[]={"udp_socket/bin/sender","udp_socket/bin/receiver","udp_socket/bin/ace_clock",NULL};
 	for (unsigned i=0;required[i];i++) if (access(required[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",required[i]); return -1; }
 	if (access("monitor/capture_state.sh",R_OK)) { perror("missing state collector"); return -1; }
@@ -517,6 +556,9 @@ static int preflight(struct context *x)
 	if (x->receiver && x->c.monitor && access("udp_socket/bin/cpu_sample",X_OK)) { perror("missing CPU sampler"); return -1; }
 	if (access("monitor/prepare_env.sh",R_OK) || access("monitor/set_irq_affinity.sh",R_OK)) { perror("missing environment helpers"); return -1; }
 	if (x->receiver) for (unsigned m=0;m<x->c.mode_count;m++) if (strcmp(x->c.modes[m],"socket-only")) {
+		if (*x->c.receiver_shared_cpus && access("monitor/check_cpu_partition.sh",R_OK)) {
+			perror("missing CPU partition check"); return -1;
+		}
 		const char *bpf[]={"BPF/xdp_loader","udp_socket/bin/phc_calibrate",NULL};
 		for (unsigned i=0;bpf[i];i++) if (access(bpf[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",bpf[i]); return -1; }
 		if (!strcmp(run_flow_path(x->c.modes[m],2),"xsk") && x->c.flows[2].enabled && access("BPF/afxdp_recv",X_OK)) {
@@ -543,7 +585,11 @@ int main(int argc,char **argv)
 	sigaction(SIGINT,&stop_action,NULL); sigaction(SIGTERM,&stop_action,NULL); sigaction(SIGCHLD,&child_action,NULL); signal(SIGPIPE,SIG_IGN);
 	if (prctl(PR_SET_CHILD_SUBREAPER,1)) { perror("child subreaper"); return 1; }
 	char output[4096]; if (!realpath(x.c.repo,output)) { perror("repository path"); return 1; } strcpy(x.c.repo,output);
-	if (chdir(x.c.repo) || scheduler(x.receiver?x.c.receiver_supervisor_cpu:x.c.sender_supervisor_cpu,SCHED_OTHER,0)) { perror("runner environment"); return 1; }
+	if (chdir(x.c.repo)) { perror("runner repository"); return 1; }
+	int placement=(x.receiver && *x.c.receiver_shared_cpus)?
+		scheduler_mask(&x.c.receiver_shared_mask,SCHED_OTHER,0):
+		scheduler(x.receiver?x.c.receiver_supervisor_cpu:x.c.sender_supervisor_cpu,SCHED_OTHER,0);
+	if (placement) { perror("runner CPU placement"); return 1; }
 	if (preflight(&x)) { perror("preflight"); return 1; }
 	if (x.c.output[0]!='/') { if (pathf(output,sizeof(output),"%s/%s",x.c.repo,x.c.output)) return 1; strcpy(x.c.output,output); }
 	if (pathf(x.suite,sizeof(x.suite),"%s/%s/%s",x.c.output,x.c.run_id,argv[1])) return 1;

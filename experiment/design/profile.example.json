@@ -1,19 +1,20 @@
 {
   "receiver_address": "192.168.10.10",
-  "receiver_cpus": [
+  "receiver_shared_cpus": [
     0,
-    3,
-    1
+    1,
+    2
   ],
+  "receiver_cpumap_cpu": 3,
   "receiver_policies": [
     "other",
-    "fifo",
-    "fifo"
+    "other",
+    "other"
   ],
   "receiver_priorities": [
     0,
-    80,
-    80
+    0,
+    0
   ],
   "sender_policies": [
     "other",
@@ -25,9 +26,9 @@
     80,
     80
   ],
-  "receiver_supervisor_cpu": 0,
+  "receiver_supervisor_cpu": "inherit",
   "sender_supervisor_cpu": 3,
-  "receiver_network_cpu": 0,
+  "receiver_network_cpu": "inherit",
   "network_high_bps": null,
   "pass_high_pps": null,
   "settle_ms": null

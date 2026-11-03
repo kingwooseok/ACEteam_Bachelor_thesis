@@ -9,8 +9,10 @@ VMware는 코드 관리·빌드 검증과 실험 후 분석에 사용한다. 실
 양쪽 Pi의 저장소에서 프로그램을 빌드한다. `repo=AUTO`이면 `ace-run` 실행 파일의
 상위 저장소를 사용한다. 실제 측정에는 Native XDP와 PREEMPT_RT를 준비한 기존
 실험 환경 및 각 도구의 실행 권한이 필요하다. 실제 run 준비 단계에서 양측 CPU
-governor와 수신 IRQ affinity를 설정값대로 적용·검증한다. `socket-only`는 이를
-변경하지 않는다. 커널 설정, NIC MTU와 패킷 크기는 기존 환경을 사용한다.
+governor와 수신 IRQ affinity를 설정값대로 적용·검증한다. 공유 영역 설정을 사용하는
+수신 실행은 `monitor/check_cpu_partition.sh`로 CPU 예약·RPS·NAPI 설정을 먼저 검사한다.
+`socket-only`는 장치 준비·예약 검사를 건너뛴다. 커널·드라이버, NIC MTU와 패킷 크기는
+기존 실험 환경을 사용한다.
 
 ```bash
 make -C udp_socket
@@ -39,9 +41,16 @@ sudo ./experiment/ace-run sender --config experiment/run.conf
 ```
 
 각 역할의 CPU, RT 우선순위와 mlock 권한이 일반 계정에 제공된 경우 sudo를 생략할
-수 있다. 제어기는 자기 자식 프로세스에만 CPU 배치와 scheduler policy를 적용한다.
-`supervisor_cpu=inherit` 또는 흐름별 CPU의 `inherit`는 호출자의 affinity를 따른다.
-policy는 `other/fifo/rr`, priority는 OTHER=0, FIFO/RR=1..99이다.
+수 있다. 최신 설정의 `receiver.shared_cpus=0,1,2`는 수신 실행기와 일반 자식들의
+공통 CPU 허용 집합이다. PASS·AF_XDP 수신 앱과 관리·관측은 이 영역에서 실행한다.
+`receiver.cpumap_cpu=3`은 mixed의 CPUMAP 수신 앱에만 적용한다.
+각 `flowN.rx_cpu`와 수신 측 supervisor/network CPU는 `inherit`로 작성한다.
+실행기가 경로에 맞는 허용 집합을 적용하며, 앱별 단일 CPU 고정값과 혼용하지 않는다.
+
+공유 영역 키가 없는 기존 설정은 원래 scalar CPU/inherit 동작을 유지한다.
+policy는 `other/fifo/rr`, priority는 OTHER=0, FIFO/RR=1..99이며 최신 본실험의
+수신 앱은 모두 OTHER/0이다. 장치의 일반 작업을 CPU 3에서 제외하는 준비는
+[실험 준비 안내](design/배포전_준비사항.md)를 따른다.
 
 ## 실행 순서
 
@@ -76,14 +85,14 @@ CPU 관측은 C 프로그램 `udp_socket/bin/cpu_sample`이 기존 mpstat를 대
 
 측정 중 제어기는 종료·자식 실패·기한·상대 연결 변화에만 깨어나는 차단 대기를
 사용한다. heartbeat, SSH와 Python 실행은 없다. 메타데이터 수집을 위한 git 및
-sha256sum은 준비 단계에서만 실행한다. `monitor/controller.sh`와
+sha256sum은 준비 단계에서만 실행한다. `monitor/run_load.sh`와
 `monitor/network_load.sh`는 native 부하 도구를 제어하고 패킷별 처리에 개입하지 않는다.
 
 `duration_ms`와 각 흐름의 `period_ns`로 `ceil(duration_ns/period_ns)`개를 전송한다.
 활성 흐름은 1~3개이며 전체 수신 기록 수는 run당 1,048,576개 이하로 제한한다.
 기존 64-byte 실험 payload, 32-byte wire header와 56-byte UDP record는 유지한다.
-`modes=mixed,all-pass`는 각 반복에서 혼합 경로와 동일 입력의 all-PASS 구성을 순서대로
-실행한다. 경로와 flow ID·포트는 기존 정책에 맞춰 고정된다.
+`modes=all-pass,pass-xsk,mixed`는 동일 입력으로 일반 소켓 처리, AF_XDP 추가,
+CPUMAP 중요 수신 분리 구성을 순서대로 실행한다. flow ID·포트는 세 구성에서 유지한다.
 
 `load.cpu_percent`와 `load.cpu_cpus`는 CPU 부하를, memory/io 항목은 해당 부하를
 지정한다. `load.network_bps`는 방향당 병렬 연결 전체의 전송률이며 helper가 나눠 적용한다.
@@ -109,7 +118,9 @@ results/experiment/<run_id>/
     sender-flowN.json  sender-flowN.log  network-load.log
 ```
 
-`run.json`에는 실제 count·주기·경로·실행 배치와 부하 조건을 기록한다. 준비 실패,
+`run.json`에는 실제 count·주기·경로·CPU 허용 집합(`rx_cpus`)과 부하 조건을 기록한다.
+공유 수신 앱은 `rx_cpus="0,1,2"`, mixed의 중요1은 `rx_cpus="3"`이다.
+기존 `rx_cpu`는 단일 CPU일 때 번호를, 여러 CPU를 허용할 때 -1을 남긴다. 준비 실패,
 TCP 단절, Ctrl+C와 제한 시간 초과 시 제어기가 만든 자식들만 종료하고 기록 저장을
 기다린다. 실패한 실행은 `.failed`로 남으며 완성된 실행과 섞지 않는다. 같은 run ID의
 기존 실행 디렉터리는 덮어쓰지 않는다. 다시 실행하려면 새 run ID를 사용한다.
@@ -129,49 +140,43 @@ TCP 제어는 두 Pi의 신뢰된 실험망에서 사용한다.
 python3 -m unittest -v experiment.test_runner
 ```
 
-## 최신 조건표 실행: 15조건 · 135회
+## 최신 조건표 실행: 13조건 · 165회
 
 `build_plan.py`와 `run_matrix.sh plan`은 같은 최소 실행표를 만든다.
 `--d01-d11`도 동일한 설계의 호환 진입점이다. 실행표 개정 번호는
-`minimal-135-v1`이며 기존에 생성한 계획은 새 폴더로 다시 생성한다.
+`shared-three-path-165-v2`이며 기존에 생성한 계획은 새 폴더로 다시 생성한다.
 
 | 구분 | 구성·조건 | 실행 수 |
 |---|---|---:|
 | 경로별 단독 | mixed의 활성 흐름 하나씩, 3경로 × 5회 | 15 |
-| A·B 주 비교 | 중복 제외 10조건 × all-PASS/mixed × 5회 | 100 |
-| 중간 대조 | A의 무부하·복합부하에 pass-xsk × 5회 추가 | 10 |
-| C | mixed의 워커 이동·PASS 수신기 이동 × 5회 | 10 |
-| 합계 | 단독 15회 + 본실험 120회 | **135** |
+| A·B 본실험 | 중복 제외 10조건 × all-pass/pass-xsk/mixed × 5회 | 150 |
+| 합계 | 단독 15회 + 본실험 150회 | **165** |
 
-A는 CPU 0/100% × 네트워크 0/고부하의 네 조건이다. B는 일반 흐름
-0/1,000/3,000/예비측정 최고 PPS × CPU 0/100%의 여덟 조건이며 배경 네트워크
-부하는 없다. A와 겹치는 두 조건은 한 번만 실행한다. CPU 50%·네트워크 중간
-강도의 세 행은 생성하지 않는다. 최고 PPS는 기본 후보 9,000을 예비측정 값으로
+A는 CPU 부하 0%/100% × 네트워크 0/고부하의 네 조건이다. B는 일반 흐름
+0/1,000/3,000/예비측정 최고 PPS × CPU 부하 0%/100%의 여덟 조건이며 배경 네트워크
+부하는 없다. A와 겹치는 두 조건은 한 번만 실행한다. 모든 A·B 조건에서
+세 구성을 비교한다. 최고 PPS는 기본 후보 9,000을 예비측정 값으로
 대체하고, 고정 9,000 행을 별도로 추가하지 않는다.
 
 ### 세 구성과 수신기 위치
 
-| mode | 9000 | 9001 | 9002 | 9001 수신 CPU |
-|---|---|---|---|---:|
-| all-pass | PASS | PASS | PASS | 1 |
-| pass-xsk | PASS | PASS | AF_XDP | 3 |
-| mixed | PASS | CPUMAP | AF_XDP | 3 |
+| mode | 9000 | 9001 | 9002 | 수신 앱의 허용 CPU |
+|---|---|---|---|---|
+| all-pass | PASS | PASS | PASS | 모두 0·1·2 공유 |
+| pass-xsk | PASS | PASS | AF_XDP | 모두 0·1·2 공유 |
+| mixed | PASS | CPUMAP | AF_XDP | 9001만 3, 나머지는 0·1·2 공유 |
 
-9000·9002 수신 CPU와 흐름별 정책·우선순위는 공통으로 유지한다.
-`flow2.rx_cpu=3`, `flow2.all_pass_rx_cpu=1`로 한 설정 파일에 구성별 배치를 담는다.
-`all_pass_rx_cpu`를 생략한 과거 설정은 기존 `rx_cpu`를 사용한다.
-`pass-xsk`와 mixed는 수신기 배치가 같아 9001 커널 처리 이동의 효과를 비교할 수 있다.
-CPUMAP 큐와 전달 워커는 mixed에서 준비한다.
+all-pass는 일반 Linux 소켓 처리를, pass-xsk는 같은 공유 영역에 AF_XDP를 추가한
+효과를 평가한다. mixed는 중요1을 전용 CPU 3으로 전달하여 커널 수신 처리와
+수신 앱을 함께 실행한다. CPUMAP 큐와 전달 워커는 mixed에서만 준비한다.
+all-pass와 pass-xsk에서도 CPU 3은 일반 실행 영역에서 제외한 상태를 유지한다.
 
-C의 기본 결과는 A의 mixed·CPU100%·네트워크 무부하를 재사용한다.
-추가 두 조건은 각각 (1) 워커 **3개·100%**를 유지한 `0,1,2 → 0,2,3` 이동,
-(2) 워커를 `0,1,2`에 둔 채 9000 PASS 수신기만 CPU3으로 이동이다.
-두 변경을 동시에 적용하지 않는다.
+CPU 부하 워커는 세 구성 모두 CPU 0·1·2에 하나씩 둔다. 각 A·B 조건에서
+부하 위치와 앱의 공유 영역을 유지한다. C의 워커 이동·일반 수신기 이동은 생성하지 않는다.
 
-`alternate_mode_order=1`은 반복마다 시작 위치를 순환한다. 두 구성은 AB/BA,
-세 구성은 ABC/BCA/CAB 순서이며 각 구성은 다섯 번씩 측정한다. 중간 대조는
-해당 A 조건에 함께 배치하므로 mixed를 다시 측정하거나 표본을 복제하지 않는다.
-`matrix.csv`의 references가 B·C 및 중간 대조에서 재사용하는 기준 조건을 표시한다.
+`alternate_mode_order=1`은 세 구성의 시작 위치를 ABC/BCA/CAB로 순환한다.
+각 구성은 다섯 번씩 측정한다. `matrix.csv`의 references는 A·B가 공유하는
+중복 조건을 표시한다.
 
 ### 예비측정 값 적용과 실행
 
@@ -181,10 +186,10 @@ C의 기본 결과는 A의 mixed·CPU100%·네트워크 무부하를 재사용�
 - `network_high_bps`: UDP 단방향 1스트림 예비측정 기준 R의 90%.
 - `settle_ms`: 송신 완료 이후 잔여 수신 대기시간.
 
-중요 송수신기는 FIFO80, 일반 흐름과 배경 부하는 OTHER/0으로 시작한다.
-IRQ·CPUMAP 정책은 `scheduler-ready.json`에 기록된다. P03에서 CPUMAP 정책을
-조정하기로 정하면 로더가 만든 해당 전달 스레드에 별도 적용하고 기록으로 확인한다.
-현재 기록 도구는 스레드 정책을 변경하지 않는다.
+수신 앱은 세 구성 모두 OTHER/0이며 공유 CPU 집합과 CPUMAP CPU는 profile에 담긴다.
+송신 Pi는 중요 송신기에 FIFO80을 사용하여 시험 입력의 주기를 유지한다.
+IRQ·CPUMAP 정책은 `scheduler-ready.json`에 기록하고, 각 수신 앱의 허용 CPU와
+정책·우선순위는 `*-flowN.placement.json`에서 실행값과 대조한다.
 
 ```bash
 # PC 또는 분석 장비에서 생성. 기존 폴더를 덮어쓰지 않는다.
@@ -209,7 +214,7 @@ sudo ./experiment/run_matrix.sh sender --plan-dir /path/new-matrix
 ```
 
 wrapper는 모든 설정 해시와 native parser 검사를 마친 뒤 실행한다.
-`verify_placement=1`에서 각 흐름의 실제 CPU·정책·우선순위를 준비 직후 검사하고
+`verify_placement=1`에서 각 흐름의 실제 CPU 허용 집합·정책·우선순위를 준비 직후 검사하고
 `*-flowN.placement.json`에 기록한다. 실패하면 다음 조건으로 넘어가지 않는다.
 기존 실행 디렉터리는 보존하며, Ctrl+C/TERM은 native 실행기의 정리를 기다린다.
 
@@ -224,7 +229,7 @@ wrapper는 모든 설정 해시와 native parser 검사를 마친 뒤 실행한�
 ```
 
 조건별 예정 mode·repeat와 실제 결과를 대조해 누락·중복·해시 불일치를 검사한다.
-단독·C는 5회, 주 비교는 10회, 중간 대조 포함 조건은 15회를 기대한다.
+단독 조건은 5회, A·B의 각 조건은 세 구성 × 5회인 15회를 기대한다.
 결과는 `analysis-report/report.json`과 `report.html`에 모은다.
 
 같은 패킷의 HW 시각을 한 번 보정하여 d₁과 총지연에 재사용한다.

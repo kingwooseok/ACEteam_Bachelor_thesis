@@ -80,9 +80,15 @@ Joined CSV와 summary JSON을 `O_EXCL`로 생성하고 파일/디렉터리를
 ## 반복 run aggregation
 
 통합 보고서는 `all-pass`, `pass-xsk`(PASS/PASS/AF_XDP), `mixed`를 각각 표시한다.
-반복 집계는 `(case_id, mode)` 단위로 수행해 단독·C·A/B 조건을 섞지 않는다.
-`run.json`의 실제 수신 CPU와 경로를 구간별 표에 표시하며, all-PASS의 flow2
-CPU 1과 pass-xsk/mixed의 CPU 3 배치를 그대로 보존한다.
+반복 집계는 `(case_id, mode)` 단위로 수행해 단독·A/B 조건을 섞지 않는다.
+`run.json`의 수신 CPU 허용 집합(`rx_cpus`)과 경로를 구간별 표에 표시한다.
+일반 PASS·AF_XDP 앱은 `0,1,2`를 공유하며 mixed의 CPUMAP 앱만 `3`이다.
+허용 CPU 집합이 다른 실행은 별도 조건으로 보존한다. 기존 scalar `rx_cpu` 기록도 읽는다.
+
+all-pass → pass-xsk는 공유 영역의 AF_XDP 추가 효과를, pass-xsk → mixed는
+중요 흐름의 커널 처리·수신을 전용 CPU로 분리한 효과를 비교한다.
+모든 A·B 조건에서 세 구성의 총지연·기한 초과·손실·일반 처리량을 나란히 읽고,
+같은 패킷의 d₁·d₂·d₃로 변화가 나타난 구간을 설명한다.
 
 `aggregate_runs.py`는 같은 조건의 독립 run을 묶어 deadline과 tail
 latency를 계산한다. 최소 두 개의 join completion marker가 필요하다.

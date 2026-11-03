@@ -14,6 +14,7 @@ import html
 import json
 import math
 import os
+import re
 import shutil
 import statistics
 import sys
@@ -49,7 +50,68 @@ def unsigned(value: object, label: str) -> int:
 
 def condition_identity(descriptor: Mapping) -> dict:
     return {key: descriptor.get(key) for key in
-            ("case_id", "mode", "duration_s", "flows", "load", "config")}
+            ("case_id", "mode", "duration_s", "flows", "load", "environment", "config")}
+
+
+def canonical_cpu_list(value: object, label: str) -> str:
+    """Normalize an explicit Linux CPU list without inventing an inherited mask."""
+    if not isinstance(value, str) or not value:
+        raise ExperimentError(f"{label} must be a CPU list")
+    if value == "inherit":
+        return value
+    cpus = set()
+    for field in value.split(","):
+        if not re.fullmatch(r"[0-9]+(?:-[0-9]+)?", field):
+            raise ExperimentError(f"{label} has an invalid CPU list")
+        bounds = [int(item) for item in field.split("-")]
+        first, last = bounds[0], bounds[-1]
+        if first > last or last >= 1024:
+            raise ExperimentError(f"{label} has an out-of-range CPU")
+        cpus.update(range(first, last + 1))
+    return ",".join(str(cpu) for cpu in sorted(cpus))
+
+
+def receiver_cpu_list(flow: Mapping) -> str:
+    if "rx_cpus" in flow:
+        return canonical_cpu_list(flow["rx_cpus"], "rx_cpus")
+    cpu = flow.get("rx_cpu")
+    if cpu is None or cpu == -1:
+        return "inherit"
+    if isinstance(cpu, bool) or not isinstance(cpu, int) or not 0 <= cpu < 1024:
+        raise ExperimentError("rx_cpu must be -1 or a valid CPU")
+    return str(cpu)
+
+
+def receiver_placement(descriptor: Mapping) -> dict:
+    environment = descriptor.get("environment") or {}
+    shared = environment.get("receiver_shared_cpus", "")
+    if not isinstance(shared, str):
+        raise ExperimentError("receiver_shared_cpus must be a CPU list")
+    if shared:
+        shared = canonical_cpu_list(shared, "receiver_shared_cpus")
+        if shared == "inherit":
+            raise ExperimentError("receiver_shared_cpus must name its CPUs")
+    target = environment.get("receiver_cpumap_cpu")
+    if target is not None and (isinstance(target, bool) or not isinstance(target, int)
+                               or not 0 <= target < 1024):
+        raise ExperimentError("receiver_cpumap_cpu must be a valid CPU")
+    return {"shared_cpus": shared, "cpumap_cpu": target,
+            "flows": [{"flow_id": flow["flow_id"], "rx_cpus": receiver_cpu_list(flow)}
+                      for flow in descriptor["flows"]]}
+
+
+def receiver_cpu_label(flow: Mapping) -> str:
+    cpus = receiver_cpu_list(flow)
+    if cpus == "inherit":
+        return "상위 프로세스 설정 상속"
+    return f"CPU {cpus}" + (" · 공유 허용 범위" if "," in cpus else "")
+
+
+def condition_label(condition: Mapping) -> str:
+    label = f'{condition["case_id"]} / {condition["mode"]}'
+    if condition.get("placement_variant") is not None:
+        label += f' · 배치 {condition["placement_variant"]}'
+    return label
 
 
 def verify_collection(directory: Path) -> None:
@@ -200,6 +262,8 @@ def load_descriptor(directory: Path) -> dict:
         raise ExperimentError("invalid run_id")
     if descriptor.get("mode") not in ("mixed", "all-pass", "pass-xsk", "socket-only"):
         raise ExperimentError("invalid run mode")
+    if descriptor.get("environment") is not None and not isinstance(descriptor["environment"], dict):
+        raise ExperimentError("environment must be an object")
     flows = descriptor.get("flows")
     if not isinstance(flows, list) or not flows:
         raise ExperimentError("run.json requires flows")
@@ -216,6 +280,13 @@ def load_descriptor(directory: Path) -> dict:
             raise ExperimentError("period_ns must be positive")
         if flow.get("deadline_ns") is not None:
             unsigned(flow["deadline_ns"], "deadline_ns")
+        cpus = receiver_cpu_list(flow)
+        if "rx_cpus" in flow and "rx_cpu" in flow:
+            expected = -1 if cpus == "inherit" or "," in cpus else int(cpus)
+            if (isinstance(flow["rx_cpu"], bool) or not isinstance(flow["rx_cpu"], int)
+                    or flow["rx_cpu"] != expected):
+                raise ExperimentError("rx_cpu disagrees with rx_cpus")
+    receiver_placement(descriptor)
     return descriptor
 
 
@@ -503,6 +574,24 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
             result["decomposition"] = summary.get("decomposition")
             result["hw_timestamp_policy"] = run.analysis_policy["hw_timestamp_policy"]
         result["flows"] = descriptor["flows"]
+        result["environment"] = descriptor.get("environment")
+        result["receiver_placement"] = receiver_placement(descriptor)
+        result["receiver_placements"] = {}
+        for flow in descriptor["flows"]:
+            name = f"receiver-flow{flow['flow_id']}.placement.json"
+            if not (directory / name).exists():
+                continue
+            observed = read_json(contained_file(directory, name))
+            cpus = observed.get("cpus")
+            if (not isinstance(cpus, list) or not cpus or
+                    any(isinstance(cpu, bool) or not isinstance(cpu, int) or
+                        not 0 <= cpu < 1024 for cpu in cpus)):
+                raise ExperimentError(f"{name}: invalid allowed CPU set")
+            actual = canonical_cpu_list(",".join(str(cpu) for cpu in cpus), name)
+            expected = receiver_cpu_list(flow)
+            if observed.get("verified") is not True or expected != "inherit" and expected != actual:
+                raise ExperimentError(f"{name}: receiver affinity verification failed")
+            result["receiver_placements"][str(flow["flow_id"])] = observed
         result["delivery"] = delivery_statistics(directory, descriptor, run)
         result["cpu_observation"] = sysstat_summary(directory / "monitor" / "mpstat.log", "cpu")
         result["cpu"], result["cpu_measurement"] = measurement_cpu_summary(
@@ -532,19 +621,28 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
 
 def build_report(directories: Sequence[Path]) -> dict:
     runs = []
-    groups: dict[tuple[str, str], list[tuple[dict, aggregate.RunData, dict]]] = {}
+    groups: dict[tuple[str, str, str], list[tuple[dict, aggregate.RunData, dict]]] = {}
     for directory in directories:
         result, loaded, descriptor = inspect_run(directory)
         runs.append(result)
         if loaded is not None and descriptor is not None:
-            key = (str(descriptor.get("case_id", "default")), descriptor["mode"])
+            placement = json.dumps(receiver_placement(descriptor), sort_keys=True)
+            key = (str(descriptor.get("case_id", "default")), descriptor["mode"], placement)
             groups.setdefault(key, []).append((result, loaded, descriptor))
     conditions = []
-    for (case_id, mode), entries in sorted(groups.items()):
-        condition = {"case_id": case_id, "mode": mode, "status": "completed"}
+    variant_counts = {}
+    for case_id, mode, _ in groups:
+        variant_counts[(case_id, mode)] = variant_counts.get((case_id, mode), 0) + 1
+    variant_indices = {}
+    for (case_id, mode, placement), entries in sorted(groups.items()):
+        variant_indices[(case_id, mode)] = variant_indices.get((case_id, mode), 0) + 1
+        condition = {"case_id": case_id, "mode": mode, "status": "completed",
+                     "receiver_placement": json.loads(placement),
+                     "placement_variant": variant_indices[(case_id, mode)]
+                     if variant_counts[(case_id, mode)] > 1 else None}
         try:
             descriptors = [entry[2] for entry in entries]
-            comparable = lambda d: {key: d.get(key) for key in ("flows", "load", "duration_s", "mode")}
+            comparable = lambda d: {key: d.get(key) for key in ("flows", "load", "duration_s", "mode", "environment")}
             if any(comparable(item) != comparable(descriptors[0]) for item in descriptors[1:]):
                 raise ExperimentError("repeated runs have different flow/load conditions")
             if any(entry[0]["sender_cohort"] != entries[0][0]["sender_cohort"] for entry in entries[1:]):
@@ -576,6 +674,7 @@ def build_report(directories: Sequence[Path]) -> dict:
             cpu = [entry[0]["cpu"].get("all", {}).get("busy_pct") for entry in entries]
             condition.update(statistics=statistics_by_flow, delivery=delivery,
                              flows=flows, load=descriptors[0].get("load"),
+                             environment=descriptors[0].get("environment"),
                              decomposition=[{"run_id": entry[0]["run_id"], **entry[0]["decomposition"]}
                                             for entry in entries if entry[0].get("decomposition")],
                              cpu_busy_pct=aggregate.mean_confidence_interval_95([
@@ -592,6 +691,7 @@ def build_report(directories: Sequence[Path]) -> dict:
                         "cpu_window": "receiver first XDP to last XDP/CPUMAP/userspace observation, CLOCK_MONOTONIC",
                         "cpu_average": "counter deltas weighted by overlapping time at sample boundaries; full window coverage required",
                         "cpu_observation": "legacy mpstat whole-observation average, excluded from measurement CPU aggregation",
+                        "receiver_affinity": "allowed CPU sets, not per-packet observed CPUs; separate affinity layouts are aggregated separately",
                         "deadline": "only explicitly supplied per-flow values",
                         "socket_only": "operational smoke validation only"}}
 
@@ -631,7 +731,7 @@ def render_html(report: Mapping) -> str:
     parts.append('</table></section><section><h2>조건별·flow별 결과</h2><div class="scroll"><table><tr><th>조건</th><th>Flow</th><th>Run 수</th><th>평균 지연 µs</th><th>p99 µs</th><th>관측 최대 µs</th><th>Run p99 평균 [95% CI] µs</th><th>수신 / 송신</th><th>손실률</th><th>수신 PPS</th><th>Deadline µs / 초과율</th></tr>')
     latency_bars = []; loss_bars = []; cpu_bars = []
     for condition in report["conditions"]:
-        label = f'{condition["case_id"]} / {condition["mode"]}'
+        label = condition_label(condition)
         if condition["status"] != "completed":
             parts.append(f'<tr><td colspan="11" class="bad">{escape(label)}: {escape(condition.get("reason"))}</td></tr>')
             continue
@@ -649,7 +749,7 @@ def render_html(report: Mapping) -> str:
             latency_bars.append((label+f' / flow {flow_id}', None if ci["mean"] is None else ci["mean"] / 1000))
             loss_bars.append((label+f' / flow {flow_id}', None if delivery["loss_rate"] is None else delivery["loss_rate"] * 100))
     parts.append('</table></div><p class="note">지연은 NIC 하드웨어 RX → 사용자 수신 구간입니다. Deadline 미지정 시 초과율은 계산하지 않습니다. 신뢰구간은 독립 run 통계이며 1회 실행은 CI 없이 표시합니다. 수신 PPS의 분모는 첫 송신 시도부터 마지막 송신 종료까지이며, 수신 개수에는 종료 후 drain 구간의 도착분도 포함됩니다.</p></section>')
-    parts.append('<section><h2>구간별 지연과 실제 수신 배치</h2><div class="scroll"><table><tr><th>조건 / 구성</th><th>Flow / 경로</th><th>수신 CPU</th><th>d₁ p99 µs</th><th>d₂ p99 µs</th><th>d₃ p99 µs</th><th>XDP 이후 p99 µs</th></tr>')
+    parts.append('<section><h2>구간별 지연과 수신 앱 실행 범위</h2><div class="scroll"><table><tr><th>조건 / 구성</th><th>Flow / 경로</th><th>수신 앱 허용 CPU</th><th>d₁ p99 µs</th><th>d₂ p99 µs</th><th>d₃ p99 µs</th><th>XDP 이후 p99 µs</th></tr>')
     for condition in report["conditions"]:
         if condition["status"] != "completed":
             continue
@@ -659,11 +759,11 @@ def render_html(report: Mapping) -> str:
             p99 = lambda name: metrics[name]["packet_level"]["p99_ns"]
             d2 = p99("cpumap-xdp") if path == "cpumap" else 0 if path in ("pass", "xsk") else None
             d3 = p99("user-cpumap") if path == "cpumap" else p99("user-xdp") if path in ("pass", "xsk") else None
-            values = [f'{condition["case_id"]} / {condition["mode"]}', f'{flow["flow_id"]} / {path}',
-                      flow.get("rx_cpu", "—"), number(p99("xdp-hw"), .001), number(d2, .001),
+            values = [condition_label(condition), f'{flow["flow_id"]} / {path}',
+                      receiver_cpu_label(flow), number(p99("xdp-hw"), .001), number(d2, .001),
                       number(d3, .001), number(p99("user-xdp"), .001)]
             parts.append('<tr>'+''.join(f'<td>{escape(value)}</td>' for value in values)+'</tr>')
-    parts.append('</table></div><p class="note">d₁: NIC→최초 XDP · d₂: CPUMAP CPU 전달(PASS/AF_XDP는 0) · d₃: 마지막 XDP→사용자 수신. 각 p99는 해당 구간의 분포에서 계산하며 총지연 p99는 패킷별 총지연에서 직접 계산합니다. XDP 이후 지연은 PASS의 d₃와 CPUMAP의 d₂+d₃를 같은 관측 경계에서 비교합니다.</p></section>')
+    parts.append('</table></div><p class="note">허용 CPU는 수신 앱이 스케줄링될 수 있는 범위입니다. 여러 CPU를 허용한 앱들은 그 실행 영역을 공유합니다. 같은 조건명이어도 실행 범위가 다르면 별도 배치로 집계합니다.</p><p class="note">d₁: NIC→최초 XDP · d₂: CPUMAP CPU 전달(PASS/AF_XDP는 0) · d₃: 마지막 XDP→사용자 수신. 각 p99는 해당 구간의 분포에서 계산하며 총지연 p99는 패킷별 총지연에서 직접 계산합니다. XDP 이후 지연은 PASS·AF_XDP의 d₃와 CPUMAP의 d₂+d₃를 같은 관측 경계에서 비교합니다.</p></section>')
     parts.append('<section><h2>같은 패킷의 구간 합 검사</h2><table><tr><th>Run</th><th>일치</th><th>관측 부족</th><th>무효</th><th>불일치</th><th>최대 절대 잔차 ns</th></tr>')
     for run in report["runs"]:
         decomposition = run.get("decomposition")

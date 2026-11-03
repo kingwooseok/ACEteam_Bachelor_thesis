@@ -96,11 +96,14 @@ class ExperimentTests(unittest.TestCase):
                     run = self.make_run(root, f'{mode}-{repeat}')
                     data = json.loads((run / "run.json").read_text())
                     data.update(mode=mode, repeat=repeat)
-                    data["flows"][0]["rx_cpu"] = 0
-                    data["flows"][1].update(rx_cpu=1 if mode == "all-pass" else 3,
+                    data["environment"] = dict(receiver_shared_cpus="0,1,2", receiver_cpumap_cpu=3)
+                    data["flows"][0].update(rx_cpu=-1, rx_cpus="0,1,2")
+                    data["flows"][1].update(rx_cpu=3 if mode == "mixed" else -1,
+                                            rx_cpus="3" if mode == "mixed" else "0,1,2",
                                             requested_path="cpumap" if mode == "mixed" else "pass")
                     data["flows"].append(dict(flow_id=3, port=9002, count=3, period_ns=1000000,
-                                              deadline_ns=250, requested_path="pass" if mode == "all-pass" else "xsk", rx_cpu=1))
+                                              deadline_ns=250, requested_path="pass" if mode == "all-pass" else "xsk",
+                                              rx_cpu=-1, rx_cpus="0,1,2"))
                     ingress = (run / "xdp-ingress_records.csv").read_text()
                     if mode != "mixed":
                         ingress = ingress.replace("2,0,0,1300,1300,19,1,0", "2,0,0,1300,1300,19,0,0")
@@ -130,14 +133,93 @@ class ExperimentTests(unittest.TestCase):
                 if condition["case_id"] == "single-2":
                     self.assertEqual(condition["statistics"]["flows"]["2"]["run_count"], 1)
                     continue
-                self.assertEqual(condition["flows"][1]["rx_cpu"], 1 if condition["mode"] == "all-pass" else 3)
+                self.assertEqual(condition["flows"][1]["rx_cpus"], "3" if condition["mode"] == "mixed" else "0,1,2")
+                self.assertEqual(condition["receiver_placement"]["shared_cpus"], "0,1,2")
+                self.assertEqual(condition["environment"]["receiver_cpumap_cpu"], 3)
                 self.assertEqual(condition["statistics"]["flows"]["2"]["run_count"], 2)
                 self.assertEqual(len(condition["decomposition"]), 2)
                 self.assertEqual(condition["decomposition"][0]["max_abs_residual_ns"], 0)
             page = experiment.render_html(report)
             self.assertIn("pass-xsk", page)
-            self.assertIn("구간별 지연과 실제 수신 배치", page)
+            self.assertIn("구간별 지연과 수신 앱 실행 범위", page)
+            self.assertIn("수신 앱 허용 CPU", page)
+            self.assertIn("CPU 0,1,2 · 공유 허용 범위", page)
+            self.assertNotIn("CPU -1", page)
             self.assertIn("같은 패킷의 구간 합 검사", page)
+
+    def test_shared_and_legacy_pinned_layouts_are_separate_aggregation_groups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shared = self.make_run(root, "shared")
+            pinned = self.make_run(root, "pinned")
+            for run in (shared, pinned):
+                data = json.loads((run / "run.json").read_text())
+                data["flows"][1]["rx_cpu"] = 3
+                if run == shared:
+                    data["environment"] = dict(receiver_shared_cpus="0,1,2", receiver_cpumap_cpu=3)
+                    data["flows"][0].update(rx_cpu=-1, rx_cpus="0,1,2")
+                    data["flows"][1]["rx_cpus"] = "3"
+                else:
+                    data["flows"][0]["rx_cpu"] = 0
+                (run / "run.json").write_text(json.dumps(data))
+            report = experiment.build_report([shared, pinned])
+            self.assertEqual(len(report["conditions"]), 2)
+            for condition in report["conditions"]:
+                self.assertEqual(condition["status"], "completed", condition)
+                self.assertEqual(condition["statistics"]["flows"]["1"]["run_count"], 1)
+            layouts = {item["receiver_placement"]["flows"][0]["rx_cpus"]
+                       for item in report["conditions"]}
+            self.assertEqual(layouts, {"0", "0,1,2"})
+            page = experiment.render_html(report)
+            self.assertIn("배치 1", page)
+            self.assertIn("배치 2", page)
+
+    def test_receiver_affinity_evidence_is_preserved_and_mismatch_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.make_run(Path(directory), "shared")
+            data = json.loads((run / "run.json").read_text())
+            data["flows"][0].update(rx_cpu=-1, rx_cpus="0,1,2")
+            (run / "run.json").write_text(json.dumps(data))
+            placement = run / "receiver-flow1.placement.json"
+            evidence = dict(pid=42, policy=0, priority=0, verified=True, cpus=[0, 1, 2])
+            placement.write_text(json.dumps(evidence))
+            report = experiment.build_report([run])
+            self.assertEqual(report["runs"][0]["receiver_placements"]["1"], evidence)
+            self.assertIn(placement.name, report["runs"][0]["input_artifacts"])
+            evidence["cpus"] = [0]
+            placement.write_text(json.dumps(evidence))
+            result = experiment.build_report([run])["runs"][0]
+            self.assertEqual(result["status"], "analysis-failed")
+            self.assertIn("affinity verification failed", result["reason"])
+
+    def test_cpu_affinity_normalization_legacy_and_invalid_masks(self):
+        self.assertEqual(experiment.receiver_cpu_list(dict(rx_cpu=0)), "0")
+        self.assertEqual(experiment.receiver_cpu_label(dict(rx_cpu=-1)), "상위 프로세스 설정 상속")
+        self.assertEqual(experiment.receiver_cpu_list(dict(rx_cpus="2,0-1")), "0,1,2")
+        for value in ("", "0,,1", "-1", "3-1", "1024", "0 1", [0, 1, 2]):
+            with self.subTest(value=value), self.assertRaises(experiment.ExperimentError):
+                experiment.receiver_cpu_list(dict(rx_cpus=value))
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.make_run(Path(directory), "conflict")
+            data = json.loads((run / "run.json").read_text())
+            data["flows"][0].update(rx_cpu=0, rx_cpus="0,1,2")
+            (run / "run.json").write_text(json.dumps(data))
+            with self.assertRaisesRegex(experiment.ExperimentError, "disagrees"):
+                experiment.load_descriptor(run)
+
+    def test_collection_rejects_different_shared_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            receiver = self.make_run(root, "receiver")
+            sender = self.make_run(root, "sender")
+            for run, shared in ((receiver, "0,1,2"), (sender, "0,1")):
+                data = json.loads((run / "run.json").read_text())
+                data["run_id"] = "receiver"
+                data["environment"] = dict(receiver_shared_cpus=shared, receiver_cpumap_cpu=3)
+                (run / "run.json").write_text(json.dumps(data))
+            with self.assertRaisesRegex(experiment.ExperimentError, "conditions disagree"):
+                experiment.collect_results(receiver, sender, root / "mismatch")
+            self.assertFalse((root / "mismatch").exists())
 
     def test_smoke_and_incomplete_runs_cannot_contribute_hardware_statistics(self):
         with tempfile.TemporaryDirectory() as directory:

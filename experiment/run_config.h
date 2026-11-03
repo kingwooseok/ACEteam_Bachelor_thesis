@@ -2,7 +2,9 @@
 #define ACE_RUN_CONFIG_H
 #include <stdint.h>
 #include <stdio.h>
+#include <sched.h>
 #define RUN_MAX_RECORDS 1048576ULL
+#define RUN_CPU_LIST_SIZE 4096
 struct run_flow {
 	int enabled, tx_cpu, rx_cpu, tx_policy, rx_policy, tx_priority, rx_priority;
 	int all_pass_rx_cpu;
@@ -20,6 +22,9 @@ struct run_config {
 	unsigned rx_irq_cpu;
 	int supervisor_cpu, receiver_supervisor_cpu, sender_supervisor_cpu;
 	int receiver_network_cpu, sender_network_cpu;
+	char receiver_shared_cpus[RUN_CPU_LIST_SIZE];
+	cpu_set_t receiver_shared_mask;
+	int receiver_cpumap_cpu;
 	uint64_t duration_ms, warmup_ms, network_bps;
 	struct run_flow flows[3];
 };
@@ -27,6 +32,10 @@ int read_run_config(const char *file, struct run_config *c);
 uint64_t flow_count(const struct run_flow *f, uint64_t duration_ms);
 const char *run_flow_path(const char *mode, unsigned flow_index);
 int run_rx_cpu(const struct run_flow *f, const char *mode);
+int run_parse_cpus(const char *text, cpu_set_t *set);
+int run_format_cpus(const cpu_set_t *set, char *text, size_t size);
+void run_rx_cpu_set(const struct run_config *c, unsigned flow_index,
+		const char *mode, cpu_set_t *set);
 unsigned run_mode_index(const struct run_config *c, unsigned repeat, unsigned position);
 void write_condition(FILE *out, const struct run_config *c, const char *mode,
 		uint64_t duration_ms);

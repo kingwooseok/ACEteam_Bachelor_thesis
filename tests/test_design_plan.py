@@ -31,19 +31,22 @@ class DesignPlanTests(unittest.TestCase):
 
     def profile(self):
         # 회귀 검사용 값이다. 연구에서 확정한 정책/네트워크 세기가 아니다.
-        return dict(receiver_address='192.168.10.10', receiver_cpus=[0, 3, 1],
-                    receiver_policies=['other', 'rr', 'rr'], receiver_priorities=[0, 80, 80],
+        return dict(receiver_address='192.168.10.10', receiver_shared_cpus=[0, 1, 2],
+                    receiver_cpumap_cpu=3,
+                    receiver_policies=['other']*3, receiver_priorities=[0]*3,
                     sender_policies=['other']*3, sender_priorities=[0]*3,
-                    receiver_supervisor_cpu=0, sender_supervisor_cpu=3,
-                    receiver_network_cpu=0, network_high_bps=800000000,
+                    receiver_supervisor_cpu='inherit', sender_supervisor_cpu=3,
+                    receiver_network_cpu='inherit', network_high_bps=800000000,
                     pass_high_pps=9000, settle_ms=100)
 
     def test_document_selected_starting_profile(self):
         profile = json.loads(plan.PROFILE.read_text())
-        self.assertEqual(profile['receiver_cpus'], [0, 3, 1])
-        for side in ('receiver', 'sender'):
-            self.assertEqual(profile[f'{side}_policies'], ['other', 'fifo', 'fifo'])
-            self.assertEqual(profile[f'{side}_priorities'], [0, 80, 80])
+        self.assertEqual(profile['receiver_shared_cpus'], [0, 1, 2])
+        self.assertEqual(profile['receiver_cpumap_cpu'], 3)
+        self.assertEqual(profile['receiver_policies'], ['other']*3)
+        self.assertEqual(profile['receiver_priorities'], [0]*3)
+        self.assertEqual(profile['sender_policies'], ['other', 'fifo', 'fifo'])
+        self.assertEqual(profile['sender_priorities'], [0, 80, 80])
         # 네트워크 측정값을 임의로 채우지 않고 생성 차단을 유지한다.
         with self.assertRaisesRegex(ValueError, 'unresolved'):
             plan.validate(profile)
@@ -52,37 +55,32 @@ class DesignPlanTests(unittest.TestCase):
         plan.validate(profile)
         values = dict(line.split('=', 1) for line in plan.config(profile, plan.rows()[3], 3).splitlines()
                       if line and not line.startswith('#'))
-        self.assertEqual(values['flow2.rx_policy'], 'fifo')
-        self.assertEqual(values['flow2.rx_priority'], '80')
-        self.assertEqual(values['flow3.rx_cpu'], '1')
-        self.assertEqual(values['flow2.rx_cpu'], '3')
-        self.assertEqual(values['flow2.all_pass_rx_cpu'], '1')
+        self.assertEqual(values['receiver.shared_cpus'], '0,1,2')
+        self.assertEqual(values['receiver.cpumap_cpu'], '3')
+        self.assertEqual(values['receiver.supervisor_cpu'], 'inherit')
+        self.assertEqual(values['receiver.network_cpu'], 'inherit')
+        for flow in (1, 2, 3):
+            self.assertEqual(values[f'flow{flow}.rx_policy'], 'other')
+            self.assertEqual(values[f'flow{flow}.rx_priority'], '0')
+            self.assertEqual(values[f'flow{flow}.rx_cpu'], 'inherit')
+            self.assertNotIn(f'flow{flow}.all_pass_rx_cpu', values)
 
     def test_deduplicated_main_and_single_conditions(self):
         rows = plan.rows()
-        self.assertEqual(len(rows), 15)
+        self.assertEqual(len(rows), 13)
         main = [r for r in rows if not r['single_flow']]
-        self.assertEqual(len(main), 12)
+        self.assertEqual(len(main), 10)
         signatures = {(r['pass_pps'], r['cpu_percent'], r['network'],
-                       r['load_cpus'], r['pass_shares_cpu3']) for r in main}
-        self.assertEqual(len(signatures), 12)
-        shared_base = next(r for r in main if 'C-base' in r['references'])
-        self.assertEqual(len(shared_base['references']), 3)
+                       r['load_cpus']) for r in main}
+        self.assertEqual(len(signatures), 10)
+        shared_base = next(r for r in main if 'A-cpu100-none' in r['references'])
+        self.assertEqual(shared_base['references'], ['A-cpu100-none', 'B-pass1000-cpu100'])
         self.assertEqual(shared_base['load_cpus'], '0,1,2')
-        self.assertEqual(shared_base['modes'], ['all-pass', 'mixed'])
-        moved = next(r for r in main if 'C-load-share' in r['references'])
-        self.assertEqual(moved['load_cpus'], '0,2,3')
-        self.assertFalse(moved['pass_shares_cpu3'])
-        receiver = next(r for r in main if 'C-receiver-share' in r['references'])
-        self.assertEqual(receiver['load_cpus'], '0,1,2')
-        self.assertTrue(receiver['pass_shares_cpu3'])
-        self.assertEqual(moved['modes'], receiver['modes'])
-        self.assertEqual(moved['modes'], ['mixed'])
-        self.assertEqual(sum(len(row['modes']) * 5 for row in rows), 135)
-        middle = [row for row in rows if 'pass-xsk' in row['modes']]
-        self.assertEqual({(r['cpu_percent'], r['network']) for r in middle},
-                         {(0, 'none'), (100, 'high')})
-        self.assertTrue(all(row['pass_pps'] == 1000 for row in middle))
+        self.assertTrue(all(row['modes'] == ['all-pass', 'pass-xsk', 'mixed'] for row in main))
+        self.assertTrue(all(row['load_cpus'] == '0,1,2' for row in rows))
+        self.assertFalse(any(label.startswith('C-') for row in rows for label in row['references']))
+        self.assertTrue(all('pass_shares_cpu3' not in row for row in rows))
+        self.assertEqual(sum(len(row['modes']) * 5 for row in rows), 165)
         self.assertTrue(all(row['cpu_percent'] in (0, 100) and
                             row['network'] in ('none', 'high') for row in rows))
 
@@ -111,7 +109,8 @@ class DesignPlanTests(unittest.TestCase):
                           if line and not line.startswith('#'))
             for key, value in {'repeats':'5', 'duration_ms':'60000', 'warmup_ms':'5000',
                                'flow2.deadline_ns':'100000', 'flow3.deadline_ns':'100000',
-                               'sender.network_cpu':'3', 'receiver.network_cpu':'0',
+                               'sender.network_cpu':'3', 'receiver.network_cpu':'inherit',
+                               'receiver.shared_cpus':'0,1,2', 'receiver.cpumap_cpu':'3',
                                'load.memory_workers':'0', 'load.io_workers':'0',
                                'alternate_mode_order':'1'}.items():
                 self.assertEqual(values[key], value)
@@ -126,7 +125,10 @@ class DesignPlanTests(unittest.TestCase):
 
     def test_invalid_profile_rejected(self):
         for key, value in [('network_high_bps', True), ('network_middle_bps', 900000000),
-                           ('receiver_network_cpu', 3), ('receiver_cpus', [0, 2, 1]),
+                           ('receiver_network_cpu', 3), ('receiver_supervisor_cpu', 0),
+                           ('receiver_shared_cpus', [0, 1, 3]), ('receiver_shared_cpus', [0, 1]),
+                           ('receiver_shared_cpus', [False, 1, 2]), ('receiver_cpumap_cpu', 2),
+                           ('receiver_cpus', [0, 3, 1]),
                            ('receiver_priorities', [80, 80, 80]), ('pass_high_pps', 16000)]:
             profile = self.profile()
             profile[key] = value
@@ -149,7 +151,7 @@ class DesignPlanTests(unittest.TestCase):
             profile['pass_high_pps'] = high
             plan.validate(profile, full_design=True)
             rows = plan.rows(high, full_design=True)
-            self.assertEqual(len(rows), 15)
+            self.assertEqual(len(rows), 13)
             references = [label for row in rows for label in row['references']]
             self.assertEqual(len(references), len(set(references)))
             for cpu in (0, 100):
@@ -199,13 +201,15 @@ class DesignPlanTests(unittest.TestCase):
                             '--profile', str(profile), '--output', str(output)],
                            check=True, capture_output=True)
             cases = module.load_cases(output)
-            self.assertEqual(len(cases), 15)
-            self.assertEqual(sum(c['expected_runs'] for c in cases), 135)
-            self.assertEqual({c['expected_runs'] for c in cases}, {5, 10, 15})
+            self.assertEqual(len(cases), 13)
+            self.assertEqual(sum(c['expected_runs'] for c in cases), 165)
+            self.assertEqual({c['expected_runs'] for c in cases}, {5, 15})
             summary = json.loads((output/'plan.json').read_text())
             self.assertEqual(summary['single_runs'], 15)
-            self.assertEqual(summary['main_runs'], 120)
-            self.assertEqual(summary['total_runs'], 135)
+            self.assertEqual(summary['main_runs'], 150)
+            self.assertEqual(summary['total_runs'], 165)
+            self.assertEqual(summary['design_revision'], 'shared-three-path-165-v2')
+            self.assertEqual([summary[key] for key in ('all_pass_runs', 'pass_xsk_runs', 'mixed_main_runs')], [50]*3)
             for case in cases:
                 data = (output / case['config']).read_bytes()
                 self.assertNotIn(b'\r', data)
@@ -217,7 +221,7 @@ class DesignPlanTests(unittest.TestCase):
                 popen.return_value.poll.return_value = 1
                 with self.assertRaisesRegex(RuntimeError, 'matrix stopped'):
                     module.execute('receiver', output, cases)
-                self.assertEqual(validate.call_count, 15)
+                self.assertEqual(validate.call_count, 13)
                 self.assertEqual(popen.call_count, 1)
                 self.assertEqual(popen.call_args.args[0][1], 'receiver')
                 self.assertEqual(Path(popen.call_args.args[0][0]), ROOT / 'experiment/ace-run')
@@ -243,7 +247,7 @@ class DesignPlanTests(unittest.TestCase):
             subprocess.run([sys.executable, str(SCRIPT), '--profile', str(profile),
                             '--output', str(output)], check=True, capture_output=True)
             original = json.loads((output/'execution.json').read_text())
-            self.assertEqual(len(module.load_cases(output)), 15)
+            self.assertEqual(len(module.load_cases(output)), 13)
             for change in (
                     {'expected_modes': ['mixed', 'mixed'], 'expected_runs': 10},
                     {'expected_modes': ['invalid']}, {'repeats': True},
@@ -257,6 +261,11 @@ class DesignPlanTests(unittest.TestCase):
                     module.load_cases(output)
             execution = copy.deepcopy(original)
             del execution['design_revision']
+            (output/'execution.json').write_text(json.dumps(execution))
+            with self.assertRaisesRegex(ValueError, 'regenerate plan'):
+                module.load_cases(output)
+            execution = copy.deepcopy(original)
+            execution['design_revision'] = 'minimal-135-v1'
             (output/'execution.json').write_text(json.dumps(execution))
             with self.assertRaisesRegex(ValueError, 'regenerate plan'):
                 module.load_cases(output)
