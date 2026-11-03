@@ -1363,8 +1363,11 @@ def analyze(
 
 
 def reserve_output(path: Path) -> int:
+    # Python makes new descriptors non-inheritable on both platforms. Binary
+    # descriptor mode leaves newline handling to the TextIOWrapper on Windows.
     return os.open(
-        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o644
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0), 0o644
     )
 
 
@@ -1418,6 +1421,10 @@ def verify_input_artifacts(snapshot: Mapping[str, object]) -> None:
 
 
 def fsync_directories(paths: Sequence[Path]) -> None:
+    # Windows CRT descriptors cannot open directories; each output file is
+    # flushed with fsync before the completion marker is written on all hosts.
+    if os.name == "nt":
+        return
     for directory in sorted({path.parent for path in paths}, key=str):
         descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         try:
@@ -1503,7 +1510,7 @@ def write_outputs(
 
         descriptor = reserve_output(json_path)
         created.append(json_path)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
             descriptor = -1
             json.dump(summary, file, indent=2, sort_keys=True, allow_nan=False)
             file.write("\n")
@@ -1528,7 +1535,7 @@ def write_outputs(
         }
         descriptor = reserve_output(marker_path)
         created.append(marker_path)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
             descriptor = -1
             json.dump(completion, file, indent=2, sort_keys=True)
             file.write("\n")

@@ -477,6 +477,14 @@ static int monitor_process(struct context *x)
 	int n=spawn(x,"monitor",ready,-1,SCHED_OTHER,0,1,args); if (n<0 || ready_child(x,n)) return -1; return n;
 }
 static int wait_completions(struct context *x,const int children[3],unsigned timeout_ms);
+static int stop_receiver_pipeline(struct context *x,int monitor,int loader)
+{
+	/* Keep the NIC/XDP attachment and iperf server intact until TX has stopped
+	 * its background client. Detaching native XDP can restart the NIC link. */
+	if (message(x,DONE,1,x->c.stop_ms) || message(x,ACK,0,x->c.stop_ms)) return -1;
+	if (stop_child(x,monitor) || stop_child(x,loader)) return -1;
+	return 0;
+}
 static int receiver_run(struct context *x)
 {
 	int loader=-1, receivers[3]={-1,-1,-1}, monitor=-1;
@@ -504,11 +512,8 @@ static int receiver_run(struct context *x)
 	for (unsigned i=0;i<3;i++) if (receivers[i]>=0) kill(x->child[receivers[i]].pid,SIGUSR1);
 	for (unsigned i=0;i<3;i++) if (receivers[i]>=0 && wait_child(x,receivers[i],x->c.stop_ms,1)) return -1;
 	if (!smoke && calibrate(x,"after")) return -1;
-	if (stop_child(x,loader)) return -1;
 	/* DONE releases sender flush; ACK confirms its network client has stopped. */
-	if (message(x,DONE,1,x->c.stop_ms) || message(x,ACK,0,x->c.stop_ms)) return -1;
-	/* Keep the iperf server alive until the peer has shut down its client. */
-	if (stop_child(x,monitor) || capture_state(x,"after") || restore_cpu_partition(x) || write_run(x,"completed")) return -1;
+	if (stop_receiver_pipeline(x,monitor,loader) || capture_state(x,"after") || restore_cpu_partition(x) || write_run(x,"completed")) return -1;
 	return marker(x,".complete");
 }
 static int network_process(struct context *x)

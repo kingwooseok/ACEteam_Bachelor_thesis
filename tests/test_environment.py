@@ -4,9 +4,12 @@ IRQ/governor fixtures are private files, never the host's proc/sys. Physical Pi
 application and restoration are recorded separately in the validation report.
 """
 from pathlib import Path
+import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +40,81 @@ class EnvironmentTests(unittest.TestCase):
         command = 'source "$1"; PROC_ROOT="$2/proc"; SYS_ROOT="$2/sys"; shift 2; main "$@"'
         return subprocess.run(['bash', '-c', command, 'fixture', str(MONITOR / 'set_irq_affinity.sh'),
                                str(self.root), *args], text=True, capture_output=True, timeout=5)
+
+    def irq_thread(self, tid, irq, cpus='2', kernel=True):
+        base = self.proc / str(tid)
+        base.mkdir()
+        name = f'irq/{irq}-eth%d'
+        (base / 'comm').write_text(name + '\n')
+        fields = ['0'] * 52
+        fields[:3] = [str(tid), f'({name})', 'S']
+        fields[8] = '2097152' if kernel else '0'  # /proc stat field 9: flags
+        (base / 'stat').write_text(' '.join(fields) + '\n')
+        (base / 'status').write_text(f'Cpus_allowed_list:\t{cpus}\n')
+        return base
+
+    def test_unchanged_irq_request_resynchronizes_stale_thread(self):
+        (self.proc / 'interrupts').write_text('8: 1 0 0 0 chip eth0\n')
+        self.irq(8, '2')
+        thread = self.irq_thread(117, 8, '0-3')
+        request = self.proc / 'irq/8/smp_affinity_list'
+        os.utime(request, (946684800, 946684800))
+        before = request.stat().st_mtime_ns
+        rewritten = threading.Event()
+        stop = threading.Event()
+
+        def kernel_affinity_update():
+            deadline = time.monotonic() + 3
+            while not stop.is_set() and time.monotonic() < deadline:
+                if request.stat().st_mtime_ns != before:
+                    (thread / 'status').write_text('Cpus_allowed_list:\t2\n')
+                    rewritten.set()
+                    return
+                stop.wait(.005)
+
+        watcher = threading.Thread(target=kernel_affinity_update)
+        watcher.start()
+        try:
+            p = self.call_irq('eth0', '2')
+        finally:
+            stop.set()
+            watcher.join()
+        self.assertTrue(rewritten.is_set(), 'same-value request must reach the kernel')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('threads=117:2', p.stdout)
+
+    def test_check_rejects_stale_thread_without_reapplying_request(self):
+        (self.proc / 'interrupts').write_text('8: 1 0 0 0 chip eth0\n')
+        self.irq(8, '2')
+        self.irq_thread(117, 8, '0-3')
+        request = self.proc / 'irq/8/smp_affinity_list'
+        os.utime(request, (946684800, 946684800))
+        before = request.stat().st_mtime_ns
+        p = self.call_irq('eth0', '2', '--check')
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('threads=117:0-3', p.stderr)
+        self.assertEqual(request.stat().st_mtime_ns, before)
+
+    def test_irq_thread_match_ignores_other_irq_and_user_process(self):
+        (self.proc / 'interrupts').write_text('8: 1 0 0 0 chip eth0\n')
+        self.irq(8, '2')
+        self.irq_thread(117, 8)
+        self.irq_thread(118, 80, '0-3')
+        self.irq_thread(119, 8, '0-3', kernel=False)
+        p = self.call_irq('eth0', '2', '--check')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('threads=117:2', p.stdout)
+        self.assertNotIn('118:', p.stdout)
+        self.assertNotIn('119:', p.stdout)
+
+    def test_irq_thread_failure_restores_requested_mask(self):
+        (self.proc / 'interrupts').write_text('8: 1 0 0 0 chip eth0\n')
+        self.irq(8)
+        self.irq_thread(117, 8, '0-3')
+        p = self.call_irq('eth0', '2')
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('threads=117:0-3', p.stderr)
+        self.assertEqual((self.proc / 'irq/8/smp_affinity_list').read_text(), '0-3\n')
 
     def test_exact_interface_match_ignores_eth01_and_veth0(self):
         (self.proc / 'interrupts').write_text(

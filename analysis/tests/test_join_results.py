@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import struct
 import tempfile
 import unittest
@@ -30,6 +31,20 @@ CALIBRATION_HEADER = (
 
 
 class JoinResultsTest(unittest.TestCase):
+    def test_reserved_output_preserves_bytes_and_refuses_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "output.csv"
+            descriptor = join_results.reserve_output(path)
+            try:
+                self.assertFalse(os.get_inheritable(descriptor))
+                os.write(descriptor, b"flow_id,sequence\r\n1,2\r\n")
+            finally:
+                os.close(descriptor)
+            self.assertEqual(path.read_bytes(), b"flow_id,sequence\r\n1,2\r\n")
+            with self.assertRaises(FileExistsError):
+                join_results.reserve_output(path)
+            self.assertEqual(path.read_bytes(), b"flow_id,sequence\r\n1,2\r\n")
+
     def write_text(self, path: Path, contents: str) -> None:
         path.write_text(contents, encoding="utf-8")
 
@@ -455,8 +470,23 @@ class JoinResultsTest(unittest.TestCase):
                 "escapes manifest run directory",
             )
 
+    def test_symlink_run_directory_containment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = self.make_run(temporary)
+            ingress = run / "ingress.csv"
+            calibration = run / "phc.csv"
+            self.write_text(ingress, INGRESS_HEADER)
+            self.write_calibration(calibration, [(1000, 100)])
+            outside_ingress = root / "outside-ingress.csv"
+            self.write_text(outside_ingress, INGRESS_HEADER)
             symlink_input = run / "symlink-ingress.csv"
-            symlink_input.symlink_to(outside_ingress)
+            try:
+                symlink_input.symlink_to(outside_ingress)
+            except OSError as error:
+                if getattr(error, "winerror", None) == 1314:
+                    self.skipTest("Windows account cannot create symbolic links")
+                raise
             self.assert_run_fails(
                 self.arguments(
                     run, symlink_input, [calibration], stem="symlink-input"
