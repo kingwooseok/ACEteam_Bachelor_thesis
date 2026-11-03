@@ -1,0 +1,236 @@
+
+[1] build UDP and BPF userspace/kernel objects
+cc -Iinclude -I../include -O2 -g -std=c11 -Wall -Wextra -Wpedantic src/cpu_sample.c -o bin/cpu_sample
+
+[2] reject whitespace/errors in the working diff
+
+[3] compile and verify shared ABI/runtime helpers
+wire ABI: 32-byte shared header and network byte order verified
+runtime helpers: HWTSTAMP intent and PID generation verified
+
+[4] exercise CLI help and pre-setup rejection paths
+ok: sender --help (exit 0)
+ok: receiver --help (exit 0)
+ok: phc_calibrate --help (exit 0)
+ok: xdp_loader --help (exit 0)
+ok: afxdp_recv --help (exit 0)
+ok: sender rejects port zero (exit 2)
+ok: sender requires a flow ID (exit 2)
+ok: sender rejects signed count (exit 2)
+ok: sender rejects fragmented/oversize payload (exit 2)
+ok: sender rejects invalid IPv4 (exit 2)
+ok: receiver rejects count zero (exit 2)
+ok: receiver requires a flow ID (exit 2)
+ok: receiver rejects identical staging/output paths (exit 2)
+ok: phc_calibrate rejects zero samples (exit 2)
+ok: phc_calibrate rejects signed samples (exit 2)
+ok: phc_calibrate rejects device/interface ambiguity (exit 2)
+ok: xdp_loader requires an output directory (exit 1)
+ok: xdp_loader rejects unsafe prefix (exit 1)
+ok: xdp_loader rejects signed record count (exit 1)
+ok: xdp_loader rejects cleanup outside recovery (exit 1)
+ok: afxdp_recv requires an output file (exit 1)
+ok: afxdp_recv rejects signed record count (exit 1)
+ok: afxdp_recv rejects nonnumeric RX queue (exit 1)
+
+[5] normal UDP sender/receiver loopback
+records: 3 sample(s), flow/key/length/layout verified
+
+[6] wrong-flow packet is rejected before the valid packet
+records: 1 sample(s), flow/key/length/layout verified
+
+[7] userspace-truncated oversized datagram is rejected
+records: 1 sample(s), flow/key/length/layout verified
+
+[8] strict HW timestamp mode fails cleanly on loopback and preserves data
+records: 1 sample(s), flow/key/length/layout verified
+
+[9] analysis and provenance unit tests
+test_full_join_interpolation_metrics_duplicates_and_completion (analysis.tests.test_join_results.JoinResultsTest.test_full_join_interpolation_metrics_duplicates_and_completion) ... ok
+test_incomplete_output_set_is_detected_without_overwrite (analysis.tests.test_join_results.JoinResultsTest.test_incomplete_output_set_is_detected_without_overwrite) ... ok
+test_input_abi_validation_rejects_bad_csv_udp_and_calibration (analysis.tests.test_join_results.JoinResultsTest.test_input_abi_validation_rejects_bad_csv_udp_and_calibration) ... ok
+test_manifest_is_mandatory_and_duplicate_keys_are_rejected (analysis.tests.test_join_results.JoinResultsTest.test_manifest_is_mandatory_and_duplicate_keys_are_rejected) ... ok
+test_manifest_validation_and_run_directory_containment (analysis.tests.test_join_results.JoinResultsTest.test_manifest_validation_and_run_directory_containment) ... ok
+test_multiple_calibrations_merge_duplicates_and_reject_conflicts (analysis.tests.test_join_results.JoinResultsTest.test_multiple_calibrations_merge_duplicates_and_reject_conflicts) ... ok
+test_out_of_range_default_exclusion_and_explicit_clamp (analysis.tests.test_join_results.JoinResultsTest.test_out_of_range_default_exclusion_and_explicit_clamp) ... ok
+test_reserved_output_preserves_bytes_and_refuses_overwrite (analysis.tests.test_join_results.JoinResultsTest.test_reserved_output_preserves_bytes_and_refuses_overwrite) ... ok
+test_semantic_inconsistency_bitmask_counts_and_raw_preservation (analysis.tests.test_join_results.JoinResultsTest.test_semantic_inconsistency_bitmask_counts_and_raw_preservation) ... ok
+test_symlink_run_directory_containment (analysis.tests.test_join_results.JoinResultsTest.test_symlink_run_directory_containment) ... ok
+test_validated_afxdp_metadata_fallback_and_raw_invalid_row (analysis.tests.test_join_results.JoinResultsTest.test_validated_afxdp_metadata_fallback_and_raw_invalid_row) ... ok
+test_drift_uses_one_corrected_hw_value_for_all_segments (analysis.tests.test_join_results.SharedHardwareClockTest.test_drift_uses_one_corrected_hw_value_for_all_segments) ... ok
+test_negative_stage_is_invalid_even_when_sum_closes (analysis.tests.test_join_results.SharedHardwareClockTest.test_negative_stage_is_invalid_even_when_sum_closes) ... ok
+test_outside_xdp_does_not_switch_to_in_range_user_offset (analysis.tests.test_join_results.SharedHardwareClockTest.test_outside_xdp_does_not_switch_to_in_range_user_offset) ... ok
+test_pass_zero_dispatch_and_missing_cpumap_stays_missing (analysis.tests.test_join_results.SharedHardwareClockTest.test_pass_zero_dispatch_and_missing_cpumap_stays_missing) ... ok
+test_udp_without_xdp_uses_user_reference_only_for_total (analysis.tests.test_join_results.SharedHardwareClockTest.test_udp_without_xdp_uses_user_reference_only_for_total) ... ok
+test_aggregate_percentiles_deadlines_and_exclusive_outputs (analysis.tests.test_aggregate_runs.AggregateRunsTest.test_aggregate_percentiles_deadlines_and_exclusive_outputs) ... ok
+test_input_provenance_and_source_presence_are_bound (analysis.tests.test_aggregate_runs.AggregateRunsTest.test_input_provenance_and_source_presence_are_bound) ... ok
+test_legacy_runs_load_but_cannot_mix_with_shared_hw_clock_policy (analysis.tests.test_aggregate_runs.AggregateRunsTest.test_legacy_runs_load_but_cannot_mix_with_shared_hw_clock_policy) ... ok
+test_rejects_mixed_cohorts (analysis.tests.test_aggregate_runs.AggregateRunsTest.test_rejects_mixed_cohorts) ... ok
+test_rejects_tampered_and_duplicate_run_artifacts (analysis.tests.test_aggregate_runs.AggregateRunsTest.test_rejects_tampered_and_duplicate_run_artifacts) ... ok
+test_all_pass_uses_recorded_effective_path_for_every_flow (analysis.tests.test_experiment.ExperimentTests.test_all_pass_uses_recorded_effective_path_for_every_flow) ... ok
+test_collection_rejects_different_shared_environment (analysis.tests.test_experiment.ExperimentTests.test_collection_rejects_different_shared_environment) ... ok
+test_cpu_affinity_normalization_legacy_and_invalid_masks (analysis.tests.test_experiment.ExperimentTests.test_cpu_affinity_normalization_legacy_and_invalid_masks) ... ok
+test_cpu_average_excludes_preparation_and_weights_boundary_intervals (analysis.tests.test_experiment.ExperimentTests.test_cpu_average_excludes_preparation_and_weights_boundary_intervals) ... ok
+test_cpu_partial_or_invalid_samples_do_not_supply_measurement_average (analysis.tests.test_experiment.ExperimentTests.test_cpu_partial_or_invalid_samples_do_not_supply_measurement_average) ... ok
+test_cross_file_overlap_and_raw_tampering_are_rejected (analysis.tests.test_experiment.ExperimentTests.test_cross_file_overlap_and_raw_tampering_are_rejected) ... ok
+test_dynamic_partition_evidence_is_bound_to_result_and_restoration (analysis.tests.test_experiment.ExperimentTests.test_dynamic_partition_evidence_is_bound_to_result_and_restoration) ... ok
+test_dynamic_reservation_follows_active_cpumap_flow (analysis.tests.test_experiment.ExperimentTests.test_dynamic_reservation_follows_active_cpumap_flow) ... ok
+test_legacy_mpstat_is_preserved_without_replacing_missing_measurement_cpu (analysis.tests.test_experiment.ExperimentTests.test_legacy_mpstat_is_preserved_without_replacing_missing_measurement_cpu) ... ok
+test_mixed_afxdp_stats_without_flow_id_uses_packet_ids (analysis.tests.test_experiment.ExperimentTests.test_mixed_afxdp_stats_without_flow_id_uses_packet_ids) ... ok
+test_multiple_udp_join_flow_deadline_loss_and_html (analysis.tests.test_experiment.ExperimentTests.test_multiple_udp_join_flow_deadline_loss_and_html) ... ok
+test_native_network_is_bound_to_cpu_window_and_legacy_observation_is_separate (analysis.tests.test_experiment.ExperimentTests.test_native_network_is_bound_to_cpu_window_and_legacy_observation_is_separate) ... ok
+test_network_final_sample_completes_tail_coverage_and_idle_is_valid (analysis.tests.test_experiment.ExperimentTests.test_network_final_sample_completes_tail_coverage_and_idle_is_valid) ... ok
+test_network_reset_malformed_or_nonincreasing_samples_are_rejected (analysis.tests.test_experiment.ExperimentTests.test_network_reset_malformed_or_nonincreasing_samples_are_rejected) ... ok
+test_network_window_excludes_idle_setup_and_weights_boundary_deltas (analysis.tests.test_experiment.ExperimentTests.test_network_window_excludes_idle_setup_and_weights_boundary_deltas) ... ok
+test_per_flow_cli_and_optional_deadline (analysis.tests.test_experiment.ExperimentTests.test_per_flow_cli_and_optional_deadline) ... ok
+test_pps_uses_actual_sender_elapsed_not_scheduled_start (analysis.tests.test_experiment.ExperimentTests.test_pps_uses_actual_sender_elapsed_not_scheduled_start) ... ok
+test_receiver_affinity_evidence_is_preserved_and_mismatch_rejected (analysis.tests.test_experiment.ExperimentTests.test_receiver_affinity_evidence_is_preserved_and_mismatch_rejected) ... ok
+test_shared_and_legacy_pinned_layouts_are_separate_aggregation_groups (analysis.tests.test_experiment.ExperimentTests.test_shared_and_legacy_pinned_layouts_are_separate_aggregation_groups) ... ok
+test_smoke_and_incomplete_runs_cannot_contribute_hardware_statistics (analysis.tests.test_experiment.ExperimentTests.test_smoke_and_incomplete_runs_cannot_contribute_hardware_statistics) ... ok
+test_suite_collection_and_failed_source_status (analysis.tests.test_experiment.ExperimentTests.test_suite_collection_and_failed_source_status) ... ok
+test_three_modes_keep_cpu_placements_and_distinct_cases (analysis.tests.test_experiment.ExperimentTests.test_three_modes_keep_cpu_placements_and_distinct_cases) ... ok
+test_two_pi_collection_is_exclusive_and_checks_identity_and_bytes (analysis.tests.test_experiment.ExperimentTests.test_two_pi_collection_is_exclusive_and_checks_identity_and_bytes) ... ok
+test_warmup_is_preserved_but_excluded (analysis.tests.test_experiment.ExperimentTests.test_warmup_is_preserved_but_excluded) ... ok
+test_window_includes_dropped_tail_and_later_cpumap_observation (analysis.tests.test_experiment.ExperimentTests.test_window_includes_dropped_tail_and_later_cpumap_observation) ... ok
+test_dirty_and_committed_sources_are_reconstructible (tests.test_capture_manifest.CaptureManifestTests.test_dirty_and_committed_sources_are_reconstructible) ... ok
+test_exclusive_write_refuses_overwrite (tests.test_capture_manifest.CaptureManifestTests.test_exclusive_write_refuses_overwrite) ... ok
+test_missing_base_ref_is_fatal (tests.test_capture_manifest.CaptureManifestTests.test_missing_base_ref_is_fatal) ... ok
+test_tree_hash_is_ordered_and_content_sensitive (tests.test_capture_manifest.CaptureManifestTests.test_tree_hash_is_ordered_and_content_sensitive) ... ok
+test_check_refuses_effective_mismatch_without_writing (tests.test_environment.EnvironmentTests.test_check_refuses_effective_mismatch_without_writing) ... ok
+test_check_rejects_stale_thread_without_reapplying_request (tests.test_environment.EnvironmentTests.test_check_rejects_stale_thread_without_reapplying_request) ... ok
+test_exact_interface_match_ignores_eth01_and_veth0 (tests.test_environment.EnvironmentTests.test_exact_interface_match_ignores_eth01_and_veth0) ... ok
+test_failed_second_irq_restores_first_request (tests.test_environment.EnvironmentTests.test_failed_second_irq_restores_first_request) ... ok
+test_irq_failure_restores_all_changed_governors (tests.test_environment.EnvironmentTests.test_irq_failure_restores_all_changed_governors) ... ok
+test_irq_thread_failure_restores_requested_mask (tests.test_environment.EnvironmentTests.test_irq_thread_failure_restores_requested_mask) ... ok
+test_irq_thread_match_ignores_other_irq_and_user_process (tests.test_environment.EnvironmentTests.test_irq_thread_match_ignores_other_irq_and_user_process) ... ok
+test_msi_irqs_are_used_even_without_interface_labels (tests.test_environment.EnvironmentTests.test_msi_irqs_are_used_even_without_interface_labels) ... ok
+test_offline_cpu_is_rejected_before_mutation (tests.test_environment.EnvironmentTests.test_offline_cpu_is_rejected_before_mutation) ... ok
+test_sender_governor_preparation_does_not_touch_irq (tests.test_environment.EnvironmentTests.test_sender_governor_preparation_does_not_touch_irq) ... ok
+test_state_collector_does_not_overwrite_existing_evidence (tests.test_environment.EnvironmentTests.test_state_collector_does_not_overwrite_existing_evidence) ... ok
+test_unchanged_irq_request_resynchronizes_stale_thread (tests.test_environment.EnvironmentTests.test_unchanged_irq_request_resynchronizes_stale_thread) ... ok
+test_unsupported_governor_never_changes_policy (tests.test_environment.EnvironmentTests.test_unsupported_governor_never_changes_policy) ... ok
+test_acquire_release_restores_all_cpus_and_controller (tests.test_cpu_partition.CpuPartitionTests.test_acquire_release_restores_all_cpus_and_controller) ... ok
+test_bad_cpu_syntax_is_rejected_without_writes (tests.test_cpu_partition.CpuPartitionTests.test_bad_cpu_syntax_is_rejected_without_writes) ... ok
+test_controller_rps_and_threaded_napi_checks (tests.test_cpu_partition.CpuPartitionTests.test_controller_rps_and_threaded_napi_checks) ... ok
+test_fixed_boot_isolation_refuses_baseline (tests.test_cpu_partition.CpuPartitionTests.test_fixed_boot_isolation_refuses_baseline) ... ok
+test_invalid_partition_and_signal_roll_back (tests.test_cpu_partition.CpuPartitionTests.test_invalid_partition_and_signal_roll_back) ... ok
+test_new_external_controller_use_is_preserved (tests.test_cpu_partition.CpuPartitionTests.test_new_external_controller_use_is_preserved) ... ok
+test_offline_missing_or_reserved_cpu_rejected (tests.test_cpu_partition.CpuPartitionTests.test_offline_missing_or_reserved_cpu_rejected) ... ok
+test_preflight_accepts_full_cpu_sharing_without_boot_isolation (tests.test_cpu_partition.CpuPartitionTests.test_preflight_accepts_full_cpu_sharing_without_boot_isolation) ... ok
+test_preserves_preexisting_controller_and_other_consumers (tests.test_cpu_partition.CpuPartitionTests.test_preserves_preexisting_controller_and_other_consumers) ... ok
+test_refuses_unowned_group_and_existing_state (tests.test_cpu_partition.CpuPartitionTests.test_refuses_unowned_group_and_existing_state) ... ok
+test_release_refuses_live_children_until_they_exit (tests.test_cpu_partition.CpuPartitionTests.test_release_refuses_live_children_until_they_exit) ... ok
+test_release_without_acquire_is_idempotent (tests.test_cpu_partition.CpuPartitionTests.test_release_without_acquire_is_idempotent) ... ok
+test_empty_snapshot_is_explicit_and_valid (tests.test_scheduler_capture.SchedulerCaptureTests.test_empty_snapshot_is_explicit_and_valid) ... ok
+test_existing_snapshot_is_not_overwritten (tests.test_scheduler_capture.SchedulerCaptureTests.test_existing_snapshot_is_not_overwritten) ... ok
+test_names_with_parenthesis_and_quote_do_not_corrupt_stat_or_json (tests.test_scheduler_capture.SchedulerCaptureTests.test_names_with_parenthesis_and_quote_do_not_corrupt_stat_or_json) ... ok
+test_records_matching_kernel_threads_and_scheduler_fields (tests.test_scheduler_capture.SchedulerCaptureTests.test_records_matching_kernel_threads_and_scheduler_fields) ... ok
+test_unreadable_thread_state_is_preserved_as_partial (tests.test_scheduler_capture.SchedulerCaptureTests.test_unreadable_thread_state_is_preserved_as_partial) ... ok
+test_document_selected_starting_profile (tests.test_design_plan.DesignPlanTests.test_document_selected_starting_profile) ... ok
+test_draft_has_no_executable_configs (tests.test_design_plan.DesignPlanTests.test_draft_has_no_executable_configs) ... ok
+test_execution_metadata_must_match_saved_modes_and_repeats (tests.test_design_plan.DesignPlanTests.test_execution_metadata_must_match_saved_modes_and_repeats) ... ok
+test_existing_output_is_preserved (tests.test_design_plan.DesignPlanTests.test_existing_output_is_preserved) ... ok
+test_filled_plan_preserves_all_adopted_values_and_capacity (tests.test_design_plan.DesignPlanTests.test_filled_plan_preserves_all_adopted_values_and_capacity) ... ok
+test_fixed_rate_configs_keep_all_active_flows_at_1000_pps (tests.test_design_plan.DesignPlanTests.test_fixed_rate_configs_keep_all_active_flows_at_1000_pps) ... ok
+test_four_load_conditions_and_three_single_paths (tests.test_design_plan.DesignPlanTests.test_four_load_conditions_and_three_single_paths) ... ok
+test_full_design_wrapper_manifest_and_tamper_rejection (tests.test_design_plan.DesignPlanTests.test_full_design_wrapper_manifest_and_tamper_rejection) ... receiver: single-1 (D01-flow1)
+ok
+test_invalid_profile_rejected (tests.test_design_plan.DesignPlanTests.test_invalid_profile_rejected) ... ok
+test_matrix_collection_reuses_existing_analysis_and_rejects_missing_repeat (tests.test_design_plan.DesignPlanTests.test_matrix_collection_reuses_existing_analysis_and_rejects_missing_repeat) ... ok
+test_unresolved_profile_publishes_nothing (tests.test_design_plan.DesignPlanTests.test_unresolved_profile_publishes_nothing) ... ok
+
+----------------------------------------------------------------------
+Ran 91 tests in 4.206s
+
+OK
+
+[10] native experiment runner, readiness, drain and load lifecycle
+make: Entering directory '/tmp/ace-pilot-20261103-v4/repo/experiment'
+make: Nothing to be done for 'all'.
+make: Leaving directory '/tmp/ace-pilot-20261103-v4/repo/experiment'
+test_bad_or_expired_start_file_rejected (tests.test_udp_automation.UDPAutomationTests.test_bad_or_expired_start_file_rejected) ... ok
+test_defer_flush_waits_for_supervisor_stop (tests.test_udp_automation.UDPAutomationTests.test_defer_flush_waits_for_supervisor_stop) ... ok
+test_idle_timeout_without_traffic (tests.test_udp_automation.UDPAutomationTests.test_idle_timeout_without_traffic) ... ok
+test_ready_collision_keeps_existing_file (tests.test_udp_automation.UDPAutomationTests.test_ready_collision_keeps_existing_file) ... ok
+test_receiver_drain_completion_then_flush_barrier (tests.test_udp_automation.UDPAutomationTests.test_receiver_drain_completion_then_flush_barrier) ... ok
+test_sender_completion_barrier_defers_statistics (tests.test_udp_automation.UDPAutomationTests.test_sender_completion_barrier_defers_statistics) ... ok
+test_sender_stop_while_waiting_for_start (tests.test_udp_automation.UDPAutomationTests.test_sender_stop_while_waiting_for_start) ... ok
+test_sigint_during_empty_receive_is_bounded (tests.test_udp_automation.UDPAutomationTests.test_sigint_during_empty_receive_is_bounded) ... ok
+test_signal_drain_preserves_late_packet (tests.test_udp_automation.UDPAutomationTests.test_signal_drain_preserves_late_packet) ... ok
+test_start_barrier_and_diagnostics (tests.test_udp_automation.UDPAutomationTests.test_start_barrier_and_diagnostics) ... ok
+test_start_options_exclusive_and_numeric (tests.test_udp_automation.UDPAutomationTests.test_start_options_exclusive_and_numeric) ... ok
+test_stats_collision_keeps_existing_file (tests.test_udp_automation.UDPAutomationTests.test_stats_collision_keeps_existing_file) ... ok
+test_three_senders_share_one_start_barrier (tests.test_udp_automation.UDPAutomationTests.test_three_senders_share_one_start_barrier) ... ok
+test_loader_configures_cpumap_only_for_mixed (tests.test_bpf_automation.BpfRunControlTests.test_loader_configures_cpumap_only_for_mixed) ... ok
+test_loader_help_includes_modes_and_readiness (tests.test_bpf_automation.BpfRunControlTests.test_loader_help_includes_modes_and_readiness) ... ok
+test_loader_rejects_bad_mode_before_attach (tests.test_bpf_automation.BpfRunControlTests.test_loader_rejects_bad_mode_before_attach) ... ok
+test_mode_and_bounded_drain (tests.test_bpf_automation.BpfRunControlTests.test_mode_and_bounded_drain) ... ok
+test_receiver_completion_and_flush_barrier (tests.test_bpf_automation.BpfRunControlTests.test_receiver_completion_and_flush_barrier) ... ok
+test_receiver_completion_fd_validation (tests.test_bpf_automation.BpfRunControlTests.test_receiver_completion_fd_validation) ... ok
+test_receiver_rejects_invalid_drain (tests.test_bpf_automation.BpfRunControlTests.test_receiver_rejects_invalid_drain) ... ok
+test_receiver_stats_collision_preserves_file (tests.test_bpf_automation.BpfRunControlTests.test_receiver_stats_collision_preserves_file) ... ok
+test_recovery_rejects_ready_file (tests.test_bpf_automation.BpfRunControlTests.test_recovery_rejects_ready_file) ... ok
+test_bad_cpu_input_fails_before_output (tests.test_load_controller.LoadControllerTests.test_bad_cpu_input_fails_before_output) ... ok
+test_existing_ready_is_preserved (tests.test_load_controller.LoadControllerTests.test_existing_ready_is_preserved) ... ok
+test_failed_child_never_reports_ready (tests.test_load_controller.LoadControllerTests.test_failed_child_never_reports_ready) ... ok
+test_invalid_shared_worker_count_fails_before_output (tests.test_load_controller.LoadControllerTests.test_invalid_shared_worker_count_fails_before_output) ... ok
+test_lean_start_and_term_no_python (tests.test_load_controller.LoadControllerTests.test_lean_start_and_term_no_python) ... ok
+test_log_collision_preserves_original_and_staged_capture (tests.test_load_controller.LoadControllerTests.test_log_collision_preserves_original_and_staged_capture) ... ok
+test_native_cpu_and_network_sidecar_flush_after_final_sample (tests.test_load_controller.LoadControllerTests.test_native_cpu_and_network_sidecar_flush_after_final_sample) ... ok
+test_native_timer_completes_and_early_tool_exit_fails (tests.test_load_controller.LoadControllerTests.test_native_timer_completes_and_early_tool_exit_fails) ... ok
+test_network_flush_failure_preserves_staged_log (tests.test_load_controller.LoadControllerTests.test_network_flush_failure_preserves_staged_log) ... ok
+test_network_stdout_is_buffered_until_term (tests.test_load_controller.LoadControllerTests.test_network_stdout_is_buffered_until_term) ... ok
+test_network_uses_total_rate_and_preserves_packet_length (tests.test_load_controller.LoadControllerTests.test_network_uses_total_rate_and_preserves_packet_length) ... ok
+test_observation_logs_stay_in_tmpfs_until_term (tests.test_load_controller.LoadControllerTests.test_observation_logs_stay_in_tmpfs_until_term) ... ok
+test_ready_tool_exit_is_detected_by_blocking_wait (tests.test_load_controller.LoadControllerTests.test_ready_tool_exit_is_detected_by_blocking_wait) ... ok
+test_shared_workers_inherit_the_complete_general_cpu_set (tests.test_load_controller.LoadControllerTests.test_shared_workers_inherit_the_complete_general_cpu_set) ... ok
+test_stop_kills_own_group_but_not_unrelated_process (tests.test_load_controller.LoadControllerTests.test_stop_kills_own_group_but_not_unrelated_process) ... ok
+test_bad_snapshot_fails_without_publishing_partial_cpu_rows (tests.test_cpu_sample.CPUSampleTests.test_bad_snapshot_fails_without_publishing_partial_cpu_rows) ... ok
+test_final_snapshot_and_guest_fields_are_not_double_counted (tests.test_cpu_sample.CPUSampleTests.test_final_snapshot_and_guest_fields_are_not_double_counted) ... ok
+test_invalid_arguments (tests.test_cpu_sample.CPUSampleTests.test_invalid_arguments) ... ok
+test_malformed_nic_snapshot_is_not_published (tests.test_cpu_sample.CPUSampleTests.test_malformed_nic_snapshot_is_not_published) ... ok
+test_nic_final_snapshot_uses_selected_interface_and_cumulative_counters (tests.test_cpu_sample.CPUSampleTests.test_nic_final_snapshot_uses_selected_interface_and_cumulative_counters) ... ok
+test_nic_output_refuses_overwrite_and_interface_requires_output (tests.test_cpu_sample.CPUSampleTests.test_nic_output_refuses_overwrite_and_interface_requires_output) ... ok
+test_periodic_samples_and_sigint (tests.test_cpu_sample.CPUSampleTests.test_periodic_samples_and_sigint) ... ok
+test_load_outlives_long_settle_and_bounded_shutdown (tests.test_runner_timing.RunnerTimingTests.test_load_outlives_long_settle_and_bounded_shutdown) ... ok
+test_nic_loader_and_server_outlive_peer_network_ack (tests.test_runner_timing.RunnerTimingTests.test_nic_loader_and_server_outlive_peer_network_ack) ... ok
+test_absent_artifact_is_explicit (tests.test_native_manifest.NativeManifestTests.test_absent_artifact_is_explicit) ... ok
+test_concurrent_publish_is_atomic_and_exclusive (tests.test_native_manifest.NativeManifestTests.test_concurrent_publish_is_atomic_and_exclusive) ... ok
+test_existing_file_is_preserved_with_eexist (tests.test_native_manifest.NativeManifestTests.test_existing_file_is_preserved_with_eexist) ... ok
+test_existing_symlink_is_preserved (tests.test_native_manifest.NativeManifestTests.test_existing_symlink_is_preserved) ... ok
+test_invalid_run_id_fails_without_publication (tests.test_native_manifest.NativeManifestTests.test_invalid_run_id_fails_without_publication) ... ok
+test_invalid_utf8_cleans_temporary_file (tests.test_native_manifest.NativeManifestTests.test_invalid_utf8_cleans_temporary_file) ... ok
+test_missing_sha256sum_fails_without_publication (tests.test_native_manifest.NativeManifestTests.test_missing_sha256sum_fails_without_publication) ... ok
+test_schema_unicode_and_seven_sha256_digests (tests.test_native_manifest.NativeManifestTests.test_schema_unicode_and_seven_sha256_digests) ... ok
+
+----------------------------------------------------------------------
+Ran 54 tests in 8.001s
+
+OK
+test_cpu_partition_check_precedes_receiver_environment_mutations (test_runner.NativeRunnerTests.test_cpu_partition_check_precedes_receiver_environment_mutations) ... ok
+test_cpumap_only_moves_the_important_receiver_out_of_shared_mask (test_runner.NativeRunnerTests.test_cpumap_only_moves_the_important_receiver_out_of_shared_mask) ... ok
+test_dynamic_partition_child_join_and_signal_cleanup (test_runner.NativeRunnerTests.test_dynamic_partition_child_join_and_signal_cleanup) ... ok
+test_full_design_configs_use_native_policy_and_capacity_checks (test_runner.NativeRunnerTests.test_full_design_configs_use_native_policy_and_capacity_checks) ... ok
+test_generated_design_configs_are_accepted_by_native_parser (test_runner.NativeRunnerTests.test_generated_design_configs_are_accepted_by_native_parser) ... ok
+test_matrix_wrapper_sequences_native_socket_runs (test_runner.NativeRunnerTests.test_matrix_wrapper_sequences_native_socket_runs) ... ok
+test_mismatched_configuration_is_rejected (test_runner.NativeRunnerTests.test_mismatched_configuration_is_rejected) ... ok
+test_mode_paths_and_effective_receiver_placement (test_runner.NativeRunnerTests.test_mode_paths_and_effective_receiver_placement) ... ok
+test_native_partial_control_frame_timeout_and_placement_mismatch (test_runner.NativeRunnerTests.test_native_partial_control_frame_timeout_and_placement_mismatch) ... ok
+test_opt_in_live_flow_placement_evidence (test_runner.NativeRunnerTests.test_opt_in_live_flow_placement_evidence) ... ok
+test_pass_xsk_preflight_requires_direct_receiver_only_when_enabled (test_runner.NativeRunnerTests.test_pass_xsk_preflight_requires_direct_receiver_only_when_enabled) ... ok
+test_peer_loss_flushes_own_receivers (test_runner.NativeRunnerTests.test_peer_loss_flushes_own_receivers) ... ok
+test_plan_rejects_unknown_duplicate_and_capacity (test_runner.NativeRunnerTests.test_plan_rejects_unknown_duplicate_and_capacity) ... ok
+test_real_network_load_and_observation_two_repeat_suite (test_runner.NativeRunnerTests.test_real_network_load_and_observation_two_repeat_suite) ... ok
+test_receiver_override_is_applied_to_the_running_socket_child (test_runner.NativeRunnerTests.test_receiver_override_is_applied_to_the_running_socket_child) ... ok
+test_role_specific_supervisor_affinity (test_runner.NativeRunnerTests.test_role_specific_supervisor_affinity) ... ok
+test_shared_mask_paths_and_plan_validation (test_runner.NativeRunnerTests.test_shared_mask_paths_and_plan_validation) ... ok
+test_shared_receiver_mask_is_applied_to_live_socket_children (test_runner.NativeRunnerTests.test_shared_receiver_mask_is_applied_to_live_socket_children) ... ok
+test_three_flow_two_repeat_socket_suite (test_runner.NativeRunnerTests.test_three_flow_two_repeat_socket_suite) ... ok
+test_unavailable_receiver_cpu_mask_fails_before_handshake_or_setup (test_runner.NativeRunnerTests.test_unavailable_receiver_cpu_mask_fails_before_handshake_or_setup) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 18.502s
+
+OK
+
+PASS: all offline checks completed without NIC configuration or root privileges

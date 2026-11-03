@@ -1,0 +1,317 @@
+{
+  "suite": "p04-rehearsal-60s",
+  "report_sha256": "2866107bbc022d55cd4fc03fbbc21fc954bf4dc6dd30715d1486fe124b70afef",
+  "runs": [
+    {
+      "run_id": "p04-rehearsal-60s-all-pass-r0001",
+      "status": "completed",
+      "mode": "all-pass",
+      "settle_ms": 0,
+      "drain_ms": 100,
+      "decomposition": {
+        "checked_count": 180000,
+        "counts": {
+          "complete": 180000,
+          "incomplete": 0,
+          "invalid": 0,
+          "mismatch": 0
+        },
+        "equation": "user-hw = d1 + d2 + d3",
+        "mapping": {
+          "d1": "xdp-hw",
+          "d2": "cpumap-xdp for CPUMAP; 0 for PASS/AF_XDP",
+          "d3": "user-cpumap for CPUMAP; user-xdp for PASS/AF_XDP"
+        },
+        "max_abs_residual_ns": 0,
+        "nonzero_residual_count": 0,
+        "residual_definition": "user-hw - (d1 + d2 + d3)"
+      },
+      "phc_out_of_range": 0,
+      "cpu_busy_pct": {
+        "all": 86.91219551924941,
+        "0": 100.0,
+        "1": 99.93333943438607,
+        "2": 45.480462425122006,
+        "3": 100.0
+      },
+      "cpu_measurement_status": "complete",
+      "flows": [
+        {
+          "flow_id": 1,
+          "path": "pass",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": null,
+          "received_during_drain": null,
+          "termination_reason": "count"
+        },
+        {
+          "flow_id": 2,
+          "path": "pass",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": null,
+          "received_during_drain": null,
+          "termination_reason": "count"
+        },
+        {
+          "flow_id": 3,
+          "path": "pass",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": null,
+          "received_during_drain": null,
+          "termination_reason": "count"
+        }
+      ],
+      "sender_iperf_summary": [
+        "[  7]   0.00-65.36  sec  6.51 GBytes   855 Mbits/sec  0.000 ms  0/4824205 (0%)  sender",
+        "[  7]   0.00-65.36  sec  0.00 Bytes  0.00 bits/sec  0.000 ms  0/0 (0%)  receiver"
+      ],
+      "receiver_iperf_summary": [
+        "[  5]   0.00-14809.02 sec  6.49 GBytes  3.76 Mbits/sec  0.010 ms  13280/4824205 (0.28%)  receiver"
+      ]
+    },
+    {
+      "run_id": "p04-rehearsal-60s-mixed-r0001",
+      "status": "completed",
+      "mode": "mixed",
+      "settle_ms": 0,
+      "drain_ms": 100,
+      "decomposition": {
+        "checked_count": 180000,
+        "counts": {
+          "complete": 180000,
+          "incomplete": 0,
+          "invalid": 0,
+          "mismatch": 0
+        },
+        "equation": "user-hw = d1 + d2 + d3",
+        "mapping": {
+          "d1": "xdp-hw",
+          "d2": "cpumap-xdp for CPUMAP; 0 for PASS/AF_XDP",
+          "d3": "user-cpumap for CPUMAP; user-xdp for PASS/AF_XDP"
+        },
+        "max_abs_residual_ns": 0,
+        "nonzero_residual_count": 0,
+        "residual_definition": "user-hw - (d1 + d2 + d3)"
+      },
+      "phc_out_of_range": 0,
+      "cpu_busy_pct": {
+        "all": 75.13933622020632,
+        "0": 100.0,
+        "1": 99.97507202488741,
+        "2": 99.98333677152696,
+        "3": 0.0
+      },
+      "cpu_measurement_status": "complete",
+      "flows": [
+        {
+          "flow_id": 1,
+          "path": "pass",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": null,
+          "received_during_drain": null,
+          "termination_reason": "count"
+        },
+        {
+          "flow_id": 2,
+          "path": "cpumap",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": null,
+          "received_during_drain": null,
+          "termination_reason": "count"
+        },
+        {
+          "flow_id": 3,
+          "path": "xsk",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": true,
+          "received_during_drain": 0,
+          "termination_reason": "signal"
+        }
+      ],
+      "sender_iperf_summary": [
+        "[  7]   0.00-65.57  sec  6.53 GBytes   855 Mbits/sec  0.000 ms  0/4839268 (0%)  sender",
+        "[  7]   0.00-65.57  sec  0.00 Bytes  0.00 bits/sec  0.000 ms  0/0 (0%)  receiver"
+      ],
+      "receiver_iperf_summary": [
+        "[  5]   0.00-14951.55 sec  6.41 GBytes  3.68 Mbits/sec  0.013 ms  83756/4839261 (1.7%)  receiver"
+      ]
+    },
+    {
+      "run_id": "p04-rehearsal-60s-pass-xsk-r0001",
+      "status": "completed",
+      "mode": "pass-xsk",
+      "settle_ms": 0,
+      "drain_ms": 100,
+      "decomposition": {
+        "checked_count": 180000,
+        "counts": {
+          "complete": 180000,
+          "incomplete": 0,
+          "invalid": 0,
+          "mismatch": 0
+        },
+        "equation": "user-hw = d1 + d2 + d3",
+        "mapping": {
+          "d1": "xdp-hw",
+          "d2": "cpumap-xdp for CPUMAP; 0 for PASS/AF_XDP",
+          "d3": "user-cpumap for CPUMAP; user-xdp for PASS/AF_XDP"
+        },
+        "max_abs_residual_ns": 0,
+        "nonzero_residual_count": 0,
+        "residual_definition": "user-hw - (d1 + d2 + d3)"
+      },
+      "phc_out_of_range": 0,
+      "cpu_busy_pct": {
+        "all": 86.80448564281018,
+        "0": 100.0,
+        "1": 100.0,
+        "2": 45.11568149243952,
+        "3": 100.0
+      },
+      "cpu_measurement_status": "complete",
+      "flows": [
+        {
+          "flow_id": 1,
+          "path": "pass",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": null,
+          "received_during_drain": null,
+          "termination_reason": "count"
+        },
+        {
+          "flow_id": 2,
+          "path": "pass",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": null,
+          "received_during_drain": null,
+          "termination_reason": "count"
+        },
+        {
+          "flow_id": 3,
+          "path": "xsk",
+          "planned": 60000,
+          "sent": 60000,
+          "received_unique": 60000,
+          "row_duplicates": 0,
+          "sequence_first": 0,
+          "sequence_last": 59999,
+          "missing_sequence_count": 0,
+          "missing_sequence_preview": [],
+          "send_errors": 0,
+          "socket_drops": 0,
+          "overflow_packets": 0,
+          "metadata_invalid_packets": 0,
+          "umem_invariant_errors": 0,
+          "drain_completed": true,
+          "received_during_drain": 0,
+          "termination_reason": "signal"
+        }
+      ],
+      "sender_iperf_summary": [
+        "[  7]   0.00-65.57  sec  6.53 GBytes   855 Mbits/sec  0.000 ms  0/4839691 (0%)  sender",
+        "[  7]   0.00-65.57  sec  0.00 Bytes  0.00 bits/sec  0.000 ms  0/0 (0%)  receiver"
+      ],
+      "receiver_iperf_summary": [
+        "[  5]   0.00-14880.12 sec  6.50 GBytes  3.75 Mbits/sec  0.013 ms  16307/4839686 (0.34%)  receiver"
+      ]
+    }
+  ],
+  "all_probe_sequences_complete": true,
+  "all_clock_records_valid": true
+}

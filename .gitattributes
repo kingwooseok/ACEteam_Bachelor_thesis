@@ -5,3 +5,6 @@ patches/**/*.patch -whitespace
 # Keep these research notes in LF on every platform.
 /thesis_analyze.md text eol=lf
 /thesis_sum.md text eol=lf
+
+# Native state captures retain the command output bytes.
+/experiment/validation/pilot-20261103/final-state/*.txt -whitespace

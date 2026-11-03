@@ -4,6 +4,10 @@
 VMware는 코드 관리·빌드 검증과 실험 후 분석에 사용한다. 실제 송신, 수신,
 시계 보정과 부하 관리는 두 Pi에서 수행한다.
 
+현재 두 Pi의 예비측정 값을 적용한 실행 계획은 [design/pi5-20261103](design/pi5-20261103)에 있다.
+**단독 15회 + 본실험 60회 = 75회**를 수행하는 계획이다.
+아래는 한 조건을 실행하는 방법이며, 전체 계획은 [최신 조건표 실행](#최신-조건표-실행-고정-1000-pps--네-부하-조건)을 따른다.
+
 ## 준비와 실행
 
 양쪽 Pi의 저장소에서 프로그램을 빌드한다. `repo=AUTO`이면 `ace-run` 실행 파일의
@@ -20,26 +24,25 @@ RPS·NAPI 설정을 먼저 검사한다. mixed의 중요1이 활성화된 실행
 make -C udp_socket
 make -C BPF
 make -C experiment
-cp experiment/config.example.conf experiment/run.conf
 ```
 
-`run.conf`의 빈 값을 정하고 **동일 파일을 두 Pi에 복사**한다. 설정값은 C에서
+양쪽 Pi에서 **같은 계획의 조건 파일**을 사용한다. 설정값은 C에서
 정해진 키와 자료형으로 검사한다. shell source/eval을 사용하지 않는다.
 
 ```bash
-./experiment/ace-run plan --config experiment/run.conf
+./experiment/ace-run plan --config experiment/design/pi5-20261103/main-01.conf
 ```
 
 수신 Pi에서 먼저 실행한다.
 
 ```bash
-sudo ./experiment/ace-run receiver --config experiment/run.conf
+sudo ./experiment/ace-run receiver --config experiment/design/pi5-20261103/main-01.conf
 ```
 
 송신 Pi에서 같은 파일로 실행한다.
 
 ```bash
-sudo ./experiment/ace-run sender --config experiment/run.conf
+sudo ./experiment/ace-run sender --config experiment/design/pi5-20261103/main-01.conf
 ```
 
 최신 본실험은 수신 Pi의 cgroup v2 CPU 예약을 관리하므로 위 sudo 명령을 사용한다.
@@ -85,12 +88,16 @@ CPU·네트워크 부하의 안전 타이머에는 측정·준비 대기·추가
 drain과 준비/종료 제한 시간을 포함한다. 정상 종료는 위 단계의 명시적 종료 요청이
 담당하므로 긴 settle을 설정해도 부하 타이머가 먼저 종료되지 않도록 한다.
 
-CPU 관측은 C 프로그램 `udp_socket/bin/cpu_sample`이 기존 mpstat를 대신해 1초마다
-수행한다. `/proc/stat` 누적 tick과 수신 기록에 공통인 MONOTONIC 시각을
-`monitor/cpu-samples.csv`에 남긴다. 파일은 측정 중 tmpfs에 기록하고 종료 후
-복사한다. 분석기는 최초 XDP부터 최종 수신 관측까지의 구간만 집계하며,
-경계 표본은 겹친 시간으로 가중한다. 구간 전체를 덮는 표본이 없으면 값을
-비워 두고 원인을 기록한다. 준비·저장 시간의 CPU 사용률은 이 평균에 포함하지 않는다.
+CPU·NIC 관측은 C 프로그램 `udp_socket/bin/cpu_sample`이 **1초 간격과 종료 시점**에
+수행한다. `/proc/stat`의 CPU 누적 tick과 `/proc/net/dev`의 NIC 누적 카운터에
+MONOTONIC 시각을 붙여 `monitor/cpu-samples.csv`, `monitor/network-samples.csv`로
+남긴다. NIC 수집은 `--interface eth0 --network-output FILE` 옵션으로 켜며,
+실행기의 관측 도구가 자동으로 적용한다. 측정 중에는 tmpfs에 기록하고 종료 후 복사한다.
+
+분석기는 **최초 XDP부터 최종 수신 관측까지 같은 구간**의 CPU 사용률과 NIC 처리량을
+계산한다. 경계 표본은 겹친 시간으로 가중하고, 준비·저장 시간은 평균에서 제외한다.
+NIC 처리량은 계측 패킷과 배경 트래픽을 포함한 전체 값이다.
+`load.network_bps=855000000`은 iperf3에 설정하는 배경 UDP payload 전송률이다.
 
 측정 중 제어기는 종료·자식 실패·기한·상대 연결 변화에만 깨어나는 차단 대기를
 사용한다. heartbeat, SSH와 Python 실행은 없다. 메타데이터 수집을 위한 git 및
@@ -124,7 +131,8 @@ results/experiment/<run_id>/
     udp-flowN.bin  receiver-flowN.json  afxdp.csv
     xdp-ingress_records.csv  xdp-cpumap_records.csv
     phc-before.csv  phc-after.csv  monitor/
-    scheduler-ready.json  monitor/cpu-samples.csv
+    scheduler-ready.json
+    monitor/cpu-samples.csv  monitor/network-samples.csv
     cpu-partition-active.json  cpu-partition-restored.json
   sender/runs/<run_id>-<mode>-r0001/
     run.json  manifest.json  .complete
@@ -161,7 +169,7 @@ python3 -m unittest -v experiment.test_runner
 
 `build_plan.py`와 `run_matrix.sh plan`은 같은 최소 실행표를 만든다.
 `--d01-d11`도 동일한 설계의 호환 진입점이다. 실행표 개정 번호는
-`fixed-1000pps-75-v4`이며 기존에 생성한 계획은 새 폴더로 다시 생성한다.
+`fixed-1000pps-75-v4`이며 이 개정을 적용한 실행 계획을 `design/pi5-20261103`에 포함했다.
 
 일반 9000·중요1 9001·중요2 9002는 각각 1,000 PPS로 고정한다.
 다음 네 조건에서 같은 입력으로 세 수신 구성을 비교한다.
@@ -170,8 +178,8 @@ python3 -m unittest -v experiment.test_runner
 |---|---|---|
 | 기본 상태 | 끔 | 끔 |
 | CPU 경합 | 켬 | 끔 |
-| 네트워크 부하 | 끔 | 고부하 |
-| 복합 부하 | 켬 | 고부하 |
+| 네트워크 부하 | 끔 | 855 Mbps |
+| 복합 부하 | 켬 | 855 Mbps |
 
 iperf3의 UDP/5201 패킷도 PASS로 처리하므로 일반 통신량은 9000번 계측 흐름과
 iperf3 배경 트래픽을 합한 양이다. 세 계측 흐름의 주기와 표본 수를 유지하면서
@@ -184,7 +192,9 @@ CPU·네트워크 부하를 조절한다.
 | 합계 | 단독 15회 + 본실험 60회 | **75** |
 
 단독 3개와 본실험 4개를 7개 조건 파일로 생성한다. CPU 부하는 같은 세 워커를
-끄거나 워커별 100% 강도로 실행하며, 배경 네트워크 고부하 값은 예비측정으로 정한다.
+끄거나 워커별 100% 강도로 실행한다. 배경 고부하는 예비측정 기준 950 Mbps의
+90%인 **855 Mbps**를 사용한다. 위 75회는 수행할 단독·본실험 횟수이며,
+예비측정 결과는 [Pi 예비측정 보고서](validation/pilot-20261103.md)에 별도로 정리한다.
 
 ### 세 구성과 수신기 위치
 
@@ -208,27 +218,24 @@ CPU 부하 워커는 세 구성 모두 세 개이며 개별 CPU 고정 없이 �
 각 구성은 다섯 번씩 측정한다. `matrix.csv`의 references에는 각 조건의
 CPU·네트워크 부하 조합을 표시한다.
 
-### 예비측정 값 적용과 실행
+### 준비된 계획 실행
 
-`profile.example.json`을 복사하고 다음 두 null 값을 예비측정 결과로 채운다.
+[profile.pi5-20261103.json](design/profile.pi5-20261103.json)에 현재 두 Pi의 값을 넣고
+[pi5-20261103](design/pi5-20261103) 실행 계획을 생성했다.
 
-- `network_high_bps`: UDP 단방향 1스트림 예비측정 기준 R의 90%.
-- `settle_ms`: 송신 완료 이후 잔여 수신 대기시간.
+| 항목 | 적용값 |
+|---|---|
+| 수신 Pi 시험망 IP | `192.168.10.10` |
+| 배경 UDP 전송률 | `855000000` bps |
+| 송신 완료 후 추가 대기 | `settle_ms=0` |
+| 수신기 drain | `drain_ms=100` |
 
 수신 앱은 세 구성 모두 OTHER/0이며 공유 CPU 집합과 CPUMAP CPU는 profile에 담긴다.
 송신 Pi는 중요 송신기에 FIFO80을 사용하여 시험 입력의 주기를 유지한다.
 IRQ·CPUMAP 정책은 `scheduler-ready.json`에 기록하고, 각 수신 앱의 허용 CPU와
 정책·우선순위는 `*-flowN.placement.json`에서 실행값과 대조한다.
 
-```bash
-# PC 또는 분석 장비에서 생성. 기존 폴더를 덮어쓰지 않는다.
-python3 experiment/design/build_plan.py --profile /path/profile.json --output /path/new-matrix
-# 같은 생성기를 사용하는 wrapper:
-./experiment/run_matrix.sh plan --profile /path/profile.json --output /path/another-matrix
-```
-
-미확정 profile로 실행 파일을 만들지 않는다. profile 없는 생성은 `matrix.csv`와
-`plan.json` 초안만 만든다. 실제 실행 계획에는 설정 파일, 해시, 각 조건의
+실행 계획에는 설정 파일, 해시, 각 조건의
 `expected_modes`, `repeats`, `expected_runs`를 담은 `execution.json`이 포함된다.
 설정 파일은 Windows에서도 저장 바이트와 SHA-256이 같은 UTF-8/LF로 생성된다.
 
@@ -237,9 +244,9 @@ python3 experiment/design/build_plan.py --profile /path/profile.json --output /p
 
 ```bash
 # 수신 Pi에서 먼저
-sudo ./experiment/run_matrix.sh receiver --plan-dir /path/new-matrix
+sudo ./experiment/run_matrix.sh receiver --plan-dir experiment/design/pi5-20261103
 # 송신 Pi
-sudo ./experiment/run_matrix.sh sender --plan-dir /path/new-matrix
+sudo ./experiment/run_matrix.sh sender --plan-dir experiment/design/pi5-20261103
 ```
 
 wrapper는 모든 설정 해시와 native parser 검사를 마친 뒤 실행한다.
@@ -247,12 +254,21 @@ wrapper는 모든 설정 해시와 native parser 검사를 마친 뒤 실행한�
 `*-flowN.placement.json`에 기록한다. 실패하면 다음 조건으로 넘어가지 않는다.
 기존 실행 디렉터리는 보존하며, Ctrl+C/TERM은 native 실행기의 정리를 기다린다.
 
-### 결과 수집과 구간 분석
-
-양쪽 `output_root`를 Linux 분석 장비로 복사한 뒤 수집한다.
+조건을 바꿀 때만 profile을 수정해 새 계획을 생성한다. 새 폴더 전체를 두 Pi에 같은
+내용으로 복사하고 위 명령의 `--plan-dir`를 새 경로로 바꾼다.
 
 ```bash
-./experiment/run_matrix.sh collect --plan-dir /path/new-matrix \
+python3 experiment/design/build_plan.py \
+  --profile /path/edited-profile.json --output /path/new-matrix
+```
+
+### 결과 수집과 구간 분석
+
+양쪽 `output_root`를 분석 장비로 복사한다. Linux에서는 아래 명령으로 전체 계획을
+수집·분석한다. Windows의 Python 분석 명령은 [분석 README](../analysis/README.md)에 있다.
+
+```bash
+./experiment/run_matrix.sh collect --plan-dir experiment/design/pi5-20261103 \
   --receiver-root /copied/rx-output-root --sender-root /copied/tx-output-root \
   --output /path/new-collected-matrix
 ```
@@ -267,5 +283,7 @@ PASS·AF_XDP는 d₂=0, d₃=user−xdp이다. 같은 패킷에서 구간 합과
 총지연 p99는 패킷별 총지연으로 계산한다. 후단 비교는 PASS/AF_XDP의 d₃와
 CPUMAP의 d₂+d₃를 사용한다. 손실과 기록 오류도 함께 보존한다.
 
-P04는 복합 부하의 60초 리허설에서 송수신 수·실제 PPS·기록 용량·유효 시각 및
-구간 합을 점검한다. 상세 필드는 [분석 README](../analysis/README.md)를 참고한다.
+예비측정의 배치·전송률·종료 대기 선택 근거와 실행 기록은
+[Pi 예비측정 보고서](validation/pilot-20261103.md)에 있다.
+본실험도 송수신 수·실제 PPS·유효 시각·구간 합과 같은 수신 측정 구간의 CPU·NIC
+통계를 함께 읽는다. 상세 필드는 [분석 README](../analysis/README.md)를 참고한다.

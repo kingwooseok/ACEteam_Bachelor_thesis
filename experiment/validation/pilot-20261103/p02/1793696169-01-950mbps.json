@@ -1,0 +1,128 @@
+{
+	"start":	{
+		"connected":	[{
+				"socket":	5,
+				"local_host":	"192.168.10.11",
+				"local_port":	56644,
+				"remote_host":	"192.168.10.10",
+				"remote_port":	5201
+			}],
+		"version":	"iperf 3.18",
+		"system_info":	"Linux craftt 6.18.46-thesis-test-rt+ #1 SMP PREEMPT_RT Thu Aug 27 16:35:06 KST 2026 aarch64",
+		"timestamp":	{
+			"time":	"Tue, 03 Nov 2026 08:56:10 GMT",
+			"timesecs":	1793696170
+		},
+		"connecting_to":	{
+			"host":	"192.168.10.10",
+			"port":	5201
+		},
+		"cookie":	"qnwnix4a6gza4ghgwuc6zu63zmrys7fatfb2",
+		"target_bitrate":	950000000,
+		"fq_rate":	0,
+		"sock_bufsize":	0,
+		"sndbuf_actual":	212992,
+		"rcvbuf_actual":	212992,
+		"test_start":	{
+			"protocol":	"UDP",
+			"num_streams":	1,
+			"blksize":	1448,
+			"omit":	0,
+			"duration":	10,
+			"bytes":	0,
+			"blocks":	0,
+			"reverse":	0,
+			"tos":	0,
+			"target_bitrate":	950000000,
+			"bidir":	0,
+			"fqrate":	0,
+			"interval":	0
+		}
+	},
+	"intervals":	[{
+			"streams":	[{
+					"socket":	5,
+					"start":	0,
+					"end":	10.000782,
+					"seconds":	10.000782012939453,
+					"bytes":	1187554032,
+					"bits_per_second":	949968936.79993439,
+					"packets":	820135,
+					"omitted":	false,
+					"sender":	true
+				}],
+			"sum":	{
+				"start":	0,
+				"end":	10.000782,
+				"seconds":	10.000782012939453,
+				"bytes":	1187554032,
+				"bits_per_second":	949968936.79993439,
+				"packets":	820135,
+				"omitted":	false,
+				"sender":	true
+			}
+		}],
+	"end":	{
+		"streams":	[{
+				"udp":	{
+					"socket":	5,
+					"start":	0,
+					"end":	10.000782,
+					"seconds":	10.000782,
+					"bytes":	1187554032,
+					"bits_per_second":	949968938.029046,
+					"jitter_ms":	0.018161750893985851,
+					"lost_packets":	0,
+					"packets":	820135,
+					"lost_percent":	0,
+					"out_of_order":	0,
+					"sender":	true
+				}
+			}],
+		"sum":	{
+			"start":	0,
+			"end":	10.004123,
+			"seconds":	10.004123,
+			"bytes":	1187554032,
+			"bits_per_second":	949968938.029046,
+			"jitter_ms":	0.018161750893985851,
+			"lost_packets":	0,
+			"packets":	820135,
+			"lost_percent":	0,
+			"sender":	true
+		},
+		"sum_sent":	{
+			"start":	0,
+			"end":	10.000782,
+			"seconds":	10.000782,
+			"bytes":	1187554032,
+			"bits_per_second":	949968938.029046,
+			"jitter_ms":	0,
+			"lost_packets":	0,
+			"packets":	820135,
+			"lost_percent":	0,
+			"sender":	true
+		},
+		"sum_received":	{
+			"start":	0,
+			"end":	10.004123,
+			"seconds":	10.004123,
+			"bytes":	1187555480,
+			"bits_per_second":	949652842.13318849,
+			"jitter_ms":	0.018161750893985851,
+			"lost_packets":	0,
+			"packets":	820135,
+			"lost_percent":	0,
+			"sender":	false
+		},
+		"cpu_utilization_percent":	{
+			"host_total":	60.349899468943654,
+			"host_user":	3.4865464160120991,
+			"host_system":	56.863363051544745,
+			"remote_total":	10.786383066516915,
+			"remote_user":	1.67672717633074,
+			"remote_system":	9.10966588605588
+		}
+	},
+	"server_output_text":	"Accepted connection from 192.168.10.11, port 36005\n[  5] local 192.168.10.10 port 5201 connected to 192.168.10.11 port 56644\n[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams\n[  5]   0.00-10.00  sec  1.11 GBytes   950 Mbits/sec  0.018 ms  0/820135 (0%)  \n- - - - - - - - - - - - - - - - - - - - - - - - -\n[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams\n[  5]   0.00-10.00  sec  1.11 GBytes   950 Mbits/sec  0.018 ms  0/820135 (0%)  receiver\n"
+}

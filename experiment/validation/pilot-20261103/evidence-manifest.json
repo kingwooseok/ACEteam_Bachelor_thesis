@@ -1,0 +1,443 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-03",
+  "committed_files": [
+    {
+      "file": "configs/p03-paths.conf",
+      "bytes": 1514,
+      "sha256": "2b3ba90ec8856cfb05988f3e25086a1f55d444b44d5871dc1ac3aa6bcb9f91b6"
+    },
+    {
+      "file": "configs/p03-v2-paths.conf",
+      "bytes": 1517,
+      "sha256": "a7d5cb4a813d5836f20dc93c8d1e8d249f0a67c3b9cff226b571b0d0d133f7eb"
+    },
+    {
+      "file": "configs/p04-r1-s0.conf",
+      "bytes": 1522,
+      "sha256": "f07cc7adb6a867f14fc0b791c33cc687e0f964477f398f0a1293403e9f6988f5"
+    },
+    {
+      "file": "configs/p04-rehearsal-60s.conf",
+      "bytes": 1530,
+      "sha256": "18b7d92a25463f56b9dbca0f1fc8a05a93ff813a16bfca3805f8afd4d589850a"
+    },
+    {
+      "file": "configs/p04-v2-r1-s0.conf",
+      "bytes": 1525,
+      "sha256": "01e6666cf13e101b1e4b66b8c623fa534a7d2365f9bcae2edaa3fb56baf57e4e"
+    },
+    {
+      "file": "configs/p04-v2-r1-s100.conf",
+      "bytes": 1529,
+      "sha256": "01b6e5eeec95e438157befda79a291bb044b7718ba55af1bebc63fc719db7112"
+    },
+    {
+      "file": "configs/p04-v2-r1-s500.conf",
+      "bytes": 1529,
+      "sha256": "7da63364d82ddb91262615706d44649e70f7d4599b70d36e8af4063b76beb1f4"
+    },
+    {
+      "file": "configs/p04-v2-r2-s0.conf",
+      "bytes": 1525,
+      "sha256": "ec865fecc0191e3cf35552b21ada96ec309cedf6cea27553c9be08837da4c620"
+    },
+    {
+      "file": "configs/p04-v2-r2-s100.conf",
+      "bytes": 1529,
+      "sha256": "d558fbc40205a2b57562ef21419c47bb17f94cd1ecacdeea14c51c606dc7dae8"
+    },
+    {
+      "file": "configs/p04-v2-r2-s500.conf",
+      "bytes": 1529,
+      "sha256": "131358bfb83230ae7f8fe8f92c4a80e249bd54f6244f7771ceec105fd4036ec2"
+    },
+    {
+      "file": "configs/p04-v2-r3-s0.conf",
+      "bytes": 1525,
+      "sha256": "d23e33b89669aadf85a184e9cc8f773cb1a336b9705b7c2467251252a3c28f79"
+    },
+    {
+      "file": "configs/p04-v2-r3-s100.conf",
+      "bytes": 1529,
+      "sha256": "8b212c8c1addd64e7d09672ca885d9009adbdc6d47f90cdab72ff26e54b972ad"
+    },
+    {
+      "file": "configs/p04-v2-r3-s500.conf",
+      "bytes": 1529,
+      "sha256": "fdb6ea441d3b626e68871042c1eebd03f1987977752bbbb268d8f99c1ff7d1db"
+    },
+    {
+      "file": "final-remote-check.json",
+      "bytes": 3506,
+      "sha256": "2bfdb4cdf53773e8802c4d341fef380af8c0b0614dd46b762100b9758d9f3ac8"
+    },
+    {
+      "file": "final-state/receiver.txt",
+      "bytes": 12191,
+      "sha256": "ee509ea54521229e22174ede8cd8b10ffc32c798c82bbda85e1ab21d65ff09f4"
+    },
+    {
+      "file": "final-state/sender.txt",
+      "bytes": 12213,
+      "sha256": "d44713864a1310b1c395cb693f1b5ce98dfa24967a3ba9df31f8a2569741e2a4"
+    },
+    {
+      "file": "irq-reapplied.txt",
+      "bytes": 43,
+      "sha256": "472b999b594aeedcd7c376de309287d15289ad561620fe1bb0f2497f2537b882"
+    },
+    {
+      "file": "native-plans/receiver/main-01.conf.txt",
+      "bytes": 4218,
+      "sha256": "643e19a5f4fa54038549bae77ee1818d081498f3f3dbfaa017a99a50205e81f7"
+    },
+    {
+      "file": "native-plans/receiver/main-02.conf.txt",
+      "bytes": 4242,
+      "sha256": "e6e9dc731464782b3e0248db4cd75a8a30f166af7e8a8b8342536aa1cfd3b95e"
+    },
+    {
+      "file": "native-plans/receiver/main-03.conf.txt",
+      "bytes": 4224,
+      "sha256": "e6a222bfa5935e9893edfa8abd8758462daa7c5e2572af9daa09877f1a1d2064"
+    },
+    {
+      "file": "native-plans/receiver/main-04.conf.txt",
+      "bytes": 4248,
+      "sha256": "4f95b2fed8b68cce3f9b7caee4d1599f378c8313682e64d0eaf27d1988603d9a"
+    },
+    {
+      "file": "native-plans/receiver/single-1.conf.txt",
+      "bytes": 1060,
+      "sha256": "6dfe6deb6df32ea4accf4ece62f1a245d7d89ff6e3d6978c961ba02f9c94da25"
+    },
+    {
+      "file": "native-plans/receiver/single-2.conf.txt",
+      "bytes": 1050,
+      "sha256": "ff1e77eca3b3e270e4ab422a39af43407e6f8909c36ce0734f82497e0c86c7a6"
+    },
+    {
+      "file": "native-plans/receiver/single-3.conf.txt",
+      "bytes": 1062,
+      "sha256": "1bda63daa39b561019aa3d7367345b14b4aeef6c9258b1bb701d7ad922bc8ee9"
+    },
+    {
+      "file": "native-plans/sender/main-01.conf.txt",
+      "bytes": 4218,
+      "sha256": "643e19a5f4fa54038549bae77ee1818d081498f3f3dbfaa017a99a50205e81f7"
+    },
+    {
+      "file": "native-plans/sender/main-02.conf.txt",
+      "bytes": 4242,
+      "sha256": "e6e9dc731464782b3e0248db4cd75a8a30f166af7e8a8b8342536aa1cfd3b95e"
+    },
+    {
+      "file": "native-plans/sender/main-03.conf.txt",
+      "bytes": 4224,
+      "sha256": "e6a222bfa5935e9893edfa8abd8758462daa7c5e2572af9daa09877f1a1d2064"
+    },
+    {
+      "file": "native-plans/sender/main-04.conf.txt",
+      "bytes": 4248,
+      "sha256": "4f95b2fed8b68cce3f9b7caee4d1599f378c8313682e64d0eaf27d1988603d9a"
+    },
+    {
+      "file": "native-plans/sender/single-1.conf.txt",
+      "bytes": 1060,
+      "sha256": "6dfe6deb6df32ea4accf4ece62f1a245d7d89ff6e3d6978c961ba02f9c94da25"
+    },
+    {
+      "file": "native-plans/sender/single-2.conf.txt",
+      "bytes": 1050,
+      "sha256": "ff1e77eca3b3e270e4ab422a39af43407e6f8909c36ce0734f82497e0c86c7a6"
+    },
+    {
+      "file": "native-plans/sender/single-3.conf.txt",
+      "bytes": 1062,
+      "sha256": "1bda63daa39b561019aa3d7367345b14b4aeef6c9258b1bb701d7ad922bc8ee9"
+    },
+    {
+      "file": "offline-tests-final.txt",
+      "bytes": 28098,
+      "sha256": "cc590866ad334f99331a702db66842a0728499e3ba580ed1697dcdc65b668c10"
+    },
+    {
+      "file": "p02/1793695155-01-400mbps.json",
+      "bytes": 3370,
+      "sha256": "db063e9aad2a1bf64b566073220e5d6980c0665cfe22eb565705edfc5476c422"
+    },
+    {
+      "file": "p02/1793695155-02-600mbps.json",
+      "bytes": 3535,
+      "sha256": "d8799b5a02d3e7c653bf615ef5993f565ed3ebd2ca948200585c4dc6c3cd6ecb"
+    },
+    {
+      "file": "p02/1793695155-03-800mbps.json",
+      "bytes": 3526,
+      "sha256": "bc654f552739091c6729d339ab077d128bd6e7360c4bbacef91b5f58685168cb"
+    },
+    {
+      "file": "p02/1793695155-04-900mbps.json",
+      "bytes": 3531,
+      "sha256": "b2a0fb37c7ec3e84d86ef2f5949611c0213e5712d1ad08667435db8ec36510c1"
+    },
+    {
+      "file": "p02/1793695155-05-950mbps.json",
+      "bytes": 3525,
+      "sha256": "ea4c08929c4351b27ed19c794786ce4e8962f0785c3c6600d6662cec1452a834"
+    },
+    {
+      "file": "p02/1793695155-06-970mbps.json",
+      "bytes": 3528,
+      "sha256": "7ac74abf13b069c80b1fc5802097d8a655c03d19ba99d269a7139219736fb591"
+    },
+    {
+      "file": "p02/1793695241-01-950mbps.json",
+      "bytes": 3371,
+      "sha256": "c2a3b59802f66e1a4551a92c239cf2c05f2860cdd43f937db2ffa1432ba8a2f9"
+    },
+    {
+      "file": "p02/1793695241-02-855mbps.json",
+      "bytes": 3527,
+      "sha256": "8dba7c2bfced8fed4259c00111502421c93f9c474cc5b9e49113c3242e0ab941"
+    },
+    {
+      "file": "p02/1793695241-03-855mbps.json",
+      "bytes": 3528,
+      "sha256": "84f4f021967edb9acf726c11d278f190337359928a8df05863c21bc077cbed0a"
+    },
+    {
+      "file": "p02/1793696169-01-950mbps.json",
+      "bytes": 3373,
+      "sha256": "47a7719b1cec7e3cd6617a87653afee95bfdd1f1dc0145361226371482945e7f"
+    },
+    {
+      "file": "p02/1793696169-02-855mbps.json",
+      "bytes": 3531,
+      "sha256": "9bf289fe38decf2226581d89fa016b9e1a265544e769d940c55648b560aec7b8"
+    },
+    {
+      "file": "p02-state-audit-initial.json",
+      "bytes": 41359,
+      "sha256": "6ac861995777dfb704213e79fc477b5406ac7c0043d5a13b054ec976363c4555"
+    },
+    {
+      "file": "p02-summary.json",
+      "bytes": 6053,
+      "sha256": "4e03120e69646d08d254a0ef3081d12fa823b00156c21752d4000f7904f9d387"
+    },
+    {
+      "file": "p03-initial-summary.json",
+      "bytes": 19579,
+      "sha256": "9f94312cd9289f28419c93fd481bf4464980eec86d8b701e1a51ae46fc29947f"
+    },
+    {
+      "file": "p03-v2-placement.json",
+      "bytes": 5816,
+      "sha256": "033d1f949d6c45be392b14e03e3ea789fca48e3523c0e9f032008f363d04d484"
+    },
+    {
+      "file": "p04-decision.json",
+      "bytes": 1311,
+      "sha256": "d8272f76efe281afcd33aba304d0364eee72089eee7d135ec93af53272061a2a"
+    },
+    {
+      "file": "p04-tail-audit.json",
+      "bytes": 103947,
+      "sha256": "fccf3a6c509b20dc2a8c7dc3354e6896d70ec8d82a1d8dba4df21d716d2c38fb"
+    },
+    {
+      "file": "ready-plan-validation.json",
+      "bytes": 1794,
+      "sha256": "459d759118e6041ab838b3bdaa3eb078bb7a83c478a4b3cbdaf1e90a93e8f91f"
+    },
+    {
+      "file": "rehearsal-60s-summary.json",
+      "bytes": 40400,
+      "sha256": "505886a545650ff1315dd0456bd2e89d8b99cb942cfbb50cfa18aab8f5861b38"
+    },
+    {
+      "file": "rehearsal-tail-audit.json",
+      "bytes": 9915,
+      "sha256": "cc92958334ac0c3aa0813cd9768c998c78551bb3b62ee49a98c98ac50b36d5ab"
+    }
+  ],
+  "external_raw_archives": [
+    {
+      "file": "p03-paths-receiver.tgz",
+      "bytes": 3538264,
+      "sha256": "e00279a028711cd992af0d7afcc059b2a3a7a3f62a5766d51a70ccb89f6a1902",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p03-paths-sender.tgz",
+      "bytes": 13509,
+      "sha256": "0362431b1b5fcba67920c0932488a7326c94dc7d6353f044186239578cb4e697",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p03-v2-paths-receiver.tgz",
+      "bytes": 3568201,
+      "sha256": "0d382eb1909f457a0a109b1614d42b043b3af69186ec51aab05f74a964da55b1",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p03-v2-paths-sender.tgz",
+      "bytes": 13184,
+      "sha256": "6651ff6b2920fdc4098a764d1304c2f26bf9ce26c6322228aae1461c0a8f9ce6",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-r1-s0-receiver-failed.tgz",
+      "bytes": 1096359,
+      "sha256": "1667c716594878852c99f02d39d80bcf01b2b2f8be05bde7fb2040e7a902f8c0",
+      "location": "local pilot_20261103/archives",
+      "status": "failed-run"
+    },
+    {
+      "file": "p04-rehearsal-60s-receiver.tgz",
+      "bytes": 21779461,
+      "sha256": "99b15373fac53bad6cff54025e37ed7c237c2afc64de6dd49e84d80a832d67ec",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-rehearsal-60s-sender.tgz",
+      "bytes": 14147,
+      "sha256": "ef099826be2df1c2c44446b55e05f9c2551196e8d274034f5ce7c694ad1a170a",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r1-s0-receiver.tgz",
+      "bytes": 3562853,
+      "sha256": "e4678af019d230355d9be1a2bb5422226b6e9f28d73129222bd29a2fce5ead2d",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r1-s0-sender.tgz",
+      "bytes": 14072,
+      "sha256": "a8d7c6dd61b42ba72e158da6a380021e9921dfca27bfbed000ce222ff5a44126",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r1-s100-receiver.tgz",
+      "bytes": 3554273,
+      "sha256": "95f149857955e3ae4df9cfcffb771310bd5440565ba83adcf31def0cf370b161",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r1-s100-sender.tgz",
+      "bytes": 14099,
+      "sha256": "efbbc8c8a0ba119e60cd6b21c8bd961b3850da5cb9958a208e789006cf1e89d0",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r1-s500-receiver.tgz",
+      "bytes": 3566656,
+      "sha256": "21b90bcb8f68da3f76b3719dba0c7e49335d44bc0ee51c84a7eb44f2e41605f4",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r1-s500-sender.tgz",
+      "bytes": 14141,
+      "sha256": "cdb09d07e71fbb3171807a6b46a1f1f51020fd68f889190d254156367f1f6d2d",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r2-s0-receiver.tgz",
+      "bytes": 3561508,
+      "sha256": "de1a9143ddd31965c60155a32be6a7171e54fca0a2d7dbefd202964415f93b5e",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r2-s0-sender.tgz",
+      "bytes": 14148,
+      "sha256": "827a3e616a175bc9e1dc9d21ca8d26b9f13814b21d135d4eeb89adad06405f63",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r2-s100-receiver.tgz",
+      "bytes": 3562129,
+      "sha256": "abdaa89bb162e3df29a4fbac8c77f389c1fc7731bb5e5b9effb4481677e5a104",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r2-s100-sender.tgz",
+      "bytes": 14129,
+      "sha256": "7d4b10a694ea04f83f469c9d6e84939225ff48e759fe14eb270c0c8aed2e29af",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r2-s500-receiver.tgz",
+      "bytes": 3563937,
+      "sha256": "f6b5057c0b371ade89ace770f100dd7d67c957b4d475159cb73395591b5b277b",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r2-s500-sender.tgz",
+      "bytes": 14106,
+      "sha256": "24e8a85f7b9bfb03a76072294b1d6728291138d293f7d5a7b456f99069c41397",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r3-s0-receiver.tgz",
+      "bytes": 3557119,
+      "sha256": "7441bb5151612705a4d3e21d61fb64a62ff59da08c26d4eeac5ea4e9ff4b855c",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r3-s0-sender.tgz",
+      "bytes": 14159,
+      "sha256": "ad5bada3d13545f7be45ab25ac2ccea28327e6cbcc039685d27570c481a0ac77",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r3-s100-receiver.tgz",
+      "bytes": 3558491,
+      "sha256": "cc5068346b363d5fe395252398c9bfd5c7f8522b8f0930f5ef374ad16c42fba2",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r3-s100-sender.tgz",
+      "bytes": 14113,
+      "sha256": "31d5cb07d591979347c2970fc98bceeee09d5a4dea95e6541a6a83565bacebb7",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r3-s500-receiver.tgz",
+      "bytes": 3556679,
+      "sha256": "ff09e101ca87b0bf685b2e49a0b1ba0ab12b237b43a6a04aeb544ecf28bbcb02",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    },
+    {
+      "file": "p04-v2-r3-s500-sender.tgz",
+      "bytes": 14120,
+      "sha256": "fa7b855970fd21f1b893513bba680a8a071536ed5bbb1010a34c929e3f18d3c1",
+      "location": "local pilot_20261103/archives",
+      "status": "completed-run"
+    }
+  ]
+}
