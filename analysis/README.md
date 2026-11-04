@@ -1,5 +1,20 @@
 # Offline analysis
 
+## 2026-11-04 연속 시간 보정
+
+`run.json`의 `environment.phc_tracking=1`인 실행은 `phc-during.csv`만 사용한다.
+선택된 PHC↔MONOTONIC 표본 사이를 보간하고, 패킷별 같은 보정 HW 시각으로
+`xdp-hw`와 `user-hw`를 계산한다. `clock_validation`에는 다음 검사를 기록한다.
+
+- 첫 XDP 시각부터 마지막 수신 시각까지 보정 표본이 감싸는가.
+- 측정 구간 내 표본 간격이 500ms 이내인가.
+- 수신한 패킷의 HW 총지연과 구간 합이 완성되어 있으며 음수 지연이 없는가.
+
+손실 패킷은 수신 완료 패킷과 따로 세고, 원시 시각이나 음수값을 삭제·보정하지 않는다.
+검사에 실패한 실행은 `analysis-failed`로 보고하며 성능 집계에서 제외한다.
+기존 전후 보정 설정의 실행도 계속 분석할 수 있다.
+
+
 두 Pi에서 회수한 기록을 Linux·Windows의 Python으로 분석한다.
 아래 명령은 Linux 표기이며 Windows에서는 `python3` 대신 `python`을 사용한다.
 

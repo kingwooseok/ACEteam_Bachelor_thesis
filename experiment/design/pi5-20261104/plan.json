@@ -1,0 +1,27 @@
+{
+  "status": "configured-unvalidated",
+  "design": "D01-D11",
+  "design_revision": "mixed-rates-75-v5",
+  "main_conditions": 4,
+  "main_runs": 60,
+  "single_runs": 15,
+  "total_runs": 75,
+  "all_pass_runs": 25,
+  "pass_xsk_runs": 25,
+  "mixed_runs": 25,
+  "duration_ms": 60000,
+  "warmup_ms": 5000,
+  "cpu_domains": {
+    "shared": "0,1,2,3",
+    "cpumap_active_general": "0,1,2",
+    "cpumap": "3"
+  },
+  "load_workers": 2,
+  "load_cpu_layout": "shared",
+  "flow_pps": [
+    1000,
+    100,
+    10
+  ],
+  "note": "Configured flow rates stay fixed across four CPU/iperf3 load conditions. CPU3 is reserved only for an enabled CPUMAP flow; the configured workers share the active general domain."
+}

@@ -253,11 +253,14 @@ python3 -m unittest -v \
 	analysis.tests.test_join_results \
 	analysis.tests.test_aggregate_runs \
 	analysis.tests.test_experiment \
+	analysis.tests.test_clock_tracking \
 	tests.test_capture_manifest \
 	tests.test_environment \
 	tests.test_cpu_partition \
 	tests.test_scheduler_capture \
-	tests.test_design_plan
+	tests.test_design_plan \
+	tests.test_nov04_profile \
+	tests.test_rx_coalesce
 
 step 10 "native experiment runner, readiness, drain and load lifecycle"
 make -C "$project_dir/experiment"

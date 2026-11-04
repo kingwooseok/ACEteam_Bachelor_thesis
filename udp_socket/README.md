@@ -1,5 +1,16 @@
 # UDP Socket Baseline
 
+## 2026-11-04 연속 PHC 기록기
+
+`phc_track IFACE CSV AUDIT_CSV READY_JSON MAX_MS`는 100ms 간격으로
+PHC↔MONOTONIC 대응 시각을 5개씩 수집한다. offset 중앙값에 해당하는 실제 표본에
+`selected=1`을 남기며 전체 표본도 함께 보존한다. audit에는 MONOTONIC/RAW와 NTP 상태를 기록한다.
+첫 성공 표본 이후 ready를 게시하고 SIGTERM을 받으면 메모리 기록을 파일로 저장한다.
+시간 제한이나 표본 수집 실패로 기록이 완성되지 않으면 분석 검증에서 통과시키지 않는다.
+실행기는 CPU0/FIFO51에 배치하고 실제 정책과 CPU를 저장한다.
+기존 `phc_calibrate`의 단발 최소-span 보정 기능은 계속 제공한다.
+
+
 Raspberry Pi 5 기반 Embedded Linux에서 critical UDP 통신의 tail latency를
 비교하기 위한 일반 Linux UDP socket baseline이다.
 
