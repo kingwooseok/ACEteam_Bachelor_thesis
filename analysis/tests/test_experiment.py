@@ -478,6 +478,90 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(result["cpu_observation"]["all"]["busy_pct"], 15)
             self.assertIsNone(report["conditions"][0]["cpu_busy_pct"]["mean"])
 
+    def write_network_samples(self, path, rows):
+        header = ','.join(['monotonic_ns', 'interface', *experiment.NETWORK_COUNTERS])
+        path.write_text(header + '\n' + ''.join(','.join(map(str, row)) + '\n' for row in rows),
+                        encoding='utf-8')
+
+    def test_network_window_excludes_idle_setup_and_weights_boundary_deltas(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'network.csv'
+            self.write_network_samples(path, [
+                [1, 'eth0', 0, 0, 0, 0, 0, 0, 0, 0],
+                [1000000001, 'eth0', 0, 0, 0, 0, 0, 0, 0, 0],
+                [2000000001, 'eth0', 100, 10, 0, 0, 10, 1, 0, 0],
+                [3000000001, 'eth0', 300, 30, 0, 2, 30, 3, 0, 0],
+                [4000000001, 'eth0', 10300, 1030, 0, 2, 1030, 103, 0, 0]])
+            window = dict(status='available', start_ns=1500000001,
+                          end_ns=2500000001, duration_ns=1000000000)
+            network, detail = experiment.measurement_network_summary(path, window)
+            self.assertEqual(detail['status'], 'complete')
+            self.assertEqual(detail['coverage']['eth0']['fraction'], 1)
+            # Half of 100 bytes plus half of 200 bytes; idle setup and the
+            # 10,000-byte post-capture interval contribute nothing.
+            self.assertEqual(network['eth0']['rx_bytes'], 150)
+            self.assertEqual(network['eth0']['rx_bps'], 1200)
+            self.assertEqual(network['eth0']['rx_pps'], 15)
+            self.assertEqual(network['eth0']['tx_bps'], 120)
+            self.assertEqual(network['eth0']['rx_dropped'], 1)
+
+    def test_network_final_sample_completes_tail_coverage_and_idle_is_valid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'network.csv'
+            rows = [[1, 'eth0', 100, 1, 0, 0, 0, 0, 0, 0],
+                    [1000000001, 'eth0', 100, 1, 0, 0, 0, 0, 0, 0]]
+            window = dict(status='available', start_ns=1,
+                          end_ns=1500000001, duration_ns=1500000000)
+            self.write_network_samples(path, rows)
+            network, detail = experiment.measurement_network_summary(path, window)
+            self.assertEqual(network, {})
+            self.assertEqual(detail['status'], 'partial-coverage')
+            self.assertAlmostEqual(detail['coverage']['eth0']['fraction'], 2/3)
+            self.write_network_samples(path, rows + [[1500000001, 'eth0', 100, 1, 0, 0, 0, 0, 0, 0]])
+            network, detail = experiment.measurement_network_summary(path, window)
+            self.assertEqual(detail['status'], 'complete')
+            self.assertEqual(network['eth0']['rx_bps'], 0)
+            self.assertEqual(network['eth0']['tx_pps'], 0)
+
+    def test_network_reset_malformed_or_nonincreasing_samples_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'network.csv'
+            first = [1, 'eth0', 100, 10, 0, 0, 0, 0, 0, 0]
+            window = dict(status='available', start_ns=1, end_ns=1001, duration_ns=1000)
+            for second, reason in [
+                    ([1001, 'eth0', 99, 11, 0, 0, 0, 0, 0, 0], 'decreased'),
+                    ([1, 'eth0', 101, 11, 0, 0, 0, 0, 0, 0], 'timestamps'),
+                    ([0, 'eth0', 101, 11, 0, 0, 0, 0, 0, 0], 'timestamps'),
+                    ([1001, 'eth0', '-1', 11, 0, 0, 0, 0, 0, 0], 'integer'),
+                    ([1001, 'eth0', 101, 11, 0, 0, 0, 0, 0, 0, 99], 'integer')]:
+                with self.subTest(reason=reason, second=second):
+                    self.write_network_samples(path, [first, second])
+                    network, detail = experiment.measurement_network_summary(path, window)
+                    self.assertEqual(network, {})
+                    self.assertEqual(detail['status'], 'invalid-samples')
+                    self.assertIn(reason, detail['reason'])
+
+    def test_native_network_is_bound_to_cpu_window_and_legacy_observation_is_separate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self.make_run(Path(directory), 'network')
+            result = experiment.build_report([run])['runs'][0]
+            self.assertEqual(result['network'], {})
+            self.assertEqual(result['network_measurement']['status'], 'missing-samples')
+            self.assertEqual(result['network_observation']['scope'], 'full-monitor')
+            self.assertEqual(result['network_observation']['interfaces']['eth0']['rxkB/s'], .30)
+            self.write_network_samples(run/'monitor/network-samples.csv', [
+                [1000, 'eth0', 0, 0, 0, 0, 0, 0, 0, 0],
+                [2000, 'eth0', 100, 10, 0, 0, 0, 0, 0, 0],
+                [3000, 'eth0', 200, 20, 0, 0, 0, 0, 0, 0]])
+            report = experiment.build_report([run])
+            result = report['runs'][0]
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(result['network_measurement']['status'], 'complete')
+            self.assertEqual(result['network_measurement']['window'], result['cpu_measurement']['window'])
+            self.assertIn('monitor/network-samples.csv', result['input_artifacts'])
+            self.assertEqual(result['network']['eth0']['rx_bytes'], 100)
+            self.assertIn('수신 측정 구간 NIC 트래픽', experiment.render_html(report))
+
     def test_window_includes_dropped_tail_and_later_cpumap_observation(self):
         with tempfile.TemporaryDirectory() as directory:
             run = self.make_run(Path(directory), "tail")

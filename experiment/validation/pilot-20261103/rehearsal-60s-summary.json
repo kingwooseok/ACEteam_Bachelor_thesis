@@ -1,0 +1,1335 @@
+{
+  "source_commit": "dd608305a45cd380b8619f8be59b6c08ab737af9",
+  "report_sha256": "2866107bbc022d55cd4fc03fbbc21fc954bf4dc6dd30715d1486fe124b70afef",
+  "runs": [
+    {
+      "run_id": "p04-rehearsal-60s-all-pass-r0001",
+      "status": "completed",
+      "mode": "all-pass",
+      "duration_s": 60.0,
+      "decomposition": {
+        "checked_count": 180000,
+        "counts": {
+          "complete": 180000,
+          "incomplete": 0,
+          "invalid": 0,
+          "mismatch": 0
+        },
+        "equation": "user-hw = d1 + d2 + d3",
+        "mapping": {
+          "d1": "xdp-hw",
+          "d2": "cpumap-xdp for CPUMAP; 0 for PASS/AF_XDP",
+          "d3": "user-cpumap for CPUMAP; user-xdp for PASS/AF_XDP"
+        },
+        "max_abs_residual_ns": 0,
+        "nonzero_residual_count": 0,
+        "residual_definition": "user-hw - (d1 + d2 + d3)"
+      },
+      "environment": {
+        "governor": "performance",
+        "alternate_mode_order": 1,
+        "receiver_supervisor_cpu": -1,
+        "sender_supervisor_cpu": 3,
+        "receiver_network_cpu": -1,
+        "sender_network_cpu": 3,
+        "receiver_available_cpus": "0,1,2,3",
+        "receiver_shared_cpus": "0,1,2,3",
+        "receiver_cpumap_active": false,
+        "receiver_cpumap_cpu": 3,
+        "rx_irq_cpu": 2
+      },
+      "receiver_placement": {
+        "shared_cpus": "0,1,2,3",
+        "cpumap_cpu": 3,
+        "flows": [
+          {
+            "flow_id": 1,
+            "rx_cpus": "0,1,2,3"
+          },
+          {
+            "flow_id": 2,
+            "rx_cpus": "0,1,2,3"
+          },
+          {
+            "flow_id": 3,
+            "rx_cpus": "0,1,2,3"
+          }
+        ],
+        "available_cpus": "0,1,2,3",
+        "cpumap_active": false
+      },
+      "cpu_partition": {},
+      "receiver_placements": {
+        "1": {
+          "pid": 43719,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "2": {
+          "pid": 43720,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "3": {
+          "pid": 43721,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "delivery": [
+        {
+          "flow_id": 1,
+          "requested_path": "pass",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999006414,
+          "traffic_elapsed_ns": 59999006414,
+          "offered_pps": 1000.016560040897,
+          "delivered_pps_over_sender_window": 1000.016560040897,
+          "deadline_ns": null,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 1,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1306154378105,
+            "end_mono_ns": 1366153384519,
+            "elapsed_ns": 59999006414,
+            "scheduled_start_mono_ns": 1306154324867,
+            "first_send_mono_ns": 1306154378105,
+            "last_send_mono_ns": 1366153377945,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 930952,
+            "interval_max_ns": 1070354,
+            "interval_mean_ns": 999999.997,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 123475,
+            "lateness_mean_ns": 66705.304,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "receiver",
+            "flow_id": 1,
+            "expected_count": 60000,
+            "received": 60000,
+            "invalid": 0,
+            "truncated": 0,
+            "missing_hwts": 0,
+            "socket_drops": 0,
+            "receive_errors": 0,
+            "errors": 0,
+            "start_mono_ns": 14804673034390,
+            "end_mono_ns": 14874367506487,
+            "elapsed_ns": 69694472097,
+            "drain_ms": 100,
+            "idle_timeout_ms": 0,
+            "capacity_reached": true,
+            "records_saved": true,
+            "exit_status": 0,
+            "termination_reason": "count"
+          }
+        },
+        {
+          "flow_id": 2,
+          "requested_path": "pass",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999006873,
+          "traffic_elapsed_ns": 59999006873,
+          "offered_pps": 1000.0165523906438,
+          "delivered_pps_over_sender_window": 1000.0165523906438,
+          "deadline_ns": 100000,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 2,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1306154327629,
+            "end_mono_ns": 1366153334502,
+            "elapsed_ns": 59999006873,
+            "scheduled_start_mono_ns": 1306154324867,
+            "first_send_mono_ns": 1306154327629,
+            "last_send_mono_ns": 1366153326928,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 995094,
+            "interval_max_ns": 1004576,
+            "interval_mean_ns": 999999.988,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 8147,
+            "lateness_mean_ns": 2065.174,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "receiver",
+            "flow_id": 2,
+            "expected_count": 60000,
+            "received": 60000,
+            "invalid": 0,
+            "truncated": 0,
+            "missing_hwts": 0,
+            "socket_drops": 0,
+            "receive_errors": 0,
+            "errors": 0,
+            "start_mono_ns": 14804683085579,
+            "end_mono_ns": 14874367420690,
+            "elapsed_ns": 69684335111,
+            "drain_ms": 100,
+            "idle_timeout_ms": 0,
+            "capacity_reached": true,
+            "records_saved": true,
+            "exit_status": 0,
+            "termination_reason": "count"
+          }
+        },
+        {
+          "flow_id": 3,
+          "requested_path": "pass",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999011724,
+          "traffic_elapsed_ns": 59999011724,
+          "offered_pps": 1000.0164715379738,
+          "delivered_pps_over_sender_window": 1000.0164715379738,
+          "deadline_ns": 100000,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 3,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1306154327407,
+            "end_mono_ns": 1366153339131,
+            "elapsed_ns": 59999011724,
+            "scheduled_start_mono_ns": 1306154324867,
+            "first_send_mono_ns": 1306154327407,
+            "last_send_mono_ns": 1366153326946,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 995400,
+            "interval_max_ns": 1005103,
+            "interval_mean_ns": 999999.992,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 7022,
+            "lateness_mean_ns": 2092.794,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "receiver",
+            "flow_id": 3,
+            "expected_count": 60000,
+            "received": 60000,
+            "invalid": 0,
+            "truncated": 0,
+            "missing_hwts": 0,
+            "socket_drops": 0,
+            "receive_errors": 0,
+            "errors": 0,
+            "start_mono_ns": 14804693524343,
+            "end_mono_ns": 14874367430524,
+            "elapsed_ns": 69673906181,
+            "drain_ms": 100,
+            "idle_timeout_ms": 0,
+            "capacity_reached": true,
+            "records_saved": true,
+            "exit_status": 0,
+            "termination_reason": "count"
+          }
+        }
+      ],
+      "cpu": {
+        "all": {
+          "%user": 76.07223663309935,
+          "%nice": 0.0,
+          "%system": 3.9875056328386536,
+          "%idle": 13.087804480750593,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 6.852453253311407,
+          "%steal": 0.0,
+          "busy_pct": 86.91219551924941
+        },
+        "0": {
+          "%user": 99.74998121296338,
+          "%nice": 0.0,
+          "%system": 0.25001878703662656,
+          "%idle": 0.0,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.0,
+          "%steal": 0.0,
+          "busy_pct": 100.0
+        },
+        "1": {
+          "%user": 99.9000091515791,
+          "%nice": 0.0,
+          "%system": 0.01666514140348211,
+          "%idle": 0.06666056561392844,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.01666514140348211,
+          "%steal": 0.0,
+          "busy_pct": 99.93333943438607
+        },
+        "2": {
+          "%user": 1.8598874101651472,
+          "%nice": 0.0,
+          "%system": 15.039413862919162,
+          "%idle": 54.519537574878,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 28.581161152037694,
+          "%steal": 0.0,
+          "busy_pct": 45.480462425122006
+        },
+        "3": {
+          "%user": 98.76661542823607,
+          "%nice": 0.0,
+          "%system": 1.2333845717639322,
+          "%idle": 0.0,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.0,
+          "%steal": 0.0,
+          "busy_pct": 100.0
+        }
+      },
+      "cpu_measurement": {
+        "status": "complete",
+        "window": {
+          "status": "available",
+          "clock": "CLOCK_MONOTONIC",
+          "source": "first_xdp_to_last_receive_observation",
+          "start_ns": 14814364605458,
+          "end_ns": 14874367506339,
+          "duration_ns": 60002900881
+        },
+        "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+        "busy_definition": "total minus idle and iowait; guest ticks not counted twice",
+        "sample_interval_ns": {
+          "min": 786512999,
+          "max": 1002697831
+        },
+        "coverage": {
+          "all": {
+            "covered_ns": 60002900881,
+            "fraction": 1.0
+          },
+          "0": {
+            "covered_ns": 60002900881,
+            "fraction": 1.0
+          },
+          "1": {
+            "covered_ns": 60002900881,
+            "fraction": 1.0
+          },
+          "2": {
+            "covered_ns": 60002900881,
+            "fraction": 1.0
+          },
+          "3": {
+            "covered_ns": 60002900881,
+            "fraction": 1.0
+          }
+        },
+        "snapshot_count": 71
+      },
+      "network": {
+        "eth0": {
+          "rx_bytes": 6610540096.095527,
+          "rx_packets": 4598955.76449809,
+          "rx_errors": 0.0,
+          "rx_dropped": 0.0,
+          "tx_bytes": 571.8332370552652,
+          "tx_packets": 4.144360568847361,
+          "tx_errors": 0.0,
+          "tx_dropped": 0.0,
+          "rx_bps": 881362734.0059172,
+          "rx_pps": 76645.55708096366,
+          "tx_bps": 76.24074551853367,
+          "tx_pps": 0.06906933678201013
+        }
+      },
+      "network_measurement": {
+        "status": "complete",
+        "window": {
+          "status": "available",
+          "clock": "CLOCK_MONOTONIC",
+          "source": "first_xdp_to_last_receive_observation",
+          "start_ns": 14814364605458,
+          "end_ns": 14874367506339,
+          "duration_ns": 60002900881
+        },
+        "scope": "receiver-measurement-window",
+        "clock": "CLOCK_MONOTONIC",
+        "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+        "source": "/proc/net/dev",
+        "sample_interval_ns": {
+          "min": 786196553,
+          "max": 1002699126
+        },
+        "coverage": {
+          "eth0": {
+            "covered_ns": 60002900881,
+            "fraction": 1.0
+          }
+        },
+        "snapshot_count": 71
+      }
+    },
+    {
+      "run_id": "p04-rehearsal-60s-mixed-r0001",
+      "status": "completed",
+      "mode": "mixed",
+      "duration_s": 60.0,
+      "decomposition": {
+        "checked_count": 180000,
+        "counts": {
+          "complete": 180000,
+          "incomplete": 0,
+          "invalid": 0,
+          "mismatch": 0
+        },
+        "equation": "user-hw = d1 + d2 + d3",
+        "mapping": {
+          "d1": "xdp-hw",
+          "d2": "cpumap-xdp for CPUMAP; 0 for PASS/AF_XDP",
+          "d3": "user-cpumap for CPUMAP; user-xdp for PASS/AF_XDP"
+        },
+        "max_abs_residual_ns": 0,
+        "nonzero_residual_count": 0,
+        "residual_definition": "user-hw - (d1 + d2 + d3)"
+      },
+      "environment": {
+        "governor": "performance",
+        "alternate_mode_order": 1,
+        "receiver_supervisor_cpu": -1,
+        "sender_supervisor_cpu": 3,
+        "receiver_network_cpu": -1,
+        "sender_network_cpu": 3,
+        "receiver_available_cpus": "0,1,2,3",
+        "receiver_shared_cpus": "0,1,2",
+        "receiver_cpumap_active": true,
+        "receiver_cpumap_cpu": 3,
+        "rx_irq_cpu": 2
+      },
+      "receiver_placement": {
+        "shared_cpus": "0,1,2",
+        "cpumap_cpu": 3,
+        "flows": [
+          {
+            "flow_id": 1,
+            "rx_cpus": "0,1,2"
+          },
+          {
+            "flow_id": 2,
+            "rx_cpus": "3"
+          },
+          {
+            "flow_id": 3,
+            "rx_cpus": "0,1,2"
+          }
+        ],
+        "available_cpus": "0,1,2,3",
+        "cpumap_active": true
+      },
+      "cpu_partition": {
+        "active": {
+          "owner_pid": 43650,
+          "available_cpus": "0,1,2,3",
+          "reserved_cpu": 3,
+          "general_cpus": "0,1,2",
+          "partition": "isolated",
+          "partition_cpus": "3",
+          "root_cpus": "0,1,2",
+          "root_cpuset_added": true,
+          "verified": true
+        },
+        "restored": {
+          "owner_pid": 43650,
+          "available_cpus": "0,1,2,3",
+          "reserved_cpu": 3,
+          "partition": "released",
+          "root_cpus": "0,1,2,3",
+          "root_cpuset_enabled": false,
+          "verified": true
+        }
+      },
+      "receiver_placements": {
+        "1": {
+          "pid": 44080,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2
+          ]
+        },
+        "2": {
+          "pid": 44081,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            3
+          ]
+        },
+        "3": {
+          "pid": 44082,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "delivery": [
+        {
+          "flow_id": 1,
+          "requested_path": "pass",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59998998716,
+          "traffic_elapsed_ns": 59998998716,
+          "offered_pps": 1000.0166883451628,
+          "delivered_pps_over_sender_window": 1000.0166883451628,
+          "deadline_ns": null,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 1,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1448675432065,
+            "end_mono_ns": 1508674430781,
+            "elapsed_ns": 59998998716,
+            "scheduled_start_mono_ns": 1448675371094,
+            "first_send_mono_ns": 1448675432065,
+            "last_send_mono_ns": 1508674424188,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 929687,
+            "interval_max_ns": 1075414,
+            "interval_mean_ns": 999999.869,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 128575,
+            "lateness_mean_ns": 66974.964,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "receiver",
+            "flow_id": 1,
+            "expected_count": 60000,
+            "received": 60000,
+            "invalid": 0,
+            "truncated": 0,
+            "missing_hwts": 0,
+            "socket_drops": 0,
+            "receive_errors": 0,
+            "errors": 0,
+            "start_mono_ns": 14947197894247,
+            "end_mono_ns": 15016889550992,
+            "elapsed_ns": 69691656745,
+            "drain_ms": 100,
+            "idle_timeout_ms": 0,
+            "capacity_reached": true,
+            "records_saved": true,
+            "exit_status": 0,
+            "termination_reason": "count"
+          }
+        },
+        {
+          "flow_id": 2,
+          "requested_path": "cpumap",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999012753,
+          "traffic_elapsed_ns": 59999012753,
+          "offered_pps": 1000.0164543874091,
+          "delivered_pps_over_sender_window": 1000.0164543874091,
+          "deadline_ns": 100000,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 2,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1448675373194,
+            "end_mono_ns": 1508674385947,
+            "elapsed_ns": 59999012753,
+            "scheduled_start_mono_ns": 1448675371094,
+            "first_send_mono_ns": 1448675373194,
+            "last_send_mono_ns": 1508674373262,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 993672,
+            "interval_max_ns": 1007747,
+            "interval_mean_ns": 1000000.001,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 10427,
+            "lateness_mean_ns": 2041.976,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "receiver",
+            "flow_id": 2,
+            "expected_count": 60000,
+            "received": 60000,
+            "invalid": 0,
+            "truncated": 0,
+            "missing_hwts": 60000,
+            "socket_drops": 0,
+            "receive_errors": 0,
+            "errors": 0,
+            "start_mono_ns": 14947216390623,
+            "end_mono_ns": 15016889454695,
+            "elapsed_ns": 69673064072,
+            "drain_ms": 100,
+            "idle_timeout_ms": 0,
+            "capacity_reached": true,
+            "records_saved": true,
+            "exit_status": 0,
+            "termination_reason": "count"
+          }
+        },
+        {
+          "flow_id": 3,
+          "requested_path": "xsk",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999007882,
+          "traffic_elapsed_ns": 59999007882,
+          "offered_pps": 1000.0165355734207,
+          "delivered_pps_over_sender_window": 1000.0165355734207,
+          "deadline_ns": 100000,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 3,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1448675373361,
+            "end_mono_ns": 1508674381243,
+            "elapsed_ns": 59999007882,
+            "scheduled_start_mono_ns": 1448675371094,
+            "first_send_mono_ns": 1448675373361,
+            "last_send_mono_ns": 1508674372817,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 994135,
+            "interval_max_ns": 1006970,
+            "interval_mean_ns": 999999.991,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 9154,
+            "lateness_mean_ns": 2137.489,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "afxdp_recv",
+            "ready": true,
+            "exit_code": 0,
+            "error_number": 0,
+            "termination_reason": "signal",
+            "stop_signal": 15,
+            "start_mono_ns": 14947223775541,
+            "end_mono_ns": 15016989958594,
+            "elapsed_ns": 69766183053,
+            "queue_id": 0,
+            "bind_mode": "copy",
+            "record_capacity": 60000,
+            "received_packets": 60000,
+            "received_udp_packets": 60000,
+            "received_experiment_packets": 60000,
+            "recorded_packets": 60000,
+            "overflow_packets": 0,
+            "malformed_packets": 0,
+            "unexpected_port_packets": 0,
+            "metadata_invalid_packets": 0,
+            "recycled_frames": 60000,
+            "umem_invariant_errors": 0,
+            "drain_ms": 100,
+            "drain_completed": true,
+            "received_during_drain": 0,
+            "defer_flush": true,
+            "completion_notified": true,
+            "kernel_stats_available": true,
+            "rx_dropped": 0,
+            "rx_invalid_descs": 0,
+            "rx_ring_full": 0,
+            "rx_fill_ring_empty_descs": 0
+          }
+        }
+      ],
+      "cpu": {
+        "all": {
+          "%user": 65.27108717860554,
+          "%nice": 0.0,
+          "%system": 3.8760762428656075,
+          "%idle": 24.860663779793683,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 5.992172798735167,
+          "%steal": 0.0,
+          "busy_pct": 75.13933622020632
+        },
+        "0": {
+          "%user": 97.3377024844989,
+          "%nice": 0.0,
+          "%system": 2.6456325486226584,
+          "%idle": 0.0,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.0166649668784526,
+          "%steal": 0.0,
+          "busy_pct": 100.0
+        },
+        "1": {
+          "%user": 95.09385200317594,
+          "%nice": 0.0,
+          "%system": 4.8645560933927126,
+          "%idle": 0.024927975112578025,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.0166639283187536,
+          "%steal": 0.0,
+          "busy_pct": 99.97507202488741
+        },
+        "2": {
+          "%user": 68.11016708222476,
+          "%nice": 0.0,
+          "%system": 7.972078995926818,
+          "%idle": 0.016663228473028622,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 23.901090693375387,
+          "%steal": 0.0,
+          "busy_pct": 99.98333677152696
+        },
+        "3": {
+          "%user": 0.0,
+          "%nice": 0.0,
+          "%system": 0.0,
+          "%idle": 100.00000000000001,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.0,
+          "%steal": 0.0,
+          "busy_pct": 0.0
+        }
+      },
+      "cpu_measurement": {
+        "status": "complete",
+        "window": {
+          "status": "available",
+          "clock": "CLOCK_MONOTONIC",
+          "source": "first_xdp_to_last_receive_observation",
+          "start_ns": 14956890625400,
+          "end_ns": 15016889550788,
+          "duration_ns": 59998925388
+        },
+        "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+        "busy_definition": "total minus idle and iowait; guest ticks not counted twice",
+        "sample_interval_ns": {
+          "min": 988400939,
+          "max": 1001915867
+        },
+        "coverage": {
+          "all": {
+            "covered_ns": 59998925388,
+            "fraction": 1.0
+          },
+          "0": {
+            "covered_ns": 59998925388,
+            "fraction": 1.0
+          },
+          "1": {
+            "covered_ns": 59998925388,
+            "fraction": 1.0
+          },
+          "2": {
+            "covered_ns": 59998925388,
+            "fraction": 1.0
+          },
+          "3": {
+            "covered_ns": 59998925388,
+            "fraction": 1.0
+          }
+        },
+        "snapshot_count": 71
+      },
+      "network": {
+        "eth0": {
+          "rx_bytes": 6596685001.125053,
+          "rx_packets": 4481333.676395839,
+          "rx_errors": 0.0,
+          "rx_dropped": 0.0,
+          "tx_bytes": 625.840169683695,
+          "tx_packets": 5.651024130946139,
+          "tx_errors": 0.0,
+          "tx_dropped": 0.0,
+          "rx_bps": 879573753.4918469,
+          "rx_pps": 74690.23232359628,
+          "tx_bps": 83.44685050760795,
+          "tx_pps": 0.09418542239552118
+        }
+      },
+      "network_measurement": {
+        "status": "complete",
+        "window": {
+          "status": "available",
+          "clock": "CLOCK_MONOTONIC",
+          "source": "first_xdp_to_last_receive_observation",
+          "start_ns": 14956890625400,
+          "end_ns": 15016889550788,
+          "duration_ns": 59998925388
+        },
+        "scope": "receiver-measurement-window",
+        "clock": "CLOCK_MONOTONIC",
+        "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+        "source": "/proc/net/dev",
+        "sample_interval_ns": {
+          "min": 988174948,
+          "max": 1001869747
+        },
+        "coverage": {
+          "eth0": {
+            "covered_ns": 59998925388,
+            "fraction": 1.0
+          }
+        },
+        "snapshot_count": 71
+      }
+    },
+    {
+      "run_id": "p04-rehearsal-60s-pass-xsk-r0001",
+      "status": "completed",
+      "mode": "pass-xsk",
+      "duration_s": 60.0,
+      "decomposition": {
+        "checked_count": 180000,
+        "counts": {
+          "complete": 180000,
+          "incomplete": 0,
+          "invalid": 0,
+          "mismatch": 0
+        },
+        "equation": "user-hw = d1 + d2 + d3",
+        "mapping": {
+          "d1": "xdp-hw",
+          "d2": "cpumap-xdp for CPUMAP; 0 for PASS/AF_XDP",
+          "d3": "user-cpumap for CPUMAP; user-xdp for PASS/AF_XDP"
+        },
+        "max_abs_residual_ns": 0,
+        "nonzero_residual_count": 0,
+        "residual_definition": "user-hw - (d1 + d2 + d3)"
+      },
+      "environment": {
+        "governor": "performance",
+        "alternate_mode_order": 1,
+        "receiver_supervisor_cpu": -1,
+        "sender_supervisor_cpu": 3,
+        "receiver_network_cpu": -1,
+        "sender_network_cpu": 3,
+        "receiver_available_cpus": "0,1,2,3",
+        "receiver_shared_cpus": "0,1,2,3",
+        "receiver_cpumap_active": false,
+        "receiver_cpumap_cpu": 3,
+        "rx_irq_cpu": 2
+      },
+      "receiver_placement": {
+        "shared_cpus": "0,1,2,3",
+        "cpumap_cpu": 3,
+        "flows": [
+          {
+            "flow_id": 1,
+            "rx_cpus": "0,1,2,3"
+          },
+          {
+            "flow_id": 2,
+            "rx_cpus": "0,1,2,3"
+          },
+          {
+            "flow_id": 3,
+            "rx_cpus": "0,1,2,3"
+          }
+        ],
+        "available_cpus": "0,1,2,3",
+        "cpumap_active": false
+      },
+      "cpu_partition": {},
+      "receiver_placements": {
+        "1": {
+          "pid": 43890,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "2": {
+          "pid": 43891,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "3": {
+          "pid": 43892,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "delivery": [
+        {
+          "flow_id": 1,
+          "requested_path": "pass",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999049525,
+          "traffic_elapsed_ns": 59999049525,
+          "offered_pps": 1000.0158415009491,
+          "delivered_pps_over_sender_window": 1000.0158415009491,
+          "deadline_ns": null,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 1,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1377253139957,
+            "end_mono_ns": 1437252189482,
+            "elapsed_ns": 59999049525,
+            "scheduled_start_mono_ns": 1377253086924,
+            "first_send_mono_ns": 1377253139957,
+            "last_send_mono_ns": 1437252140056,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 862703,
+            "interval_max_ns": 1138660,
+            "interval_mean_ns": 1000000.002,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 191820,
+            "lateness_mean_ns": 66020.971,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "receiver",
+            "flow_id": 1,
+            "expected_count": 60000,
+            "received": 60000,
+            "invalid": 0,
+            "truncated": 0,
+            "missing_hwts": 0,
+            "socket_drops": 0,
+            "receive_errors": 0,
+            "errors": 0,
+            "start_mono_ns": 14875723729967,
+            "end_mono_ns": 14945467477108,
+            "elapsed_ns": 69743747141,
+            "drain_ms": 100,
+            "idle_timeout_ms": 0,
+            "capacity_reached": true,
+            "records_saved": true,
+            "exit_status": 0,
+            "termination_reason": "count"
+          }
+        },
+        {
+          "flow_id": 2,
+          "requested_path": "pass",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999016282,
+          "traffic_elapsed_ns": 59999016282,
+          "offered_pps": 1000.0163955688103,
+          "delivered_pps_over_sender_window": 1000.0163955688103,
+          "deadline_ns": 100000,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 2,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1377253087848,
+            "end_mono_ns": 1437252104130,
+            "elapsed_ns": 59999016282,
+            "scheduled_start_mono_ns": 1377253086924,
+            "first_send_mono_ns": 1377253087848,
+            "last_send_mono_ns": 1437252088556,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 993067,
+            "interval_max_ns": 1007771,
+            "interval_mean_ns": 1000000.012,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 9629,
+            "lateness_mean_ns": 2049.193,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "receiver",
+            "flow_id": 2,
+            "expected_count": 60000,
+            "received": 60000,
+            "invalid": 0,
+            "truncated": 0,
+            "missing_hwts": 0,
+            "socket_drops": 0,
+            "receive_errors": 0,
+            "errors": 0,
+            "start_mono_ns": 14875733814948,
+            "end_mono_ns": 14945467386848,
+            "elapsed_ns": 69733571900,
+            "drain_ms": 100,
+            "idle_timeout_ms": 0,
+            "capacity_reached": true,
+            "records_saved": true,
+            "exit_status": 0,
+            "termination_reason": "count"
+          }
+        },
+        {
+          "flow_id": 3,
+          "requested_path": "xsk",
+          "expected_count": 60000,
+          "sent": 60000,
+          "send_errors": 0,
+          "unsent": 0,
+          "received_unique": 60000,
+          "loss_count": 0,
+          "loss_rate": 0.0,
+          "sender_elapsed_ns": 59999022838,
+          "traffic_elapsed_ns": 59999022838,
+          "offered_pps": 1000.0162862985725,
+          "delivered_pps_over_sender_window": 1000.0162862985725,
+          "deadline_ns": 100000,
+          "sender_statistics": {
+            "schema_version": 1,
+            "role": "sender",
+            "flow_id": 3,
+            "expected_count": 60000,
+            "attempted": 60000,
+            "sent": 60000,
+            "errors": 0,
+            "start_mono_ns": 1377253089496,
+            "end_mono_ns": 1437252112334,
+            "elapsed_ns": 59999022838,
+            "scheduled_start_mono_ns": 1377253086924,
+            "first_send_mono_ns": 1377253089496,
+            "last_send_mono_ns": 1437252088927,
+            "period_ns": 1000000,
+            "interval_count": 59999,
+            "interval_min_ns": 995882,
+            "interval_max_ns": 1006142,
+            "interval_mean_ns": 999999.991,
+            "late_count": 60000,
+            "late_period_count": 0,
+            "lateness_max_ns": 8351,
+            "lateness_mean_ns": 2089.203,
+            "last_send_errno": 0,
+            "termination_reason": "count"
+          },
+          "receiver_statistics": {
+            "schema_version": 1,
+            "role": "afxdp_recv",
+            "ready": true,
+            "exit_code": 0,
+            "error_number": 0,
+            "termination_reason": "signal",
+            "stop_signal": 15,
+            "start_mono_ns": 14875749438790,
+            "end_mono_ns": 14945568061818,
+            "elapsed_ns": 69818623028,
+            "queue_id": 0,
+            "bind_mode": "copy",
+            "record_capacity": 60000,
+            "received_packets": 60000,
+            "received_udp_packets": 60000,
+            "received_experiment_packets": 60000,
+            "recorded_packets": 60000,
+            "overflow_packets": 0,
+            "malformed_packets": 0,
+            "unexpected_port_packets": 0,
+            "metadata_invalid_packets": 0,
+            "recycled_frames": 60000,
+            "umem_invariant_errors": 0,
+            "drain_ms": 100,
+            "drain_completed": true,
+            "received_during_drain": 0,
+            "defer_flush": true,
+            "completion_notified": true,
+            "kernel_stats_available": true,
+            "rx_dropped": 0,
+            "rx_invalid_descs": 0,
+            "rx_ring_full": 0,
+            "rx_fill_ring_empty_descs": 0
+          }
+        }
+      ],
+      "cpu": {
+        "all": {
+          "%user": 75.80457232097352,
+          "%nice": 0.0,
+          "%system": 4.066535894436439,
+          "%idle": 13.195514357189827,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 6.933377427400215,
+          "%steal": 0.0,
+          "busy_pct": 86.80448564281018
+        },
+        "0": {
+          "%user": 98.98350188956788,
+          "%nice": 0.0,
+          "%system": 0.9998342069824118,
+          "%idle": 0.0,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.016663903449706863,
+          "%steal": 0.0,
+          "busy_pct": 100.0
+        },
+        "1": {
+          "%user": 99.66666638461402,
+          "%nice": 0.0,
+          "%system": 0.33333361538597056,
+          "%idle": 0.0,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.0,
+          "%steal": 0.0,
+          "busy_pct": 100.0
+        },
+        "2": {
+          "%user": 1.7031061647926058,
+          "%nice": 0.0,
+          "%system": 14.585797466014629,
+          "%idle": 54.88431850756049,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 28.826777861632277,
+          "%steal": 0.0,
+          "busy_pct": 45.11568149243952
+        },
+        "3": {
+          "%user": 99.11666591922717,
+          "%nice": 0.0,
+          "%system": 0.883334080772822,
+          "%idle": 0.0,
+          "%iowait": 0.0,
+          "%irq": 0.0,
+          "%softirq": 0.0,
+          "%steal": 0.0,
+          "busy_pct": 100.0
+        }
+      },
+      "cpu_measurement": {
+        "status": "complete",
+        "window": {
+          "status": "available",
+          "clock": "CLOCK_MONOTONIC",
+          "source": "first_xdp_to_last_receive_observation",
+          "start_ns": 14885467531248,
+          "end_ns": 14945467476959,
+          "duration_ns": 59999945711
+        },
+        "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+        "busy_definition": "total minus idle and iowait; guest ticks not counted twice",
+        "sample_interval_ns": {
+          "min": 43212123,
+          "max": 1002740915
+        },
+        "coverage": {
+          "all": {
+            "covered_ns": 59999945711,
+            "fraction": 1.0
+          },
+          "0": {
+            "covered_ns": 59999945711,
+            "fraction": 1.0
+          },
+          "1": {
+            "covered_ns": 59999945711,
+            "fraction": 1.0
+          },
+          "2": {
+            "covered_ns": 59999945711,
+            "fraction": 1.0
+          },
+          "3": {
+            "covered_ns": 59999945711,
+            "fraction": 1.0
+          }
+        },
+        "snapshot_count": 72
+      },
+      "network": {
+        "eth0": {
+          "rx_bytes": 6607571741.783046,
+          "rx_packets": 4542709.755914361,
+          "rx_errors": 0.0,
+          "rx_dropped": 0.0,
+          "tx_bytes": 560.6673210832353,
+          "tx_packets": 4.676970600019507,
+          "tx_errors": 0.0,
+          "tx_dropped": 0.0,
+          "rx_bps": 881010362.7239325,
+          "rx_pps": 75711.89777062632,
+          "tx_bps": 74.75571045131078,
+          "tx_pps": 0.07794958053040472
+        }
+      },
+      "network_measurement": {
+        "status": "complete",
+        "window": {
+          "status": "available",
+          "clock": "CLOCK_MONOTONIC",
+          "source": "first_xdp_to_last_receive_observation",
+          "start_ns": 14885467531248,
+          "end_ns": 14945467476959,
+          "duration_ns": 59999945711
+        },
+        "scope": "receiver-measurement-window",
+        "clock": "CLOCK_MONOTONIC",
+        "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+        "source": "/proc/net/dev",
+        "sample_interval_ns": {
+          "min": 43185142,
+          "max": 1002744231
+        },
+        "coverage": {
+          "eth0": {
+            "covered_ns": 59999945711,
+            "fraction": 1.0
+          }
+        },
+        "snapshot_count": 72
+      }
+    }
+  ]
+}

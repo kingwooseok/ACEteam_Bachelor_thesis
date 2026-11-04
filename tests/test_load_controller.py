@@ -1,5 +1,6 @@
 """Observe readiness/failure/cleanup without launching a real machine stress load."""
 import os
+import csv
 from pathlib import Path
 import signal
 import re
@@ -158,6 +159,26 @@ while :; do sleep 1; done''')
             text=(result/name).read_text()
             self.assertIn('tool-start',text)
             self.assertIn('tool-final',text)
+
+    def test_native_cpu_and_network_sidecar_flush_after_final_sample(self):
+        self.live_tool('sar')
+        self.env.update(ACE_MONITOR_ENABLED='1', ACE_INTERFACE='lo',
+                        ACE_CPU_SAMPLER=str(ROOT/'udp_socket/bin/cpu_sample'))
+        process = self.start()
+        self.await_ready(process)
+        result = self.folder/'result'
+        self.assertFalse((result/'cpu-samples.csv').exists())
+        self.assertFalse((result/'network-samples.csv').exists())
+        process.terminate()
+        out, err = process.communicate(timeout=6)
+        self.assertEqual(process.returncode, 0, (out, err))
+        with (result/'network-samples.csv').open() as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual({row['interface'] for row in rows}, {'lo'})
+        self.assertGreater(int(rows[-1]['monotonic_ns']), int(rows[0]['monotonic_ns']))
+        self.assertGreaterEqual(int(rows[-1]['rx_bytes']), int(rows[0]['rx_bytes']))
+        self.assertTrue((result/'cpu-samples.csv').is_file())
 
     def test_log_collision_preserves_original_and_staged_capture(self):
         self.live_tool('iperf3'); self.env['ACE_IPERF_ENABLED']='1'

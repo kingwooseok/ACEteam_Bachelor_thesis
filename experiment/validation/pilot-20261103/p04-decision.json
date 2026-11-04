@@ -1,0 +1,50 @@
+{
+  "source_commit": "ce679f2e09216f88eb7dfeecaf7a4e3a553f8aa6",
+  "network_high_bps": 855000000,
+  "settle_ms": 0,
+  "drain_ms": 100,
+  "conditions": {
+    "0": {
+      "runs": 9,
+      "sent": 270000,
+      "received": 270000,
+      "missing_sequences": 0,
+      "send_errors": 0,
+      "af_xdp_drain_packets": 0
+    },
+    "100": {
+      "runs": 9,
+      "sent": 270000,
+      "received": 270000,
+      "missing_sequences": 0,
+      "send_errors": 0,
+      "af_xdp_drain_packets": 0
+    },
+    "500": {
+      "runs": 9,
+      "sent": 270000,
+      "received": 270000,
+      "missing_sequences": 0,
+      "send_errors": 0,
+      "af_xdp_drain_packets": 0
+    }
+  },
+  "reason": "All 27 runs received sequences 0..9999 for every flow; longer settle recovered no extra packets and every AF_XDP drain received 0 packets.",
+  "rehearsal_60s": {
+    "status": "completed",
+    "source_commit": "dd608305a45cd380b8619f8be59b6c08ab737af9",
+    "runs": 3,
+    "sent": 540000,
+    "received": 540000,
+    "missing_sequences": 0,
+    "sequence_range_per_flow": [
+      0,
+      59999
+    ],
+    "all_clock_records_valid": true,
+    "cpu_network_same_measurement_window": true,
+    "measurement_window_coverage": 1.0,
+    "summary_file": "rehearsal-60s-summary.json",
+    "audit_file": "rehearsal-tail-audit.json"
+  }
+}

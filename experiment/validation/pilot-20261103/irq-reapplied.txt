@@ -1,0 +1,3 @@
+Name:	irq/106-eth%d
+Cpus_allowed_list:	2
+2

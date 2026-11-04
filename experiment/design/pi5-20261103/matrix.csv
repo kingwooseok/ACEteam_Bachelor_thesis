@@ -1,0 +1,8 @@
+case_id,references,pass_pps,cpu_percent,network,load_cpus,load_workers,single_flow,modes
+single-1,D01-flow1,1000,0,none,per-mode-general,3,1,all-pass
+single-2,D01-flow2,1000,0,none,per-mode-general,3,2,mixed
+single-3,D01-flow3,1000,0,none,per-mode-general,3,3,pass-xsk
+main-01,A-cpu0-none,1000,0,none,per-mode-general,3,,all-pass;pass-xsk;mixed
+main-02,A-cpu0-high,1000,0,high,per-mode-general,3,,all-pass;pass-xsk;mixed
+main-03,A-cpu100-none,1000,100,none,per-mode-general,3,,all-pass;pass-xsk;mixed
+main-04,A-cpu100-high,1000,100,high,per-mode-general,3,,all-pass;pass-xsk;mixed

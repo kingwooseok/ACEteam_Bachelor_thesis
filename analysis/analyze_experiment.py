@@ -25,6 +25,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis import aggregate_runs as aggregate
 from analysis import join_results as join
+from analysis.clock_validation import validate_clock
 
 
 class ExperimentError(ValueError):
@@ -350,12 +351,17 @@ def join_completed_run(directory: Path, descriptor: Mapping) -> aggregate.RunDat
     output = directory / "analysis"
     output.mkdir(exist_ok=True)
     marker = output / "summary.json.complete"
+    tracking = bool((descriptor.get("environment") or {}).get("phc_tracking"))
     if marker.exists():
         run = aggregate.load_run(marker)
         if run.run_id != descriptor["run_id"]:
             raise ExperimentError("join run_id disagrees with run.json")
         if run.analysis_policy["hw_timestamp_policy"] != join.HW_TIMESTAMP_POLICY:
             raise ExperimentError("existing join uses the previous HW clock policy; collect into a new output directory and analyze again")
+        if tracking:
+            summary = read_json(run.summary_path)
+            if [Path(p).name for p in summary["inputs"]["phc_calibration"]] != ["phc-during.csv"]:
+                raise ExperimentError("existing join does not use continuous PHC observations")
         return run
     args = ["--manifest", str(contained_file(directory, "manifest.json")),
             "--ingress", str(contained_file(directory, "xdp-ingress_records.csv")),
@@ -367,7 +373,7 @@ def join_completed_run(directory: Path, descriptor: Mapping) -> aggregate.RunDat
             args.extend((option, str(contained_file(directory, name))))
     for path in sorted(directory.glob("udp-flow*.bin")):
         args.extend(("--udp-native", str(contained_file(directory, path.name))))
-    for name in ("phc-before.csv", "phc-after.csv"):
+    for name in (("phc-during.csv",) if tracking else ("phc-before.csv", "phc-after.csv")):
         args.extend(("--phc-calibration", str(contained_file(directory, name))))
     parsed = join.argument_parser().parse_args(args)
     rows, summary = join.analyze(parsed)
@@ -419,6 +425,8 @@ def sysstat_summary(path: Path, kind: str) -> dict:
 
 
 CPU_COUNTERS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
+NETWORK_COUNTERS = ("rx_bytes", "rx_packets", "rx_errors", "rx_dropped",
+                    "tx_bytes", "tx_packets", "tx_errors", "tx_dropped")
 
 
 def receiver_measurement_window(directory: Path, run: aggregate.RunData | None) -> dict:
@@ -529,6 +537,84 @@ def measurement_cpu_summary(path: Path, window: Mapping) -> tuple[dict, dict]:
         return {}, detail
 
 
+def measurement_network_summary(path: Path, window: Mapping) -> tuple[dict, dict]:
+    """Use interface counter deltas only over the receiver's capture window.
+
+    Boundary counter values are linearly interpolated between observations.
+    Whole intervals keep the measured deltas; idle intervals are valid data.
+    """
+    detail = {"status": "missing-samples", "window": dict(window),
+              "scope": "receiver-measurement-window", "clock": "CLOCK_MONOTONIC",
+              "method": "counter-deltas-weighted-by-overlapping-monotonic-time",
+              "source": "/proc/net/dev", "sample_interval_ns": None, "coverage": {}}
+    if not path.is_file():
+        return {}, detail
+    if window.get("status") != "available":
+        detail["status"] = "unavailable-window"
+        return {}, detail
+    try:
+        start, end = window["start_ns"], window["end_ns"]
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0
+               for value in (start, end)) or end <= start:
+            raise ExperimentError("invalid network measurement window")
+        span = end - start
+        by_interface: dict[str, list[tuple[int, tuple[int, ...]]]] = {}
+        snapshots: dict[int, set[str]] = {}
+        with path.open(encoding="utf-8", newline="") as file:
+            reader = csv.DictReader(file)
+            if reader.fieldnames != ["monotonic_ns", "interface", *NETWORK_COUNTERS]:
+                raise ExperimentError("unexpected network sample columns")
+            for row in reader:
+                interface = row["interface"]
+                if interface is None or re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", interface) is None:
+                    raise ExperimentError("invalid network interface identifier")
+                values = [row["monotonic_ns"], *(row[key] for key in NETWORK_COUNTERS)]
+                if None in row or any(value is None or not value.isascii() or not value.isdigit()
+                                      for value in values):
+                    raise ExperimentError("network samples require nonnegative integer counters")
+                timestamp, *counters = map(int, values)
+                if any(value > 2**64 - 1 for value in (timestamp, *counters)):
+                    raise ExperimentError("network sample exceeds uint64 range")
+                samples = by_interface.setdefault(interface, [])
+                if samples and timestamp <= samples[-1][0]:
+                    raise ExperimentError("network sample timestamps must increase per interface")
+                if samples and any(new < old for old, new in zip(samples[-1][1], counters)):
+                    raise ExperimentError("network counter decreased between samples")
+                samples.append((timestamp, tuple(counters)))
+                snapshots.setdefault(timestamp, set()).add(interface)
+        if not by_interface or len(snapshots) < 2:
+            raise ExperimentError("network samples need two snapshots")
+        if any(interfaces != set(by_interface) for interfaces in snapshots.values()):
+            raise ExperimentError("network snapshot is missing an interface row")
+        result, intervals = {}, []
+        for interface, samples in by_interface.items():
+            totals = [0.0] * len(NETWORK_COUNTERS)
+            covered = 0
+            for (before_ns, before), (after_ns, after) in zip(samples, samples[1:]):
+                elapsed = after_ns - before_ns
+                intervals.append(elapsed)
+                overlap = max(0, min(end, after_ns) - max(start, before_ns))
+                if not overlap:
+                    continue
+                covered += overlap
+                for index, (old, new) in enumerate(zip(before, after)):
+                    totals[index] += (new - old) * (overlap / elapsed)
+            detail["coverage"][interface] = {"covered_ns": covered, "fraction": covered / span}
+            if covered == span:
+                values = dict(zip(NETWORK_COUNTERS, totals))
+                for direction in ("rx", "tx"):
+                    values[f"{direction}_bps"] = values[f"{direction}_bytes"] * 8e9 / span
+                    values[f"{direction}_pps"] = values[f"{direction}_packets"] * 1e9 / span
+                result[interface] = values
+        detail["sample_interval_ns"] = {"min": min(intervals), "max": max(intervals)}
+        detail["snapshot_count"] = len(snapshots)
+        detail["status"] = "complete" if len(result) == len(by_interface) else "partial-coverage"
+        return result, detail
+    except (ExperimentError, ValueError, TypeError, KeyError, csv.Error) as error:
+        detail.update(status="invalid-samples", reason=str(error))
+        return {}, detail
+
+
 def read_capture_keys(directory: Path, run: aggregate.RunData | None) -> dict[int, set[int]]:
     keys: dict[int, set[int]] = {}
     if run is not None:
@@ -627,6 +713,11 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
         run = None if descriptor["mode"] == "socket-only" else join_completed_run(directory, descriptor)
         if run is not None:
             summary = read_json(run.summary_path)
+            if (descriptor.get("environment") or {}).get("phc_tracking"):
+                result["clock_validation"] = validate_clock(
+                    run.joined_path, contained_file(directory, "phc-during.csv"))
+                if not result["clock_validation"]["accepted"]:
+                    raise ExperimentError("continuous clock validation failed: " + json.dumps(result["clock_validation"]))
             result["decomposition"] = summary.get("decomposition")
             result["hw_timestamp_policy"] = run.analysis_policy["hw_timestamp_policy"]
         result["flows"] = descriptor["flows"]
@@ -651,9 +742,14 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
             result["receiver_placements"][str(flow["flow_id"])] = observed
         result["delivery"] = delivery_statistics(directory, descriptor, run)
         result["cpu_observation"] = sysstat_summary(directory / "monitor" / "mpstat.log", "cpu")
+        measurement_window = receiver_measurement_window(directory, run)
         result["cpu"], result["cpu_measurement"] = measurement_cpu_summary(
-            directory / "monitor" / "cpu-samples.csv", receiver_measurement_window(directory, run))
-        result["network"] = sysstat_summary(directory / "monitor" / "network.log", "network")
+            directory / "monitor" / "cpu-samples.csv", measurement_window)
+        result["network"], result["network_measurement"] = measurement_network_summary(
+            directory / "monitor" / "network-samples.csv", measurement_window)
+        result["network_observation"] = {
+            "scope": "full-monitor", "source": "sar network.log",
+            "interfaces": sysstat_summary(directory / "monitor" / "network.log", "network")}
         sender_manifest = directory / "sender" / "manifest.json"
         result["sender_cohort"] = (aggregate.manifest_cohort_identity(read_json(sender_manifest))
                                     if sender_manifest.is_file() else None)
@@ -663,7 +759,7 @@ def inspect_run(directory: Path) -> tuple[dict, aggregate.RunData | None, dict |
         artifact_names += [path.name for path in directory.glob("receiver-flow*.json")]
         artifact_names += [path.name for path in directory.glob("udp-flow*.bin")]
         artifact_names += [f"cpu-partition-{state}.json" for state in result["cpu_partition"]]
-        artifact_names += [name for name in ("monitor/mpstat.log", "monitor/cpu-samples.csv", "monitor/network.log")
+        artifact_names += [name for name in ("monitor/mpstat.log", "monitor/cpu-samples.csv", "monitor/network.log", "monitor/network-samples.csv")
                            if (directory / name).is_file()]
         result["input_artifacts"] = {
             name: join.file_digest(contained_file(directory, name)) for name in artifact_names
@@ -749,6 +845,9 @@ def build_report(directories: Sequence[Path]) -> dict:
                         "cpu_window": "receiver first XDP to last XDP/CPUMAP/userspace observation, CLOCK_MONOTONIC",
                         "cpu_average": "counter deltas weighted by overlapping time at sample boundaries; full window coverage required",
                         "cpu_observation": "legacy mpstat whole-observation average, excluded from measurement CPU aggregation",
+                        "network_window": "same receiver MONOTONIC window as CPU; full counter-sample coverage required",
+                        "network_rates": "NIC interface byte/packet counter deltas with linear interpolation at window boundaries; includes measurement and background traffic",
+                        "network_observation": "legacy sar whole-monitor average, excluded from measurement NIC rates",
                         "receiver_affinity": "allowed CPU sets; separate affinity and CPU reservation layouts are aggregated separately",
                         "deadline": "only explicitly supplied per-flow values",
                         "socket_only": "operational smoke validation only"}}
@@ -847,6 +946,15 @@ def render_html(report: Mapping) -> str:
     parts.append('</table><p class="note">패킷별 보정 HW 시각을 d₁과 총지연에 공통 사용합니다. 잔차는 총지연−(d₁+d₂+d₃)이며 음수 구간·메타데이터 오류는 무효로 표시합니다.</p></section>')
     parts.extend((bars("Run p99 평균", latency_bars, "µs"), bars("패킷 손실률", loss_bars, "%"), bars("수신 측정 구간 CPU 사용률", cpu_bars, "%")))
     parts.append('<p class="note">CPU 사용률은 수신 Pi의 최초 XDP부터 최종 수신 관측(XDP·CPUMAP·사용자 수신)까지 계산합니다. 경계의 1초 표본은 측정창과 겹친 시간으로 가중합니다. 준비 대기와 저장 단계는 집계에서 제외하며, 표본이 전체 측정창을 덮지 못하면 값을 표시하지 않습니다. 소켓 운영 검증은 최초·최종 사용자 수신 사이를 사용합니다.</p>')
+    if any(run.get("network") for run in report["runs"]):
+        parts.append('<section><h2>수신 측정 구간 NIC 트래픽</h2><div class="scroll"><table><tr><th>Run / NIC</th><th>RX Mbps</th><th>RX PPS</th><th>TX Mbps</th><th>RX 드롭 증가</th><th>RX 오류 증가</th></tr>')
+        for run in report["runs"]:
+            for interface, traffic in run.get("network", {}).items():
+                values = [f'{run["run_id"]} / {interface}', number(traffic["rx_bps"], 1e-6),
+                          number(traffic["rx_pps"]), number(traffic["tx_bps"], 1e-6),
+                          number(traffic["rx_dropped"]), number(traffic["rx_errors"])]
+                parts.append('<tr>'+''.join(f'<td>{escape(value)}</td>' for value in values)+'</tr>')
+        parts.append('</table></div><p class="note">NIC 누적 카운터를 CPU와 같은 수신 측정창으로 잘라 계산합니다. 계측 패킷과 배경 트래픽을 함께 포함하며, 경계 표본의 증가량은 겹친 시간으로 가중합니다. 원본 카운터와 측정창 범위는 report.json에 기록합니다.</p></section>')
     parts.append('<section><h2>Run별 송수신·부하</h2><table><tr><th>Run / flow</th><th>계획 / 실제 송신 / 수신</th><th>송신 오류</th><th>손실</th><th>실제 송신 PPS</th><th>수신 측정 구간 CPU</th></tr>')
     for run in report["runs"]:
         for delivery in run.get("delivery", []):

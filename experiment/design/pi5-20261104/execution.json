@@ -1,0 +1,105 @@
+{
+  "design": "D01-D11",
+  "design_revision": "mixed-rates-75-v5",
+  "cases": [
+    {
+      "case_id": "single-1",
+      "config": "single-1.conf",
+      "sha256": "17aa4bd3e9fdb77290806656dc94c912785ccd3b352f1bc502e205032392e069",
+      "references": [
+        "D01-flow1"
+      ],
+      "expected_modes": [
+        "all-pass"
+      ],
+      "repeats": 5,
+      "expected_runs": 5
+    },
+    {
+      "case_id": "single-2",
+      "config": "single-2.conf",
+      "sha256": "899ebfe5ce8d591933351f507ec28323d2eb39e40b201f3d5336c59abf1ef381",
+      "references": [
+        "D01-flow2"
+      ],
+      "expected_modes": [
+        "mixed"
+      ],
+      "repeats": 5,
+      "expected_runs": 5
+    },
+    {
+      "case_id": "single-3",
+      "config": "single-3.conf",
+      "sha256": "5667b9b4a19e50fe5da40e3e5d335cbcf3b3652ff23a630be1c71f61450b2407",
+      "references": [
+        "D01-flow3"
+      ],
+      "expected_modes": [
+        "pass-xsk"
+      ],
+      "repeats": 5,
+      "expected_runs": 5
+    },
+    {
+      "case_id": "main-01",
+      "config": "main-01.conf",
+      "sha256": "a217bdfdcfe85aa491da6932a10eec0f51b78c45923333e0891e25843b3c79b8",
+      "references": [
+        "A-cpu0-none"
+      ],
+      "expected_modes": [
+        "all-pass",
+        "pass-xsk",
+        "mixed"
+      ],
+      "repeats": 5,
+      "expected_runs": 15
+    },
+    {
+      "case_id": "main-02",
+      "config": "main-02.conf",
+      "sha256": "9f88828c852f44bbbd1388e41b47a8f384946e242f416a74bb8b447b32aaf28e",
+      "references": [
+        "A-cpu0-high"
+      ],
+      "expected_modes": [
+        "pass-xsk",
+        "mixed",
+        "all-pass"
+      ],
+      "repeats": 5,
+      "expected_runs": 15
+    },
+    {
+      "case_id": "main-03",
+      "config": "main-03.conf",
+      "sha256": "c444fd08dbca624401c3e2459c8ae1f9a29298803c7a4959f25236a570cebf26",
+      "references": [
+        "A-cpu100-none"
+      ],
+      "expected_modes": [
+        "mixed",
+        "all-pass",
+        "pass-xsk"
+      ],
+      "repeats": 5,
+      "expected_runs": 15
+    },
+    {
+      "case_id": "main-04",
+      "config": "main-04.conf",
+      "sha256": "7884452188db3d6160146c638518845c57a95e9ac1715a7d33d41ef0710f0f0e",
+      "references": [
+        "A-cpu100-high"
+      ],
+      "expected_modes": [
+        "all-pass",
+        "pass-xsk",
+        "mixed"
+      ],
+      "repeats": 5,
+      "expected_runs": 15
+    }
+  ]
+}

@@ -1,0 +1,252 @@
+{
+  "source_commit": "ce679f2e09216f88eb7dfeecaf7a4e3a553f8aa6",
+  "runs": [
+    {
+      "run_id": "p03-v2-paths-all-pass-r0001",
+      "scheduler_ready": {
+        "schema_version": 1,
+        "interface": "eth0",
+        "phase": "ready",
+        "cpumap_scope": "all_visible_cpumap_kernel_threads",
+        "irq_ids": [
+          106
+        ],
+        "threads": [
+          {
+            "tid": 117,
+            "name": "irq/106-eth%d",
+            "kind": "irq",
+            "irq": 106,
+            "policy_id": 1,
+            "policy": "SCHED_FIFO",
+            "rt_priority": 50,
+            "last_cpu": 2,
+            "start_time_ticks": 43,
+            "cpus_allowed_list": "2",
+            "status": "captured"
+          }
+        ],
+        "status": "captured",
+        "irq_status": "present",
+        "cpumap_status": "no_matching_thread",
+        "thread_count": 1,
+        "irq_thread_count": 1,
+        "cpumap_thread_count": 0,
+        "unavailable_count": 0,
+        "complete": true
+      },
+      "receiver_placements": [
+        {
+          "pid": 34020,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "pid": 34021,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "pid": 34022,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "run_id": "p03-v2-paths-mixed-r0001",
+      "scheduler_ready": {
+        "schema_version": 1,
+        "interface": "eth0",
+        "phase": "ready",
+        "cpumap_scope": "all_visible_cpumap_kernel_threads",
+        "irq_ids": [
+          106
+        ],
+        "threads": [
+          {
+            "tid": 117,
+            "name": "irq/106-eth%d",
+            "kind": "irq",
+            "irq": 106,
+            "policy_id": 1,
+            "policy": "SCHED_FIFO",
+            "rt_priority": 50,
+            "last_cpu": 2,
+            "start_time_ticks": 43,
+            "cpus_allowed_list": "2",
+            "status": "captured"
+          },
+          {
+            "tid": 34343,
+            "name": "cpumap/3/map:76",
+            "kind": "cpumap",
+            "irq": null,
+            "policy_id": 0,
+            "policy": "SCHED_OTHER",
+            "rt_priority": 0,
+            "last_cpu": 3,
+            "start_time_ticks": 1393813,
+            "cpus_allowed_list": "3",
+            "status": "captured"
+          }
+        ],
+        "status": "captured",
+        "irq_status": "present",
+        "cpumap_status": "present",
+        "thread_count": 2,
+        "irq_thread_count": 1,
+        "cpumap_thread_count": 1,
+        "unavailable_count": 0,
+        "complete": true
+      },
+      "receiver_placements": [
+        {
+          "pid": 34344,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2
+          ]
+        },
+        {
+          "pid": 34345,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            3
+          ]
+        },
+        {
+          "pid": 34346,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "cpu-partition-active.json": {
+        "owner_pid": 33951,
+        "available_cpus": "0,1,2,3",
+        "reserved_cpu": 3,
+        "general_cpus": "0,1,2",
+        "partition": "isolated",
+        "partition_cpus": "3",
+        "root_cpus": "0,1,2",
+        "root_cpuset_added": true,
+        "verified": true
+      },
+      "cpu-partition-restored.json": {
+        "owner_pid": 33951,
+        "available_cpus": "0,1,2,3",
+        "reserved_cpu": 3,
+        "partition": "released",
+        "root_cpus": "0,1,2,3",
+        "root_cpuset_enabled": false,
+        "verified": true
+      }
+    },
+    {
+      "run_id": "p03-v2-paths-pass-xsk-r0001",
+      "scheduler_ready": {
+        "schema_version": 1,
+        "interface": "eth0",
+        "phase": "ready",
+        "cpumap_scope": "all_visible_cpumap_kernel_threads",
+        "irq_ids": [
+          106
+        ],
+        "threads": [
+          {
+            "tid": 117,
+            "name": "irq/106-eth%d",
+            "kind": "irq",
+            "irq": 106,
+            "policy_id": 1,
+            "policy": "SCHED_FIFO",
+            "rt_priority": 50,
+            "last_cpu": 2,
+            "start_time_ticks": 43,
+            "cpus_allowed_list": "2",
+            "status": "captured"
+          }
+        ],
+        "status": "captured",
+        "irq_status": "present",
+        "cpumap_status": "no_matching_thread",
+        "thread_count": 1,
+        "irq_thread_count": 1,
+        "cpumap_thread_count": 0,
+        "unavailable_count": 0,
+        "complete": true
+      },
+      "receiver_placements": [
+        {
+          "pid": 34174,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "pid": 34175,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "pid": 34176,
+          "policy": 0,
+          "priority": 0,
+          "verified": true,
+          "cpus": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      ]
+    }
+  ]
+}

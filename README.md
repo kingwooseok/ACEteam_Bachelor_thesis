@@ -21,6 +21,33 @@ CPU 3을 전용 수신 영역으로 분리하여 커널 처리부터 사용자 �
 [실행 순서](#6-실제로-실험을-진행하는-순서) ·
 [코드와 상세 문서](#7-코드와-상세-문서)
 
+## 2026년 11월 4일 변경점
+
+**복합 부하에서 세 구성을 한 번씩 확인하는 설정을 추가했다.** 각 구성은 60초이며,
+같은 조건에서 일반 1,000 PPS · 중요1 100 PPS · 중요2 10 PPS를 보낸다.
+
+| 항목 | 11월 4일 적용값 | 적용 목적·동작 |
+|---|---|---|
+| CPU 부하 | **수신 Pi의 stress-ng 워커 2개, 각 100%** | 현재 구성의 일반 CPU 영역을 공유한다. |
+| 배경 네트워크 | **iperf3 UDP 800 Mbps, 1개 스트림** | 송신 Pi → 수신 Pi로 배경 트래픽을 보낸다. |
+| 중요2 수신 우선순위 | **SCHED_FIFO 49** | 장치에서 기록한 NIC IRQ 스레드의 **FIFO 50보다 한 단계 낮다.** all-pass의 중요2 소켓 수신기에도 같은 49를 적용한다. |
+| AF_XDP 수신 | **측정 중 RX 링을 계속 확인** | 준비·안정화가 끝난 뒤 시작 신호로 상시 확인을 켠다. 종료 시 drain·저장 후 빠져나오며, 시간 제한을 넘으면 실패로 기록한다. |
+| 인터럽트 병합 | **RX coalescing 0µs** | XDP·수신기 준비 후 적용하고 실제 값을 읽어 검증한다. 종료 시 원래 값을 복원한다. |
+| PHC 시간 보정 | **100ms마다 5개 대응 시각 기록** | offset 중앙값에 해당하는 실제 표본을 선택하고, 실험 후 표본 사이를 보간해 NIC 시각을 MONOTONIC으로 환산한다. |
+
+FIFO49의 기준인 50은 NIC IRQ 스레드에서 확인한 값이다.
+PHC 기록기는 **CPU 0 / FIFO 51**에서 짧게 깨어나 시각을 읽고 다시 대기한다.
+표본과 시스템 시계 상태를 메모리에 모아 종료 후 저장한다. 수신 패킷 전체가 보정 구간에
+들어오는지, 보정 표본 간격이 500ms를 넘는지, 음수 지연이 있는지 검사한다.
+검사를 통과한 기록으로 총지연과 구간 지연을 계산하며 음수값을 0으로 바꾸지 않는다.
+
+CPU 배치는 **all-pass·pass-xsk: 0~3 공유 / mixed: 중요1만 CPU 3, 나머지 0~2 공유**를 유지한다.
+일반·중요1 수신기는 OTHER/0, 중요2 수신기는 FIFO/49다. AF_XDP는 현재 XDP_COPY 방식이며
+기존 파서와 패킷별 수신 시각 기록을 사용한다.
+
+- **이번 확인시험:** [복합 부하·세 구성·각 1회 설정](experiment/confirmation-20261104.conf), [측정 결과와 변경 근거](experiment/validation/confirmation-20261104.md)
+- **반복 실험용:** [11월 4일 profile](experiment/design/profile.pi5-20261104.json), [75회 실행 계획](experiment/design/pi5-20261104)
+
 ## 1. 수신 Pi에서 패킷은 어디로 가는가
 
 송신 Pi가 세 종류의 UDP 시험 패킷을 보내면, 수신 Pi의 Native XDP가 **설정한 구성과
@@ -73,8 +100,8 @@ Linux가 이 범위에서 실행 CPU를 선택한다. NIC IRQ의 CPU 2도 일반
 - **② → ③:** 중요1의 커널 처리와 수신을 CPU 3으로 분리했을 때의 지연·기한 초과·손실을 본다.
 - **① → ③:** 세 경로 구조 전체가 일반 처리량과 두 중요 흐름에 미친 효과를 함께 본다.
 
-세 구성은 같은 트래픽·부하 조건을 사용한다. 수신 앱의 정책은 모두 **OTHER/0**으로
-맞춘다. all-pass에서도 동일한 XDP 계측을 거치며, 세 흐름 모두 기존 커널 스택으로 전달한다.
+세 구성은 같은 트래픽·부하 조건과 흐름별 우선순위를 사용한다. 일반·중요1은
+**OTHER/0**, 중요2는 **FIFO/49**로 맞춘다. all-pass에서도 동일한 XDP 계측을 거치며, 세 흐름 모두 기존 커널 스택으로 전달한다.
 **총 CPU는 네 개로 같고, 네 개를 함께 쓰는 구성과 세 개 공유 + 한 개 전용 구성을 비교한다.**
 실행기는 mixed의 중요1을 시작할 때 CPU 3을 예약하고, 종료 후 일반 실행 영역에 반환한다.
 CPUMAP 중요1이 꺼진 단독 PASS·AF_XDP 측정도 CPU 0~3 전체를 사용한다.
@@ -84,7 +111,7 @@ CPUMAP 중요1이 꺼진 단독 PASS·AF_XDP 측정도 CPU 0~3 전체를 사용�
 
 ## 3. 부하가 증가할 때 세 구성은 어떻게 달라지는가
 
-일반·중요1·중요2의 세 계측 흐름은 각각 **1,000 PPS**로 고정한다. 시험 패킷은 **UDP payload 96B**
+일반·중요1·중요2의 세 계측 흐름은 각각 **1,000 / 100 / 10 PPS**로 고정한다. 시험 패킷은 **UDP payload 96B**
 (32B 실험 헤더 + 64B 데이터), 중요 흐름의 비교 기한은 **NIC 수신부터 100µs**다.
 각 구성·조건을 **60초 송신 · 5회 반복**으로 측정한다.
 
@@ -92,15 +119,15 @@ CPUMAP 중요1이 꺼진 단독 PASS·AF_XDP 측정도 CPU 0~3 전체를 사용�
 |---|---|---|
 | **기본 상태** | 끔 | 끔 |
 | **CPU 경합** | 켬 | 끔 |
-| **네트워크 부하** | 끔 | 고부하 |
-| **복합 부하** | 켬 | 고부하 |
+| **네트워크 부하** | 끔 | 800 Mbps |
+| **복합 부하** | 켬 | 800 Mbps |
 
 각 조건에서 세 수신 구성을 비교해 CPU 경쟁과 배경 트래픽이 어느 구간과 흐름에
 영향을 주는지 본다. iperf3의 UDP/5201 트래픽도 PASS로 일반 커널 스택에서 처리한다.
 따라서 실제 일반 통신량은 **9000번 계측 흐름 + iperf3 배경 트래픽**이며,
 배경 부하를 켜면 일반 통신량이 증가한다.
 
-CPU 부하는 **같은 세 워커**가 일반 실행 영역을 함께 사용하도록 만든다.
+CPU 부하는 **같은 두 워커**가 일반 실행 영역을 함께 사용하도록 만든다.
 각 워커의 강도는 0%/100%이며 all-pass·pass-xsk는 CPU 0~3, mixed는 CPU 0~2에서
 Linux가 스케줄링한다. 네 부하 조건에서 세 구성을 각각 측정한다.
 
@@ -113,7 +140,10 @@ Linux가 스케줄링한다. 네 부하 조건에서 세 구성을 각각 측정
 | **전체** | **단독 15회 + 본실험 60회** | **75** |
 
 실행 계획은 단독 3개와 본실험 4개, **7개 조건 파일**로 구성한다.
-배경 고부하 전송률과 송신 종료 후 수신 대기는 예비측정으로 확정한다.
+11월 4일 설정을 적용한 [실행 계획](experiment/design/pi5-20261104)이 준비되어 있다.
+배경 부하는 **800 Mbps**, 송신 완료 후 추가 대기는 **0 ms**, 수신기 drain은 **100 ms**다.
+75회는 이 계획으로 수행할 단독·본실험 횟수이며, 예비측정 기록은
+[Pi 예비측정 보고서](experiment/validation/pilot-20261103.md)에 별도로 정리한다.
 자세한 조건과 적용 위치는 [실험 준비 안내](experiment/design/배포전_준비사항.md)에 있다.
 
 ## 4. 시간은 어디서 재는가
@@ -144,12 +174,15 @@ $$L_{\mathrm{total}} = d_1 + d_2 + d_3$$
 그래야 최초 XDP부터 사용자 수신까지 같은 범위에서 전달 비용과 처리 변화를 읽을 수 있다.
 PASS의 소켓 큐 대기·앱 실행과 AF_XDP의 링 전달·사용자 수신 시간은 각 경로의 d₃에 포함된다.
 
-NIC의 HW 시계(PHC)와 시스템의 경과 시간 시계(MONOTONIC)는 실험 전후에 보정한다.
+NIC의 HW 시계(PHC)와 시스템의 경과 시간 시계(MONOTONIC)는 측정 중 100ms 간격으로
+대응 시각을 기록하고, 종료 후 보간해 보정한다.
 패킷별 보정 HW 시각 하나를 d₁과 총지연에 재사용하고 구간 합을 검사한다.
 총지연 p99와 기한 초과율은 **같은 패킷의 총지연 분포**에서 계산한다.
 
 결과는 중요 흐름의 **총지연·100µs 초과율·손실**, 일반 흐름의 **수신 PPS·손실**,
-**구간별 시간과 CPU 사용률**을 함께 제시한다. 입구의 남은 시간 예산은
+**구간별 시간·CPU 사용률·NIC 처리량**을 함께 제시한다.
+CPU 사용률과 NIC 처리량은 패킷 기록에서 얻은 같은 수신 측정 구간으로 집계한다.
+입구의 남은 시간 예산은
 `d₁ ≤ D − (d₂+d₃)`로 읽고, 입구 지연 개선 방향은 후속 제언으로 연결한다.
 
 ## 5. 실험 도구는 무슨 일을 하는가
@@ -159,7 +192,7 @@ NIC의 HW 시계(PHC)와 시스템의 경과 시간 시계(MONOTONIC)는 실험 
 ```mermaid
 flowchart TB
     subgraph PRE["실험 전 · PC / VMware"]
-        V["예비시험 결과 입력<br/>profile.json"] --> P["조건별 설정 파일 생성<br/>build_plan.py"]
+        V["선택한 설정을 담은 profile<br/>조건 변경 시에만 다시 생성"] --> P["준비된 실행 계획<br/>pi5-20261104"]
     end
     subgraph RUN["실험 중 · 두 Raspberry Pi"]
         T["송신 Pi · ace-run<br/>UDP 시험 송신<br/>iperf3 배경 송신"]
@@ -178,13 +211,14 @@ flowchart TB
 
 | 평소에 할 일 | 담당 도구 | 입력 → 출력 |
 |---|---|---|
-| **조건을 파일로 펼친다** | `build_plan.py` | 선택값을 담은 profile → 조건별 `.conf`와 실행표 |
+| **조건을 바꿀 때 계획을 만든다** | `build_plan.py` | 선택값을 담은 profile → 조건별 `.conf`와 실행표 |
 | **조건을 차례로 실행한다** | `run_matrix.sh` | 실행표 → 조건별 `ace-run` 호출 |
 | **한 번의 실험을 진행한다** | `ace-run` | 조건 파일 → 준비·송수신·부하·종료·기록 저장 |
 | **기록을 합쳐 결과를 본다** | `run_matrix.sh collect` → `analysis/` | 두 Pi의 기록 → 패킷별 CSV, 집계 JSON, HTML |
 
 여기서 **“계획 생성기”는 정한 값을 7개의 조건 파일로 펼치는 프로그램**이다.
 경로와 부하 값은 사람이 정한 조건표를 따른다. 실행표에는 구성별 반복 횟수와 순서가 담긴다.
+현재 두 Pi에서는 저장소에 포함된 실행 계획을 바로 사용한다.
 
 패킷 송수신·시각 기록은 **C/BPF**가 수행한다. Python은 계획 생성·조건 순서 관리·사후 분석을
 맡는다. 조건 순서 관리 프로그램은 한 실험이 도는 동안 C 실행기의 완료를 기다린다.
@@ -195,14 +229,16 @@ flowchart TB
 ```text
 구성에 맞는 CPU 영역 적용 · 수신 경로·송수신기 준비
     → 부하 시작 · 5초 안정화
-    → 수신 시계 사전 보정
+    → 연속 PHC 기록 · AF_XDP 상시 확인 시작
     → 60초 조건의 시험 패킷 송신
     → 송신 종료 · 잔여 패킷 수신
-    → 기록 저장 · 사후 보정 · 부하 종료
+    → 기록 저장 · 연속 PHC 기록 종료 · 부하 종료
+    → RX 병합 설정 복원
     → CPU 3 예약 해제 · CPU 0~3 공유 복원
 ```
 
-패킷 기록은 메모리에 모으고 종료 후 저장한다. CPU 관측은 tmpfs에 남긴 뒤 회수한다.
+패킷 기록은 메모리에 모으고 종료 후 저장한다. CPU·NIC 관측은 C 프로그램이
+1초 간격과 종료 시점에 tmpfs에 남긴 뒤 회수한다.
 실행기는 수신 앱의 CPU 허용 집합·정책·우선순위, IRQ·CPUMAP 스레드 설정과
 CPU 3 예약·반환 상태도 기록한다.
 
@@ -232,40 +268,32 @@ bash monitor/check_cpu_partition.sh eth0 0,1,2,3 3
 이전에 CPU 3의 고정 부팅 격리를 적용했다면 해당 설정을 제거하고 재부팅한다.
 장치 준비와 검사 항목은 [실험 준비 안내](experiment/design/배포전_준비사항.md)를 따른다.
 
-### ② 예비시험으로 실행값을 정한다
+### ② 11월 4일 설정을 적용한 실행 계획을 사용한다
 
-[예비시험 안내](experiment/design/배포전_준비사항.md)에 따라 전달 동작·우선순위,
-배경 전송률, 송신 종료 후 수신 대기를 점검한다.
-한 조건만 실행할 때는 [단일 설정 예시](experiment/config.example.conf)를 채워
-각 Pi의 `ace-run receiver/sender --config FILE`에 전달한다.
+[Pi 설정값](experiment/design/profile.pi5-20261104.json)과
+[실행 계획 폴더](experiment/design/pi5-20261104)를 저장소에 포함했다.
+두 Pi에 같은 저장소 버전을 준비하면 아래 계획을 그대로 실행할 수 있다.
 
-그 결과를 복사한 `profile.json`에 넣는다.
-
-```bash
-cp experiment/design/profile.example.json /path/to/profile.json
-```
-
-| profile에서 채울 값 | 의미 |
+| 적용값 | 설정과 근거 |
 |---|---|
-| `receiver_address` | 수신 Pi의 **시험용 Ethernet IP** |
-| `network_high_bps` | 예비측정 기준 전송률 R의 90% |
-| `settle_ms` | 송신 종료 이후 잔여 수신 대기시간 |
+| 수신 시험망 IP | `receiver_address=192.168.10.10` |
+| 배경 UDP 부하 | `network_high_bps=800000000` — 복합 부하 확인시험 적용값 |
+| 송신 완료 후 추가 대기 | `settle_ms=0` |
+| 수신기 종료 전 drain | `drain_ms=100` |
+
+11월 4일 값과 결과는 [확인시험 기록](experiment/validation/confirmation-20261104.md)에 있다.
+11월 3일 예비측정은 [이전 기록](experiment/validation/pilot-20261103.md)에 보존한다.
 
 전체 CPU 집합 `receiver_shared_cpus=[0,1,2,3]`와 중요 수신 CPU `receiver_cpumap_cpu=3`은
 profile에 담겨 있다. 실행기가 구성에 맞춰 일반 영역을 네 개 또는 세 개로 적용한다.
-수신 앱은 모두 OTHER/0을 사용하고 실제 배치를 준비 직후 검사한다.
+일반·중요1 수신기는 OTHER/0, 중요2는 FIFO/49를 사용하고 실제 배치를 준비 직후 검사한다.
 
-### ③ 실행 계획을 한 번 만들고 두 Pi에 복사한다
+### ③ 두 Pi에서 같은 계획 폴더를 사용한다
 
-```bash
-python3 experiment/design/build_plan.py \
-  --profile /path/to/profile.json --output /path/to/new-plan
-```
-
-새 폴더에 다음 파일이 생긴다. **폴더 전체를 같은 내용으로 두 Pi에 복사한다.**
+준비된 계획의 구성은 다음과 같다.
 
 ```text
-new-plan/
+experiment/design/pi5-20261104/
   matrix.csv       사람이 보는 조건표
   plan.json        실행 횟수 요약: 75회
   profile.json     이번에 선택한 값
@@ -274,14 +302,33 @@ new-plan/
   main-*.conf      CPU·네트워크 부하 4조건: 각 조건에서 세 구성 비교
 ```
 
+**조건을 바꿀 때만** profile을 수정하고 새 계획을 생성한다.
+새 계획은 폴더 전체를 같은 내용으로 두 Pi에 복사한다.
+
+```bash
+python3 experiment/design/build_plan.py \
+  --profile /path/to/edited-profile.json --output /path/to/new-plan
+```
+
 ### ④ 수신 Pi에서 먼저 시작하고 송신 Pi를 시작한다
+
+**복합 부하만 세 구성 × 1회 실행하려면** 양쪽에서 다음 설정을 사용한다.
+
+```bash
+# 수신 Pi에서 먼저 실행
+sudo ./experiment/ace-run receiver --config experiment/confirmation-20261104.conf
+# 송신 Pi에서 실행
+sudo ./experiment/ace-run sender --config experiment/confirmation-20261104.conf
+```
+
+**전체 75회 계획**은 다음과 같이 실행한다.
 
 ```bash
 # 수신 Pi
-sudo ./experiment/run_matrix.sh receiver --plan-dir /path/to/new-plan
+sudo ./experiment/run_matrix.sh receiver --plan-dir experiment/design/pi5-20261104
 
 # 송신 Pi
-sudo ./experiment/run_matrix.sh sender --plan-dir /path/to/new-plan
+sudo ./experiment/run_matrix.sh sender --plan-dir experiment/design/pi5-20261104
 ```
 
 각 Pi가 자기 장치에서 실행한다. 시작 전 설정 해시·실행 조건을 검사하고,
@@ -291,24 +338,26 @@ sudo ./experiment/run_matrix.sh sender --plan-dir /path/to/new-plan
 
 ### ⑤ 두 Pi의 기록을 모아 분석한다
 
-두 장치의 `results/experiment`를 각각 Linux 분석 장비로 복사한다.
+두 장치의 `results/experiment`를 각각 분석 장비로 복사한다.
 아래의 `rx-results`, `tx-results`는 복사한 각 `experiment` 디렉터리다.
+Linux에서는 다음 명령으로 실행 계획 전체를 수집·분석한다.
 
 ```bash
-./experiment/run_matrix.sh collect --plan-dir /path/to/new-plan \
+./experiment/run_matrix.sh collect --plan-dir experiment/design/pi5-20261104 \
   --receiver-root /path/to/rx-results --sender-root /path/to/tx-results \
   --output /path/to/new-collected
 ```
 
 | 보고 싶은 것 | 결과 파일 |
 |---|---|
-| 조건별 지연·손실·처리량·CPU 사용률 | `new-collected/analysis-report/report.html` |
+| 조건별 지연·손실·CPU 사용률·NIC 처리량 | `new-collected/analysis-report/report.html` |
 | 집계값으로 추가 그래프 만들기 | `new-collected/analysis-report/report.json` |
 | 개별 패킷의 네 시각과 d₁·d₂·d₃ | 각 run의 `analysis/joined.csv` |
 | run별 지연 분포 통계·구간 합 검사 | 각 run의 `analysis/summary.json` |
 
 수집기는 구성별 실행 횟수와 설정 일치를 검사한다. 원시 기록을 보존하고,
-불완전 실행과 손실도 보고서에 남긴다. 분석 필드와 통계 방법은 [분석 안내](analysis/README.md)에 있다.
+불완전 실행과 손실도 보고서에 남긴다. Windows에서도 Python 분석기로 회수한 기록을
+분석할 수 있다. 실행 방법과 분석 필드는 [분석 안내](analysis/README.md)에 있다.
 
 ## 7. 코드와 상세 문서
 
@@ -324,4 +373,5 @@ sudo ./experiment/run_matrix.sh sender --plan-dir /path/to/new-plan
 | 포팅 경위와 초기 세 경로 동작 기록 | [드라이버 포팅 기록](드라이버%20포팅한%20그%20모든것을%20담아.md) · [측정 돌리는 법](측정돌리는법.md) |
 
 드라이버·경로별 수신·자동 실행·분석 도구가 준비되어 있다.
-현재 진행 단계는 **두 Pi의 예비측정 값 확정 → 단독·본실험 75회 → 결과 분석**이다.
+11월 4일 설정을 적용한 실행 계획을 준비했다.
+다음 단계는 **준비된 계획으로 단독·본실험 75회 수행 → 결과 분석**이다.

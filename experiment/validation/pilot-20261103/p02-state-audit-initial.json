@@ -1,0 +1,1330 @@
+{
+  "network_high_bps": 855000000,
+  "reference_bps": 950000000,
+  "factor": 0.9,
+  "runs": [
+    {
+      "case": "1793695155-01-400mbps",
+      "target_bps": 400000000,
+      "sent_bps": 399986386.101619,
+      "received_bps": 399975189.84056675,
+      "sent_packets": 345386,
+      "received_packets": 345386,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.007101139413454678,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "db063e9aad2a1bf64b566073220e5d6980c0665cfe22eb565705edfc5476c422",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "45750",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 345389,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 3,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "45200",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 345387,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695155-02-600mbps",
+      "target_bps": 600000000,
+      "sent_bps": 599983119.5920388,
+      "received_bps": 599967551.0641687,
+      "sent_packets": 518347,
+      "received_packets": 518347,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.008305685248142283,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "d8799b5a02d3e7c653bf615ef5993f565ed3ebd2ca948200585c4dc6c3cd6ecb",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "46300",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "46850",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 518348,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47950",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "48500",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 518348,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695155-03-800mbps",
+      "target_bps": 800000000,
+      "sent_bps": 799974912.1902684,
+      "received_bps": 799952136.967294,
+      "sent_packets": 691296,
+      "received_packets": 691296,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.022293725346945077,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "bc654f552739091c6729d339ab077d128bd6e7360c4bbacef91b5f58685168cb",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "46850",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 691297,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "48500",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 691297,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695155-04-900mbps",
+      "target_bps": 900000000,
+      "sent_bps": 899970529.0990332,
+      "received_bps": 899945356.508991,
+      "sent_packets": 777707,
+      "received_packets": 777707,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.017490109947941992,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "b2a0fb37c7ec3e84d86ef2f5949611c0213e5712d1ad08667435db8ec36510c1",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "46850",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 777708,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47950",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49050",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 777708,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695155-05-950mbps",
+      "target_bps": 950000000,
+      "sent_bps": 949971573.6507134,
+      "received_bps": 949944717.8498173,
+      "sent_packets": 820916,
+      "received_packets": 820916,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.018975515409025662,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "ea4c08929c4351b27ed19c794786ce4e8962f0785c3c6600d6662cec1452a834",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 820917,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49050",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49600",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 820917,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695155-06-970mbps",
+      "target_bps": 970000000,
+      "sent_bps": 956432368.336219,
+      "received_bps": 956345772.9965414,
+      "sent_packets": 826500,
+      "received_packets": 826451,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.02337145898323666,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "7ac74abf13b069c80b1fc5802097d8a655c03d19ba99d269a7139219736fb591",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47950",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "46850",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 826453,
+            "NoPorts": 46,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49600",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "50150",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 826501,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695241-01-950mbps",
+      "target_bps": 950000000,
+      "sent_bps": 949969449.030837,
+      "received_bps": 949942706.6278465,
+      "sent_packets": 820915,
+      "received_packets": 820915,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.019965459771655945,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "c2a3b59802f66e1a4551a92c239cf2c05f2860cdd43f937db2ffa1432ba8a2f9",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47400",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 820916,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49050",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49600",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 820916,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695241-02-855mbps",
+      "target_bps": 855000000,
+      "sent_bps": 854975336.672285,
+      "received_bps": 854950910.3038036,
+      "sent_packets": 738828,
+      "received_packets": 738828,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.018671200003797267,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "8dba7c2bfced8fed4259c00111502421c93f9c474cc5b9e49113c3242e0ab941",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "47950",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49050",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 738829,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "49050",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "50150",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 738829,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    },
+    {
+      "case": "1793695241-03-855mbps",
+      "target_bps": 855000000,
+      "sent_bps": 854976431.7465547,
+      "received_bps": 854951817.0158615,
+      "sent_packets": 738303,
+      "received_packets": 738303,
+      "lost_packets": 0,
+      "lost_percent": 0,
+      "jitter_ms": 0.016342036864298106,
+      "datagram_bytes": 1448,
+      "duration_seconds": 10,
+      "json_sha256": "84f4f021967edb9acf726c11d278f190337359928a8df05863c21bc077cbed0a",
+      "hosts": {
+        "receiver": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "48500",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "48500",
+            "irq_affinities": [
+              [
+                "/proc/irq/106/effective_affinity_list",
+                "2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 3
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_rx_xdp_multidesc_drops": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 738304,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 1,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        },
+        "sender": {
+          "before": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "50150",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "after": {
+            "governor": "performance",
+            "freq_khz": "2400000",
+            "temp_mc": "51250",
+            "irq_affinities": [
+              [
+                "/proc/irq/105/effective_affinity_list",
+                "0-2"
+              ]
+            ],
+            "throttled": "0x0",
+            "softnet_drop": 0,
+            "softnet_squeeze": 4
+          },
+          "nic_error_drop_deltas": {
+            "tx_underrun": 0,
+            "tx_single_collision_frames": 0,
+            "tx_multiple_collision_frames": 0,
+            "tx_excessive_collisions": 0,
+            "tx_late_collisions": 0,
+            "tx_carrier_sense_errors": 0,
+            "rx_undersized_frames": 0,
+            "rx_oversize_frames": 0,
+            "rx_jabbers": 0,
+            "rx_frame_check_sequence_errors": 0,
+            "rx_length_field_frame_errors": 0,
+            "rx_symbol_errors": 0,
+            "rx_alignment_errors": 0,
+            "rx_resource_errors": 0,
+            "rx_overruns": 0,
+            "rx_ip_header_checksum_errors": 0,
+            "rx_tcp_checksum_errors": 0,
+            "rx_udp_checksum_errors": 0,
+            "q0_rx_dropped": 0,
+            "q0_tx_dropped": 0
+          },
+          "udp_deltas": {
+            "InDatagrams": 1,
+            "NoPorts": 0,
+            "InErrors": 0,
+            "OutDatagrams": 738304,
+            "RcvbufErrors": 0,
+            "SndbufErrors": 0,
+            "InCsumErrors": 0,
+            "IgnoredMulti": 0,
+            "MemErrors": 0
+          },
+          "softnet_drop_delta": 0,
+          "softnet_squeeze_delta": 0
+        }
+      }
+    }
+  ]
+}

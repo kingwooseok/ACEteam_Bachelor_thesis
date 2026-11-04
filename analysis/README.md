@@ -1,5 +1,23 @@
 # Offline analysis
 
+## 2026-11-04 연속 시간 보정
+
+`run.json`의 `environment.phc_tracking=1`인 실행은 `phc-during.csv`만 사용한다.
+선택된 PHC↔MONOTONIC 표본 사이를 보간하고, 패킷별 같은 보정 HW 시각으로
+`xdp-hw`와 `user-hw`를 계산한다. `clock_validation`에는 다음 검사를 기록한다.
+
+- 첫 XDP 시각부터 마지막 수신 시각까지 보정 표본이 감싸는가.
+- 측정 구간 내 표본 간격이 500ms 이내인가.
+- 수신한 패킷의 HW 총지연과 구간 합이 완성되어 있으며 음수 지연이 없는가.
+
+손실 패킷은 수신 완료 패킷과 따로 세고, 원시 시각이나 음수값을 삭제·보정하지 않는다.
+검사에 실패한 실행은 `analysis-failed`로 보고하며 성능 집계에서 제외한다.
+기존 전후 보정 설정의 실행도 계속 분석할 수 있다.
+
+
+두 Pi에서 회수한 기록을 Linux·Windows의 Python으로 분석한다.
+아래 명령은 Linux 표기이며 Windows에서는 `python3` 대신 `python`을 사용한다.
+
 ## 단일 run join
 
 `join_results.py`는 한 run의 ingress/CPUMAP/AF_XDP/UDP record를
@@ -25,7 +43,8 @@ python3 analysis/join_results.py \
 Manifest는 `manifest_version=1`과 안전한 `run_id`를 가져야 한다. 모든 입력과
 출력은 manifest가 있는 resolved run directory 안의 일반 파일이어야 하며,
 기존 파일과 symbolic link를 출력으로 덮어쓰지 않는다. UDP binary는
-capture host와 같은 native C ABI와 byte order에서 분석한다.
+56-byte `sample_record` 배치와 byte order를 맞춰 읽는다. 현재 Pi의 little-endian
+기록은 64-bit Linux·Windows Python에서 이 배치로 분석한다.
 
 Analyzer는 raw row를 버리지 않고 source presence, requested path와
 `inconsistency_flags`를 남긴다. 다음 의미 검증을 통과한 timestamp만
@@ -71,11 +90,12 @@ HW 보정 정책의 run을 섞어 집계하지 않는다. 통합 분석에서 �
 `--allow-endpoint-clamp`는 탐색적 분석용이며, 최종 실험은 직전/직후
 calibration selected 범위가 전체 측정 구간을 bracket해야 한다.
 
-Joined CSV와 summary JSON을 `O_EXCL`로 생성하고 파일/디렉터리를
+Joined CSV와 summary JSON을 기존 파일을 덮어쓰지 않고 생성해 파일을
 `fsync()`한 뒤, 모든 입력과 두 출력의 크기/SHA-256을 묶은
 `summary.json.complete`를 마지막에 만든다. `--completion-marker PATH`로
 경로를 바꿀 수 있으며, marker가 없는 CSV/JSON은 후속 aggregate의
 완결된 run으로 취급하지 않는다.
+Windows에서는 binary I/O와 LF 출력을 사용하고, Linux에서는 디렉터리도 `fsync()`한다.
 
 ## 반복 run aggregation
 
@@ -94,7 +114,8 @@ CPU 부하 끔/켬 × iperf3 배경 부하 끔/고부하의 네 조건에서 세
 총지연·기한 초과·손실·일반 처리량을 나란히 읽고,
 같은 패킷의 d₁·d₂·d₃로 변화가 나타난 구간을 설명한다.
 세 계측 흐름은 각각 1,000 PPS다. 일반 9000의 수신 PPS·손실과 함께
-PASS로 처리하는 iperf3 배경 트래픽의 실제 송수신량·손실도 읽는다.
+수신 측정 구간의 NIC 송수신량·패킷 수를 읽는다. 준비된 계획의 배경 부하는
+iperf3 UDP payload 기준 855 Mbps이며, NIC 카운터는 계측·배경 트래픽을 포함한다.
 
 HTML의 **구성별 CPU 사용 영역** 표에는 전체 CPU, 일반 영역과 CPUMAP 전용 CPU를 표시한다.
 `report.json`에 전체 사용 가능 CPU(`receiver_available_cpus`), 실제 공유 집합과 예약 여부를
@@ -142,7 +163,7 @@ metric을 기록한 독립 run이 1개뿐이면 평균은 기록하지만 표본
 
 ## 두 Pi 결과 회수와 실험 보고서
 
-아래 도구는 **측정 종료 후 VMware 등 분석 호스트에서** 실행한다. Pi에서
+아래 도구는 **측정 종료 후 Linux·Windows 분석 호스트에서** 실행한다. Pi에서
 패킷을 송수신하는 동안 실행하지 않는다. 두 Pi에서 회수한 결과를 새 경로에
 결합한다. 각 입력은 단일 `run.json` 디렉터리 또는 `runs/`가 있는 suite다.
 
@@ -151,6 +172,14 @@ python3 analysis/analyze_experiment.py collect \
   --receiver-dir received/receiver --sender-dir received/sender \
   --output results/collected
 python3 analysis/analyze_experiment.py --suite-dir results/collected
+```
+
+Windows PowerShell에서는 한 조건의 송수신 결과를 다음과 같이 회수·분석한다.
+`received/receiver`, `received/sender`는 같은 조건에서 가져온 역할별 폴더다.
+
+```powershell
+python analysis/analyze_experiment.py collect --receiver-dir received/receiver --sender-dir received/sender --output results/collected
+python analysis/analyze_experiment.py --suite-dir results/collected
 ```
 
 단일 run은 `--run-dir results/collected-run`으로 분석한다. 기본 출력은
@@ -168,11 +197,12 @@ HTML은 SVG 그래프와 표를 포함해 네트워크나 외부 라이브러리
 `xdp-ingress_records.csv`, `xdp-cpumap_records.csv`, 경로별
 `udp-flowN.bin` 또는 `afxdp.csv`, `phc-before.csv`, `phc-after.csv`를 둔다.
 송신 run에는 같은 조건의 `run.json`, `.complete`, `sender-flowN.json`을 둔다.
-수신 프로그램의 `receiver-flowN.json`과 `monitor/mpstat.log`,
-`monitor/network.log`도 함께 보존·분석한다.
+수신 프로그램의 `receiver-flowN.json`과 `monitor/cpu-samples.csv`,
+`monitor/network-samples.csv`를 함께 보존·분석한다. 기존 `monitor/mpstat.log`,
+`monitor/network.log`도 원본에 포함되어 있으면 보존한다.
 
 새 실행에서는 네이티브 CPU 관측기가 `monitor/cpu-samples.csv`에 수신 Pi의
-MONOTONIC 시각과 CPU별 누적 실행 시간을 1초 간격으로 남긴다. 분석기는 같은
+MONOTONIC 시각과 CPU별 누적 실행 시간을 1초 간격과 종료 시점에 남긴다. 분석기는 같은
 Pi의 패킷 기록에서 **최초 XDP → 최종 수신 관측(XDP·CPUMAP·사용자 수신)** 창을
 구하고 그 구간의 CPU 사용률을 계산한다. 사용자 공간에 도달하지 못한 마지막
 패킷도 XDP/CPUMAP 관측이 있으면 창에 포함한다. 준비 대기·저장 시간은 제외된다.
@@ -188,6 +218,28 @@ iowait를 뺀 비율이며 guest 시간은 중복 계산하지 않는다. 창의
 없는 이전 결과는 측정창 CPU 값을 비워 두며, 전체 관측 평균을 측정창 평균으로
 대체하지 않는다. HTML의 **수신 측정 구간 CPU 사용률**과 조건별 `cpu_busy_pct`는
 새 측정창 결과만 집계한다.
+
+NIC 수집은 같은 C 관측기 `udp_socket/bin/cpu_sample`에
+`--interface eth0 --network-output FILE`을 전달해 켠다. 실행기는 이를 자동 적용하고
+`/proc/net/dev`의 누적 카운터를 `monitor/network-samples.csv`에 저장한다.
+CPU와 같은 MONOTONIC 시각 기준으로 1초 간격 및 종료 시점에 기록한다.
+
+분석기는 CPU와 **동일한 수신 측정 구간**에서 카운터 증가량을 계산한다.
+구간 내부 차분은 그대로 합산하고, 경계 차분은 겹친 시간 비율로 가중한다.
+NIC 결과는 `network[인터페이스]`, 측정창·표본 간격·포함 비율과 계산 방식은
+`network_measurement`에 저장한다.
+
+| NIC 결과 | 단위와 의미 |
+|---|---|
+| `rx_bytes`, `tx_bytes` | 수신 측정 구간의 NIC 송수신 바이트 증가량 |
+| `rx_packets`, `tx_packets` | 같은 구간의 패킷 수 증가량 |
+| `rx_bps`, `tx_bps` | 바이트 증가량 × 8 ÷ 측정 구간 길이 — bit/s |
+| `rx_pps`, `tx_pps` | 패킷 증가량 ÷ 측정 구간 길이 — packet/s |
+| `rx_errors`, `rx_dropped`, `tx_errors`, `tx_dropped` | 같은 구간의 NIC 오류·드롭 증가량 |
+
+HTML의 **수신 측정 구간 NIC 트래픽** 표가 이 결과를 표시한다.
+기존 SAR `network.log` 평균은 `network_observation`에 `scope="full-monitor"`로
+보존한다. 새 NIC 표본이 없는 이전 실행의 측정 구간 값은 비워 두고 수집 상태를 남긴다.
 
 보고서는 같은 조건의 반복 run을 flow별로 묶는다. 기존 nearest-rank 분위수와
 동일 run 가중치의 양측 95% Student-t 신뢰구간을 사용한다. 한 run만 있으면

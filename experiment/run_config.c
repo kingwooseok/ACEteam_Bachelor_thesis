@@ -89,7 +89,8 @@ static int allowed(const char *key)
 	static const char *keys[] = {"run_id","receiver_address","control_port","repo","output_root","interface",
 		"modes","repeats","alternate_mode_order","verify_placement","duration_ms","warmup_ms","ready_timeout_ms","stop_timeout_ms",
 		"start_delay_ms","drain_ms","settle_ms","supervisor_cpu","monitor",
-		"environment.governor","environment.rx_irq_cpu",
+		"environment.governor","environment.rx_irq_cpu","environment.rx_coalesce_usecs",
+		"receiver.xsk_busy","measurement.phc_tracking",
 		"receiver.supervisor_cpu","sender.supervisor_cpu","receiver.network_cpu","sender.network_cpu",
 		"receiver.shared_cpus","receiver.cpumap_cpu",
 		"load.cpu_percent","load.cpu_cpus","load.cpu_layout","load.cpu_workers","load.cpu_method","load.memory_workers","load.memory_bytes",
@@ -215,6 +216,9 @@ int read_run_config(const char *file, struct run_config *c)
 	c->ready_ms=number(&p,"ready_timeout_ms","60000",100,600000);
 	c->stop_ms=number(&p,"stop_timeout_ms","60000",100,600000);
 	c->start_delay_ms=number(&p,"start_delay_ms","250",10,60000);
+	c->xsk_busy=number(&p,"receiver.xsk_busy","0",0,1);
+	c->phc_tracking=number(&p,"measurement.phc_tracking","0",0,1);
+	c->rx_coalesce_usecs=!strcmp(lookup(&p,"environment.rx_coalesce_usecs","keep"),"keep") ? -1 : (int)number(&p,"environment.rx_coalesce_usecs",NULL,0,10000);
 	c->drain_ms=number(&p,"drain_ms","100",0,60000);
 	if (c->stop_ms<c->drain_ms+100) { fprintf(stderr,"stop_timeout_ms must exceed drain_ms by at least 100 ms\n"); p.error=1; }
 	c->settle_ms=number(&p,"settle_ms",NULL,0,60000);
@@ -358,6 +362,7 @@ void write_condition(FILE *out,const struct run_config *c,const char *mode,uint6
 	fprintf(out,",\"io_workers\":%u,\"network_bps\":%llu,\"network_protocol\":\"%s\",\"network_direction\":\"%s\",\"network_parallel\":%u,\"on_sec\":%u,\"off_sec\":%u},\"environment\":{\"governor\":",c->io_workers,(unsigned long long)c->network_bps,c->network_protocol,c->network_direction,c->network_parallel,c->load_on_sec,c->load_off_sec);
 	json_string(out,c->governor);
 	fprintf(out,",\"alternate_mode_order\":%u",c->alternate_mode_order);
+	fprintf(out,",\"xsk_busy\":%u,\"rx_coalesce_usecs\":%d,\"phc_tracking\":%u",c->xsk_busy,c->rx_coalesce_usecs,c->phc_tracking);
 	fprintf(out,",\"receiver_supervisor_cpu\":%d,\"sender_supervisor_cpu\":%d,\"receiver_network_cpu\":%d,\"sender_network_cpu\":%d",c->receiver_supervisor_cpu,c->sender_supervisor_cpu,c->receiver_network_cpu,c->sender_network_cpu);
 	fputs(",\"receiver_available_cpus\":",out); json_string(out,c->receiver_shared_cpus);
 	fputs(",\"receiver_shared_cpus\":",out); json_string(out,general_cpus);

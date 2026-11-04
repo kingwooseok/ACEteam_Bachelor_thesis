@@ -1,0 +1,291 @@
+capture_schema=1
+2026-11-03T18:16:51+09:00
+Linux craftt 6.18.46-thesis-test-rt+ #1 SMP PREEMPT_RT Thu Aug 27 16:35:06 KST 2026 aarch64 GNU/Linux
+
+[file] /proc/cmdline
+reboot=w coherent_pool=1M 8250.nr_uarts=1 pci=pcie_bus_safe cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32  numa=fake=8 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=88:A2:9E:0F:9E:57 vc_mem.mem_base=0x3fc00000 vc_mem.mem_size=0x40000000  console=ttyAMA0,115200 console=ttyAMA0 root=PARTUUID=709a543f-02 rootfstype=ext4 fsck.repair=yes rootwait splash plymouth.ignore-serial-consoles ds=nocloud;i=rpi-imager-1787809797162 cfg80211.ieee80211_regdom=KR isolcpus=domain,managed_irq,3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2
+
+
+[file] /sys/kernel/realtime
+unavailable=not_readable
+
+[file] /sys/devices/system/cpu/online
+0-3
+
+
+[file] /sys/devices/system/cpu/isolated
+3
+
+
+[file] /sys/devices/system/cpu/nohz_full
+3
+
+
+[file] /sys/devices/system/cpu/cpufreq/policy0/related_cpus
+0 1 2 3
+
+
+[file] /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+ondemand
+
+
+[file] /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq
+1900000
+
+
+[file] /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq
+1500000
+
+
+[file] /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+2400000
+
+
+[file] /sys/class/thermal/thermal_zone0/type
+cpu-thermal
+
+
+[file] /sys/class/thermal/thermal_zone0/temp
+57300
+
+
+[command] vcgencmd get_throttled
+throttled=0x0
+command_status=0
+
+[command] vcgencmd measure_clock arm
+frequency(0)=2200032000
+command_status=0
+
+[file] /proc/interrupts
+           CPU0       CPU1       CPU2       CPU3       
+  9:          0          0          0          0    GICv2  25 Level     vgic
+ 11:          0          0          0          0    GICv2  30 Level     kvm guest ptimer
+ 12:          0          0          0          0    GICv2  27 Level     kvm guest vtimer
+ 13:    2257285    1446183    1356875    4652169    GICv2  26 Level     arch_timer
+ 14:       2022          0          0          0    GICv2  65 Level     107c013880.mailbox
+ 21:          0          0          0          0    GICv2 119 Level     DMA IRQ
+ 22:          0          0          0          0    GICv2 120 Level     DMA IRQ
+ 32:       2886          0          0          0    GICv2 308 Level     ttyS0
+ 33:          0          0          0          0    GICv2  48 Level     arm-pmu
+ 34:          0          0          0          0    GICv2  49 Level     arm-pmu
+ 35:          0          0          0          0    GICv2  50 Level     arm-pmu
+ 36:          0          0          0          0    GICv2  51 Level     arm-pmu
+ 37:          0          0          0          0    GICv2 261 Level     PCIe PME, aerdrv, PCIe bwctrl
+105:   21896870          0          0          0 rp1_irq_chip   6 Level     eth0
+124:       1092          0          0          0 rp1_irq_chip  25 Level     uart-pl011
+130:          1          0          0          0 rp1_irq_chip  31 Edge      xhci-hcd:usb1
+135:          1          0          0          0 rp1_irq_chip  36 Edge      xhci-hcd:usb3
+139:          0          0          0          0 rp1_irq_chip  40 Level     dw_axi_dmac_platform
+157:          4          0          0          0 rp1_irq_chip  58 Level     1f00008000.mailbox
+160:      65263          0          0          0    GICv2 306 Level     mmc1
+161:      24727          0          0          0    GICv2 305 Level     mmc0
+162:          0          0          0          0 107d508500.gpio  20 Edge      pwr_button
+163:          0          0          0          0 interrupt-controller@7d508380   1 Level     107d508200.i2c
+164:          0          0          0          0 interrupt-controller@7d508380   2 Level     107d508280.i2c
+165:          0          0          0          0    GICv2 104 Level     pispbe
+166:        280          0          0          0    GICv2 281 Level     v3d_core0
+167:          0          0          0          0    GICv2 282 Level     v3d_hub
+168:          0          0          0          0    GICv2 130 Level     1000800000.codec
+169:          0          0          0          0 interrupt-controller@7c502000   2 Level     107c580000.hvs
+170:          0          0          0          0 interrupt-controller@7c502000   9 Level     107c580000.hvs
+171:          0          0          0          0 interrupt-controller@7c502000  16 Level     107c580000.hvs
+172:          0          0          0          0 interrupt-controller@7d510600   7 Level     vc4 hdmi hpd connected
+173:          0          0          0          0 interrupt-controller@7d510600   8 Level     vc4 hdmi hpd disconnected
+174:          0          0          0          0 interrupt-controller@7d510600   2 Level     vc4 hdmi cec rx
+175:          0          0          0          0 interrupt-controller@7d510600   1 Level     vc4 hdmi cec tx
+176:          0          0          0          0 interrupt-controller@7d510600  14 Level     vc4 hdmi hpd connected
+177:          0          0          0          0 interrupt-controller@7d510600  15 Level     vc4 hdmi hpd disconnected
+178:          0          0          0          0 interrupt-controller@7d510600  12 Level     vc4 hdmi cec rx
+179:          0          0          0          0 interrupt-controller@7d510600  11 Level     vc4 hdmi cec tx
+180:          0          0          0          0 interrupt-controller@7c502000   1 Level     107c500000.mop
+181:          0          0          0          0 interrupt-controller@7c502000   0 Level     107c501000.moplet
+182:          0          0          0          0    GICv2 133 Level     vc4 crtc
+183:          0          0          0          0    GICv2 142 Level     vc4 crtc
+IPI0:     34337    1134924     723393     662569       Rescheduling interrupts
+IPI1:     22137      45581      35849       1310       Function call interrupts
+IPI2:         0          0          0          0       CPU stop interrupts
+IPI3:         0          0          0          0       CPU stop NMIs
+IPI4:         0          0          0          0       Timer broadcast interrupts
+IPI5:     33359       8799       3070      15795       IRQ work interrupts
+IPI6:         0          0          0          0       CPU backtrace interrupts
+IPI7:         0          0          0          0       KGDB roundup interrupts
+Err:          0
+
+
+[file] /proc/irq/105/smp_affinity_list
+0-2
+
+
+[file] /proc/irq/105/effective_affinity_list
+0-2
+
+
+[file] /proc/net/snmp
+Ip: Forwarding DefaultTTL InReceives InHdrErrors InAddrErrors ForwDatagrams InUnknownProtos InDiscards InDelivers OutRequests OutDiscards OutNoRoutes ReasmTimeout ReasmReqds ReasmOKs ReasmFails FragOKs FragFails FragCreates OutTransmits
+Ip: 2 64 3090 0 1 0 0 0 3087 48662000 0 20 0 0 0 0 0 0 0 48662000
+Icmp: InMsgs InErrors InCsumErrors InDestUnreachs InTimeExcds InParmProbs InSrcQuenchs InRedirects InEchos InEchoReps InTimestamps InTimestampReps InAddrMasks InAddrMaskReps OutMsgs OutErrors OutRateLimitGlobal OutRateLimitHost OutDestUnreachs OutTimeExcds OutParmProbs OutSrcQuenchs OutRedirects OutEchos OutEchoReps OutTimestamps OutTimestampReps OutAddrMasks OutAddrMaskReps
+Icmp: 110 105 0 106 0 0 0 0 0 4 0 0 0 0 26 0 0 0 21 0 0 0 0 5 0 0 0 0 0
+IcmpMsg: InType0 InType3 OutType3 OutType8
+IcmpMsg: 4 106 21 5
+Tcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts InCsumErrors
+Tcp: 1 200 120000 -1 71 16 1 2 1 3550 2872 2 0 4 0
+Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors
+Udp: 94 0 0 48659560 0 0 0 3 0
+UdpLite: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors
+UdpLite: 0 0 0 0 0 0 0 0 0
+
+
+[file] /proc/net/softnet_stat
+0000046a 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+000004b2 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000001 00000000 00000000
+0000062b 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000002 00000000 00000000
+00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000003 00000000 00000000
+
+
+[command] ip -details link show dev eth0
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether 88:a2:9e:0f:9e:57 brd ff:ff:ff:ff:ff:ff promiscuity 0 allmulti 0 minmtu 68 maxmtu 10222 addrgenmode none numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 tso_max_size 65536 tso_max_segs 65535 gro_max_size 65536 gso_ipv4_max_size 65536 gro_ipv4_max_size 65536 parentbus platform parentdev 1f00100000.ethernet 
+command_status=0
+
+[command] ethtool -i eth0
+driver: macb
+version: 6.18.46-thesis-test-rt+
+firmware-version: 
+expansion-rom-version: 
+bus-info: 1f00100000.ethernet
+supports-statistics: yes
+supports-test: no
+supports-eeprom-access: no
+supports-register-dump: yes
+supports-priv-flags: no
+command_status=0
+
+[command] ethtool -c eth0
+Coalesce parameters for eth0:
+Adaptive RX: n/a  TX: n/a
+stats-block-usecs:	n/a
+sample-interval:	n/a
+pkt-rate-low:		n/a
+pkt-rate-high:		n/a
+
+rx-usecs:	49
+rx-frames:	n/a
+rx-usecs-irq:	n/a
+rx-frames-irq:	n/a
+
+tx-usecs:	49
+tx-frames:	n/a
+tx-usecs-irq:	n/a
+tx-frames-irq:	n/a
+
+rx-usecs-low:	n/a
+rx-frame-low:	n/a
+tx-usecs-low:	n/a
+tx-frame-low:	n/a
+
+rx-usecs-high:	n/a
+rx-frame-high:	n/a
+tx-usecs-high:	n/a
+tx-frame-high:	n/a
+
+CQE mode RX: n/a  TX: n/a
+
+tx-aggr-max-bytes:	n/a
+tx-aggr-max-frames:	n/a
+tx-aggr-time-usecs:	n/a
+
+command_status=0
+
+[command] ethtool -g eth0
+Ring parameters for eth0:
+Pre-set maximums:
+RX:			8192
+RX Mini:		n/a
+RX Jumbo:		n/a
+TX:			4096
+TX push buff len:	n/a
+Current hardware settings:
+RX:			512
+RX Mini:		n/a
+RX Jumbo:		n/a
+TX:			512
+RX Buf Len:		n/a
+CQE Size:		n/a
+TX Push:		off
+RX Push:		off
+TX push buff len:	n/a
+TCP data split:		n/a
+command_status=0
+
+[command] ethtool -S eth0
+NIC statistics:
+     tx_octets: 70750485439
+     tx_frames: 48660321
+     tx_broadcast_frames: 29
+     tx_multicast_frames: 78
+     tx_pause_frames: 0
+     tx_64_byte_frames: 123
+     tx_65_127_byte_frames: 498
+     tx_128_255_byte_frames: 1440049
+     tx_256_511_byte_frames: 179
+     tx_512_1023_byte_frames: 0
+     tx_1024_1518_byte_frames: 47219472
+     tx_greater_than_1518_byte_frames: 0
+     tx_underrun: 0
+     tx_single_collision_frames: 0
+     tx_multiple_collision_frames: 0
+     tx_excessive_collisions: 0
+     tx_late_collisions: 0
+     tx_deferred_frames: 0
+     tx_carrier_sense_errors: 0
+     rx_octets: 127518
+     rx_frames: 753
+     rx_broadcast_frames: 44
+     rx_multicast_frames: 0
+     rx_pause_frames: 0
+     rx_64_byte_frames: 111
+     rx_65_127_byte_frames: 444
+     rx_128_255_byte_frames: 0
+     rx_256_511_byte_frames: 111
+     rx_512_1023_byte_frames: 86
+     rx_1024_1518_byte_frames: 1
+     rx_greater_than_1518_byte_frames: 0
+     rx_undersized_frames: 0
+     rx_oversize_frames: 0
+     rx_jabbers: 0
+     rx_frame_check_sequence_errors: 0
+     rx_length_field_frame_errors: 0
+     rx_symbol_errors: 0
+     rx_alignment_errors: 0
+     rx_resource_errors: 0
+     rx_overruns: 0
+     rx_ip_header_checksum_errors: 0
+     rx_tcp_checksum_errors: 0
+     rx_udp_checksum_errors: 0
+     rx_lpi_transitions: 116
+     rx_lpi_time: 570152178
+     tx_lpi_transitions: 136
+     tx_lpi_time: 718599782
+     q0_rx_packets: 753
+     q0_rx_bytes: 113964
+     q0_rx_dropped: 0
+     q0_tx_packets: 48660321
+     q0_tx_bytes: 70555844375
+     q0_tx_dropped: 0
+command_status=0
+
+[command] iperf3 --version
+iperf 3.18 (cJSON 1.7.15)
+Linux craftt 6.18.46-thesis-test-rt+ #1 SMP PREEMPT_RT Thu Aug 27 16:35:06 KST 2026 aarch64
+Optional features available: CPU affinity setting, IPv6 flow label, SCTP, TCP congestion algorithm setting, sendfile / zerocopy, socket pacing, authentication, bind to device, support IPv4 don't fragment, POSIX threads
+command_status=0
+
+[command] stress-ng --version
+stress-ng, version 0.19.02 (gcc 14.2.0, aarch64 Linux 6.18.46-thesis-test-rt+)
+command_status=0
+
+[command] systemctl is-active irqbalance
+inactive
+command_status=4
+capture_complete=1

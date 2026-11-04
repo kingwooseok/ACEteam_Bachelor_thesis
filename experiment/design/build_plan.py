@@ -16,28 +16,32 @@ def write_json(path, value):
     path.write_bytes((json.dumps(value, indent=2) + '\n').encode('utf-8'))
 
 
-def rows(full_design=False):
+def rows(full_design=False, profile=None):
+    profile = profile or {}
+    workers = profile.get('load_workers', 3)
+    rates = profile.get('flow_pps', [1000, 1000, 1000])
     # The compatibility flag generates the same fixed-rate four-condition design.
     result = []
     def add(label, cpu, network):
         result.append(dict(case_id=f'main-{len(result)+1:02d}', references=[label],
-                           pass_pps=1000, cpu_percent=cpu, network=network,
-                           load_cpus='per-mode-general', load_workers=3, single_flow=None,
+                           pass_pps=rates[0], cpu_percent=cpu, network=network,
+                           load_cpus='per-mode-general', load_workers=workers, single_flow=None,
                            modes=['all-pass', 'pass-xsk', 'mixed']))
     for cpu in (0, 100):
         for network in ('none', 'high'):
             add(f'A-cpu{cpu}-{network}', cpu, network)
     single_modes = ('all-pass', 'mixed', 'pass-xsk')
-    singles = [dict(case_id=f'single-{i}', references=[f'D01-flow{i}'], pass_pps=1000,
-                    cpu_percent=0, network='none', load_cpus='per-mode-general', load_workers=3,
+    singles = [dict(case_id=f'single-{i}', references=[f'D01-flow{i}'], pass_pps=rates[0],
+                    cpu_percent=0, network='none', load_cpus='per-mode-general', load_workers=workers,
                     single_flow=i, modes=[single_modes[i-1]]) for i in range(1, 4)]
     return singles + result
 
 
 def validate(profile, full_design=False):
     expected = set(json.loads(PROFILE.read_text()))
-    if set(profile) != expected:
-        raise ValueError('profile keys must match profile.example.json')
+    optional = {'flow_pps', 'load_workers', 'xsk_busy', 'rx_coalesce_usecs', 'phc_tracking'}
+    if not expected <= set(profile) or set(profile) - expected - optional:
+        raise ValueError('profile keys must match profile.example.json plus supported runtime options')
     missing = [key for key, value in profile.items()
                if value is None or isinstance(value, list) and any(v is None for v in value)]
     if missing:
@@ -66,6 +70,16 @@ def validate(profile, full_design=False):
             raise ValueError(f'{name} must inherit the shared execution domain')
     integer(profile['network_high_bps'], 1, 1000000000, 'network high bps')
     integer(profile['settle_ms'], 0, 60000, 'settle ms')
+    rates = profile.get('flow_pps', [1000]*3)
+    if not isinstance(rates, list) or len(rates) != 3:
+        raise ValueError('flow_pps needs three values')
+    for rate in rates:
+        integer(rate, 1, 1000000, 'flow PPS')
+    integer(profile.get('load_workers', 3), 1, 64, 'load workers')
+    for key in ('xsk_busy', 'phc_tracking'):
+        integer(profile.get(key, 0), 0, 1, key)
+    if 'rx_coalesce_usecs' in profile:
+        integer(profile['rx_coalesce_usecs'], 0, 10000, 'RX coalesce usecs')
 
 
 def config(profile, row, index, full_design=False):
@@ -97,10 +111,14 @@ def config(profile, row, index, full_design=False):
                    'load.network_protocol': 'udp', 'load.network_direction': 'forward',
                    'load.network_port': 5201, 'load.network_parallel': 1,
                    'load.on_sec': 0, 'load.off_sec': 0})
+    for key, native in (('xsk_busy', 'receiver.xsk_busy'), ('phc_tracking', 'measurement.phc_tracking'),
+                        ('rx_coalesce_usecs', 'environment.rx_coalesce_usecs')):
+        if key in profile:
+            values[native] = profile[key]
     for i in range(1, 4):
-        pps = 1000
-        if row['single_flow']:
-            pps = 1000 if i == row['single_flow'] else 0
+        pps = profile.get('flow_pps', [1000]*3)[i-1]
+        if row['single_flow'] and i != row['single_flow']:
+            pps = 0
         values.update({f'flow{i}.enabled': int(pps > 0),
                        f'flow{i}.period_ns': round(1000000000 / pps) if pps else 1000000,
                        f'flow{i}.deadline_ns': 0 if i == 1 else 100000,
@@ -111,7 +129,7 @@ def config(profile, row, index, full_design=False):
                        f'flow{i}.tx_priority': profile['sender_priorities'][i - 1],
                        f'flow{i}.rx_priority': profile['receiver_priorities'][i - 1]})
     # The native runner uses all CPUs until an enabled CPUMAP flow reserves CPU3.
-    # Receivers and the same three load workers share the current general domain.
+    # Receivers and the configured load workers share the current general domain.
     return '# Generated common config: copy identical bytes to both Pis.\n' + ''.join(
         f'{key}={value}\n' for key, value in values.items())
 
@@ -129,7 +147,9 @@ def main():
             validate(profile, args.d01_d11)
         except (ValueError, TypeError) as error:
             parser.error(str(error))
-    plan = rows(full_design=args.d01_d11)
+    plan = rows(full_design=args.d01_d11, profile=profile)
+    revision = 'mixed-rates-75-v5' if profile and 'flow_pps' in profile else DESIGN_REVISION
+    workers = (profile or {}).get('load_workers', 3)
     # 기존 산출물/설정을 덮어쓰지 않고 새 폴더만 생성한다.
     args.output.mkdir(parents=True, exist_ok=False)
     with (args.output / 'matrix.csv').open('w', encoding='utf-8', newline='') as stream:
@@ -140,15 +160,15 @@ def main():
     main_runs = sum(len(row['modes']) * REPEATS for row in plan if not row['single_flow'])
     single_runs = sum(len(row['modes']) * REPEATS for row in plan if row['single_flow'])
     summary = dict(status='configured-unvalidated' if profile else 'draft-unresolved',
-                   design='D01-D11', design_revision=DESIGN_REVISION,
+                   design='D01-D11', design_revision=revision,
                    main_conditions=len(plan)-3, main_runs=main_runs,
                    single_runs=single_runs, total_runs=main_runs+single_runs,
                    all_pass_runs=25, pass_xsk_runs=25, mixed_runs=25,
                    duration_ms=60000, warmup_ms=5000,
                    cpu_domains={'shared': '0,1,2,3', 'cpumap_active_general': '0,1,2', 'cpumap': '3'},
-                   load_workers=3, load_cpu_layout='shared',
-                   flow_pps=1000,
-                   note='Each active measurement flow sends 1000 PPS. CPU and iperf3 load form four main conditions. CPU3 is reserved only for an enabled CPUMAP flow; three workers share the active general domain.')
+                   load_workers=workers, load_cpu_layout='shared',
+                   flow_pps=(profile or {}).get('flow_pps', 1000),
+                   note='Configured flow rates stay fixed across four CPU/iperf3 load conditions. CPU3 is reserved only for an enabled CPUMAP flow; the configured workers share the active general domain.')
     write_json(args.output / 'plan.json', summary)
     if profile:
         write_json(args.output / 'profile.json', profile)
@@ -167,7 +187,7 @@ def main():
                               references=row['references'], expected_modes=modes,
                               repeats=REPEATS, expected_runs=len(modes)*REPEATS))
         write_json(args.output / 'execution.json',
-                   dict(design='D01-D11', design_revision=DESIGN_REVISION, cases=cases))
+                   dict(design='D01-D11', design_revision=revision, cases=cases))
     print(json.dumps(summary))
 
 

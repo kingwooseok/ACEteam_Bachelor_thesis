@@ -38,16 +38,19 @@ struct child {
 };
 struct context {
 	struct run_config c;
-	struct child child[16];
+	struct child child[24];
 	unsigned children, index;
 	int fd, receiver, owns_run;
 	int partition_lock, partition_attempted, partition_active;
+	int coalesce_active;
 	unsigned partition_release_attempts;
+	unsigned coalesce_restore_attempts;
 	char partition_group[4096];
 	unsigned char nonce[16];
 	char suite[4096], run_dir[4096], run_id[128], mode[16];
 	unsigned repeat;
 };
+static int coalesce(struct context *x, const char *action);
 static volatile sig_atomic_t stopping;
 static void signal_stop(int sig) { (void)sig; stopping=1; }
 static void child_event(int sig) { (void)sig; }
@@ -108,7 +111,7 @@ static int reap(struct context *x)
 }
 static int spawn_pipe_mask(struct context *x,const char *name,const char *ready,const cpu_set_t *requested,int policy,int priority,int persistent,char *const args[],int notify_fd)
 {
-	if (x->children>=16) { errno=E2BIG; return -1; }
+	if (x->children>=sizeof(x->child)/sizeof(x->child[0])) { errno=E2BIG; return -1; }
 	cpu_set_t expected;
 	if (requested) expected=*requested;
 	else if (sched_getaffinity(0,sizeof(expected),&expected)) return -1;
@@ -250,6 +253,7 @@ static void cleanup_children(struct context *x)
 	for (unsigned i=0;i<x->children;i++) if (strcmp(x->child[i].name,"xdp-loader")) (void)wait_child(x,(int)i,x->c.stop_ms,1);
 	for (unsigned i=0;i<x->children;i++) if (!strcmp(x->child[i].name,"xdp-loader")) (void)stop_child(x,(int)i);
 	cleanup_adopted_children(x->c.stop_ms);
+	if (x->coalesce_active) (void)coalesce(x,"restore");
 	for (unsigned i=0;i<x->children;i++) if (x->child[i].completion_fd>=0) { close(x->child[i].completion_fd); x->child[i].completion_fd=-1; }
 }
 static int transfer(struct context *x,void *buffer,size_t length,int writing,unsigned timeout_ms,int ignore_stop)
@@ -444,7 +448,11 @@ static int receiver_process(struct context *x,unsigned i)
 	int pipes[2]; char notify[16]; if (pipe2(pipes,O_CLOEXEC)) return -1; snprintf(notify,sizeof(notify),"%d",pipes[1]);
 	if (!strcmp(run_flow_path(x->mode,i),"xsk")) {
 		pathf(output,sizeof(output),"%s/afxdp.csv",x->run_dir);
-		char *args[]={"./BPF/afxdp_recv","--output",output,"--records",count,"--ready-file",ready,"--stats-json",stats,"--drain-ms",drain,"--completion-fd",notify,"--defer-flush",x->c.interface,NULL};
+		char limit[32]; snprintf(limit,sizeof(limit),"%llu",(unsigned long long)((x->c.duration_ms+x->c.start_delay_ms+x->c.stop_ms+999)/1000));
+		char *args[32]={"./BPF/afxdp_recv","--output",output,"--records",count,"--ready-file",ready,"--stats-json",stats,"--drain-ms",drain,"--completion-fd",notify,"--defer-flush",NULL};
+		unsigned argc=0; while (args[argc]) argc++;
+		if (x->c.xsk_busy) { args[argc++]="--busy"; args[argc++]="--start-gated"; args[argc++]="--busy-timeout-sec"; args[argc++]=limit; }
+		args[argc++]=x->c.interface; args[argc]=NULL;
 		n=spawn_pipe_mask(x,name,ready,requested,f->rx_policy,f->rx_priority,1,args,pipes[1]);
 	} else {
 		pathf(output,sizeof(output),"%s/udp-flow%u.bin",x->run_dir,i+1); pathf(stage,sizeof(stage),"/dev/shm/ace-%ld-%u-%u.tmp",(long)getpid(),x->index,i+1);
@@ -477,11 +485,44 @@ static int monitor_process(struct context *x)
 	int n=spawn(x,"monitor",ready,-1,SCHED_OTHER,0,1,args); if (n<0 || ready_child(x,n)) return -1; return n;
 }
 static int wait_completions(struct context *x,const int children[3],unsigned timeout_ms);
+static int coalesce(struct context *x,const char *action)
+{
+	char usecs[16],name[48]; snprintf(usecs,sizeof(usecs),"%d",x->c.rx_coalesce_usecs);
+	if (!strcmp(action,"restore")) snprintf(name,sizeof(name),"rx-coalesce-restore-%u",++x->coalesce_restore_attempts);
+	else snprintf(name,sizeof(name),"rx-coalesce-%s",action);
+	char *args[]={"bash","./monitor/rx_coalesce.sh",(char *)action,x->c.interface,x->run_dir,usecs,NULL};
+	int child=spawn(x,name,NULL,-1,SCHED_OTHER,0,0,args);
+	if (child<0 || wait_child(x,child,x->c.ready_ms,!strcmp(action,"restore"))) return -1;
+	x->coalesce_active=strcmp(action,"restore")!=0;
+	return 0;
+}
+static int start_phc_tracking(struct context *x)
+{
+	char output[4096],audit[4096],ready[4096],budget[32];
+	pathf(output,sizeof(output),"%s/phc-during.csv",x->run_dir);
+	pathf(audit,sizeof(audit),"%s/phc-during-audit.csv",x->run_dir);
+	pathf(ready,sizeof(ready),"%s/phc-track.ready",x->run_dir);
+	snprintf(budget,sizeof(budget),"%llu",(unsigned long long)(load_lifetime_seconds(&x->c)*1000));
+	char *args[]={"./udp_socket/bin/phc_track",x->c.interface,output,audit,ready,budget,NULL};
+	int child=spawn(x,"phc-track",ready,0,SCHED_FIFO,51,1,args);
+	if (child<0 || ready_child(x,child)) return -1;
+	return child;
+}
+static int stop_receiver_pipeline(struct context *x,int monitor,int loader)
+{
+	/* Keep the NIC/XDP attachment and iperf server intact until TX has stopped
+	 * its background client. Detaching native XDP can restart the NIC link. */
+	if (message(x,DONE,1,x->c.stop_ms) || message(x,ACK,0,x->c.stop_ms)) return -1;
+	if (stop_child(x,monitor) || stop_child(x,loader)) return -1;
+	if (x->coalesce_active && coalesce(x,"restore")) return -1;
+	return 0;
+}
 static int receiver_run(struct context *x)
 {
-	int loader=-1, receivers[3]={-1,-1,-1}, monitor=-1;
+	int loader=-1, receivers[3]={-1,-1,-1}, monitor=-1, clock=-1;
 	int smoke=!strcmp(x->mode,"socket-only");
 	if (prepare_environment(x) || capture_state(x,"before")) return -1;
+	if (!smoke && x->c.rx_coalesce_usecs>=0 && coalesce(x,"save")) return -1;
 	if (!smoke) {
 		uint64_t capacity=0; for (unsigned i=0;i<3;i++) if (x->c.flows[i].enabled) capacity+=flow_count(&x->c.flows[i],x->c.duration_ms);
 		char records[32],ready[4096]; snprintf(records,sizeof(records),"%llu",(unsigned long long)capacity); pathf(ready,sizeof(ready),"%s/loader.ready",x->run_dir);
@@ -489,12 +530,20 @@ static int receiver_run(struct context *x)
 		loader=spawn(x,"xdp-loader",ready,-1,SCHED_OTHER,0,1,args); if (loader<0 || ready_child(x,loader)) return -1;
 	}
 	for (unsigned i=0;i<3;i++) if (x->c.flows[i].enabled && (receivers[i]=receiver_process(x,i))<0) return -1;
+	if (!smoke && x->c.rx_coalesce_usecs>=0) {
+		x->coalesce_active=1;
+		if (coalesce(x,"apply")) return -1;
+	}
+	if (!smoke && x->c.phc_tracking && (clock=start_phc_tracking(x))<0) return -1;
 	/* CPUMAP threads exist only after loader setup; record before capture. */
 	if (capture_scheduler(x)) return -1;
 	monitor=monitor_process(x); if (monitor==-1) return -1;
 	if (message(x,RX_READY,1,x->c.ready_ms) || message(x,TX_READY,0,x->c.ready_ms)) return -1;
 	if (pause_ms(x,x->c.warmup_ms)) return -1;
-	if (!smoke && calibrate(x,"before")) return -1;
+	if (!smoke && !x->c.phc_tracking && calibrate(x,"before")) return -1;
+	for (unsigned i=0;i<3;i++)
+		if (x->c.xsk_busy && receivers[i]>=0 && !strcmp(run_flow_path(x->mode,i),"xsk"))
+			if (kill(x->child[receivers[i]].pid,SIGUSR2)) return -1;
 	if (write_run(x,"running") || message(x,START,1,x->c.ready_ms) || message(x,STARTED,0,x->c.ready_ms)) return -1;
 	unsigned wait=(unsigned)x->c.duration_ms+x->c.start_delay_ms+x->c.ready_ms;
 	if (message(x,STOP,0,wait) || pause_ms(x,x->c.settle_ms)) return -1;
@@ -503,12 +552,10 @@ static int receiver_run(struct context *x)
 	if (wait_completions(x,receivers,x->c.stop_ms)) return -1;
 	for (unsigned i=0;i<3;i++) if (receivers[i]>=0) kill(x->child[receivers[i]].pid,SIGUSR1);
 	for (unsigned i=0;i<3;i++) if (receivers[i]>=0 && wait_child(x,receivers[i],x->c.stop_ms,1)) return -1;
-	if (!smoke && calibrate(x,"after")) return -1;
-	if (stop_child(x,loader)) return -1;
+	if (clock>=0 && (pause_ms(x,150) || stop_child(x,clock))) return -1;
+	if (!smoke && !x->c.phc_tracking && calibrate(x,"after")) return -1;
 	/* DONE releases sender flush; ACK confirms its network client has stopped. */
-	if (message(x,DONE,1,x->c.stop_ms) || message(x,ACK,0,x->c.stop_ms)) return -1;
-	/* Keep the iperf server alive until the peer has shut down its client. */
-	if (stop_child(x,monitor) || capture_state(x,"after") || restore_cpu_partition(x) || write_run(x,"completed")) return -1;
+	if (stop_receiver_pipeline(x,monitor,loader) || capture_state(x,"after") || restore_cpu_partition(x) || write_run(x,"completed")) return -1;
 	return marker(x,".complete");
 }
 static int network_process(struct context *x)
@@ -602,12 +649,14 @@ static int preflight(struct context *x)
 	for (unsigned i=0;required[i];i++) if (access(required[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",required[i]); return -1; }
 	if (access("monitor/capture_state.sh",R_OK)) { perror("missing state collector"); return -1; }
 	if (x->receiver && access("monitor/capture_scheduler.sh",R_OK)) { perror("missing scheduler collector"); return -1; }
+	if (x->receiver && x->c.rx_coalesce_usecs>=0 && access("monitor/rx_coalesce.sh",R_OK)) { perror("missing RX coalescing helper"); return -1; }
 	if (x->receiver && x->c.monitor && access("udp_socket/bin/cpu_sample",X_OK)) { perror("missing CPU sampler"); return -1; }
 	if (access("monitor/prepare_env.sh",R_OK) || access("monitor/set_irq_affinity.sh",R_OK)) { perror("missing environment helpers"); return -1; }
 	if (x->receiver) for (unsigned m=0;m<x->c.mode_count;m++) if (strcmp(x->c.modes[m],"socket-only")) {
 		if (*x->c.receiver_shared_cpus && (access("monitor/check_cpu_partition.sh",R_OK) || access("monitor/cpu_partition.sh",R_OK))) {
 			perror("missing CPU partition check"); return -1;
 		}
+		if (x->c.phc_tracking && access("udp_socket/bin/phc_track",X_OK)) return -1;
 		const char *bpf[]={"BPF/xdp_loader","udp_socket/bin/phc_calibrate",NULL};
 		for (unsigned i=0;bpf[i];i++) if (access(bpf[i],X_OK)) { fprintf(stderr,"missing executable: %s\n",bpf[i]); return -1; }
 		if (!strcmp(run_flow_path(x->c.modes[m],2),"xsk") && x->c.flows[2].enabled && access("BPF/afxdp_recv",X_OK)) {

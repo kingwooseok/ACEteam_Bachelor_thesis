@@ -25,6 +25,7 @@ SYS_ROOT=/sys
 IRQ_IDS=()
 IRQ_ORIGINAL=()
 IRQ_CHANGED=0
+IRQ_THREAD_AFFINITIES=()
 
 cpu_in_list()
 {
@@ -63,6 +64,36 @@ nic_irqs()
     fi
 }
 
+irq_threads_on_cpu()
+{
+    local irq=$1 cpu=$2 path name tid stat_line rest flags key value affinity invalid=0
+    local fields=()
+    IRQ_THREAD_AFFINITIES=()
+    # IRQ kthreads are group leaders. PF_KTHREAD excludes user processes with
+    # matching names; the IRQ number prefix also keeps 8 separate from 80.
+    for path in "$PROC_ROOT"/[0-9]*/comm; do
+        [[ -r $path ]] || continue
+        IFS= read -r name < "$path" || continue
+        [[ $name == "irq/$irq-"* ]] || continue
+        tid=${path%/comm}; tid=${tid##*/}
+        if ! IFS= read -r stat_line < "$PROC_ROOT/$tid/stat"; then return 1; fi
+        rest=${stat_line##*) }
+        read -ra fields <<< "$rest"
+        ((${#fields[@]} >= 7)) && [[ ${fields[6]} =~ ^[0-9]+$ ]] || return 1
+        flags=${fields[6]}
+        ((flags & 2097152)) || continue
+        affinity='unavailable'
+        if [[ -r "$PROC_ROOT/$tid/status" ]]; then
+            while IFS=: read -r key value; do
+                if [[ $key == Cpus_allowed_list ]]; then affinity=${value//[[:space:]]/}; break; fi
+            done < "$PROC_ROOT/$tid/status"
+        fi
+        IRQ_THREAD_AFFINITIES+=("$tid:$affinity")
+        [[ $affinity == "$cpu" ]] || invalid=1
+    done
+    return "$invalid"
+}
+
 restore_irq_requests()
 {
     local i path
@@ -86,7 +117,7 @@ irq_exit()
 
 main()
 {
-    local interface=${1:-} cpu=${2:-} mode=${3:-} irq requested effective attempt
+    local interface=${1:-} cpu=${2:-} mode=${3:-} irq requested effective attempt threads_ok
     IRQ_IDS=(); IRQ_ORIGINAL=(); IRQ_CHANGED=0
     if [[ ${1:-} == --help ]]; then
         printf 'Usage: %s INTERFACE CPU [--check]\n' "$0"
@@ -111,24 +142,30 @@ main()
     trap 'exit 130' INT
     trap 'exit 143' TERM
     for irq in "${IRQ_IDS[@]}"; do
-        requested=$(< "$PROC_ROOT/irq/$irq/smp_affinity_list")
-        if [[ $mode != --check && $requested != "$cpu" ]]; then
+        if [[ $mode != --check ]]; then
             IRQ_CHANGED=1
+            # Reapply even an unchanged request to resynchronize an RT IRQ
+            # thread with the hardware IRQ target.
             printf '%s\n' "$cpu" > "$PROC_ROOT/irq/$irq/smp_affinity_list" || return 1
         fi
-        # 실효 affinity의 갱신을 짧게 기다리되 실패를 성공으로 숨기지 않는다.
+        # Hardware routing and every visible IRQ kthread must agree before RX.
+        threads_ok=0
         for ((attempt=0;attempt<10;attempt++)); do
             requested=$(< "$PROC_ROOT/irq/$irq/smp_affinity_list")
             effective=$(< "$PROC_ROOT/irq/$irq/effective_affinity_list")
-            [[ $requested == "$cpu" && $effective == "$cpu" ]] && break
+            threads_ok=0
+            if irq_threads_on_cpu "$irq" "$cpu"; then threads_ok=1; fi
+            [[ $requested == "$cpu" && $effective == "$cpu" && $threads_ok == 1 ]] && break
             [[ $mode == --check ]] && break
             sleep 0.05
         done
-        if [[ $requested != "$cpu" || $effective != "$cpu" ]]; then
-            printf 'Error: IRQ %s requested=%s effective=%s expected=%s\n' "$irq" "$requested" "$effective" "$cpu" >&2
+        if [[ $requested != "$cpu" || $effective != "$cpu" || $threads_ok != 1 ]]; then
+            printf 'Error: IRQ %s requested=%s effective=%s threads=%s expected=%s\n' \
+                "$irq" "$requested" "$effective" "${IRQ_THREAD_AFFINITIES[*]:-none}" "$cpu" >&2
             return 1
         fi
-        printf 'IRQ %s: requested=%s effective=%s interface=%s\n' "$irq" "$requested" "$effective" "$interface"
+        printf 'IRQ %s: requested=%s effective=%s interface=%s threads=%s\n' \
+            "$irq" "$requested" "$effective" "$interface" "${IRQ_THREAD_AFFINITIES[*]:-none}"
     done
     IRQ_CHANGED=0
 }
